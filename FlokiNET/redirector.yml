@@ -1,0 +1,118 @@
+---
+- name: Configure FlokiNET redirector server
+  hosts: redirector
+  gather_facts: true
+  vars_files:
+    - vars.yaml
+  tasks:
+    - name: Install Nginx and required packages
+      ansible.builtin.apt:
+        name:
+          - nginx
+          - certbot
+          - python3-certbot-nginx
+          - socat
+          - netcat-openbsd
+          - cryptsetup
+          - secure-delete
+          - jq
+        state: present
+      become: true
+
+    - name: Add UFW rules for redirector
+      ansible.builtin.ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      with_items:
+        - 80
+        - 443
+        - "{{ shell_handler_port }}"
+      become: true
+
+    - name: Setup directory for shell handler
+      ansible.builtin.file:
+        path: /opt/shell-handler
+        state: directory
+        mode: '0700'
+        owner: root
+        group: root
+      become: true
+
+    - name: Copy shell handler script
+      ansible.builtin.copy:
+        src: "../files/persistent-listener.sh"
+        dest: "/opt/shell-handler/persistent-listener.sh"
+        mode: '0700'
+        owner: root
+        group: root
+      become: true
+
+    - name: Configure shell handler service
+      ansible.builtin.template:
+        src: templates/shell-handler.service.j2
+        dest: /etc/systemd/system/shell-handler.service
+        owner: root
+        group: root
+        mode: '0644'
+      become: true
+
+    - name: Configure NGINX for zero-logging
+      ansible.builtin.template:
+        src: templates/nginx.conf.j2
+        dest: /etc/nginx/nginx.conf
+        owner: root
+        group: root
+        mode: '0644'
+      become: true
+
+    - name: Configure NGINX default site for C2 redirection
+      ansible.builtin.template:
+        src: templates/default-site.j2
+        dest: /etc/nginx/sites-available/default
+        owner: root
+        group: root
+        mode: '0644'
+      vars:
+        domain: "{{ redirector_subdomain }}.{{ domain }}"
+        c2_host: "{{ c2_ip }}"
+      become: true
+
+    - name: Create index.html for legitimate-looking website
+      ansible.builtin.template:
+        src: templates/index.html.j2
+        dest: /var/www/html/index.html
+        owner: www-data
+        group: www-data
+        mode: '0644'
+      become: true
+
+    - name: Start and enable shell handler service
+      ansible.builtin.systemd:
+        name: shell-handler
+        state: started
+        enabled: yes
+        daemon_reload: yes
+      become: true
+
+    - name: Install Let's Encrypt certificate if domain specified
+      ansible.builtin.command: >
+        certbot --nginx -d {{ redirector_subdomain }}.{{ domain }} --non-interactive --agree-tos -m {{ letsencrypt_email }}
+      args:
+        creates: /etc/letsencrypt/live/{{ redirector_subdomain }}.{{ domain }}/fullchain.pem
+      become: true
+      when: domain != "example.com"
+
+    - name: Restart Nginx
+      ansible.builtin.service:
+        name: nginx
+        state: restarted
+      become: true
+
+    - name: Display redirector setup information
+      ansible.builtin.debug:
+        msg:
+          - "Redirector setup completed!"
+          - "IP Address: {{ ansible_host }}"
+          - "Domain: {{ redirector_subdomain }}.{{ domain }}"
+          - "Shell Handler Port: {{ shell_handler_port }}"

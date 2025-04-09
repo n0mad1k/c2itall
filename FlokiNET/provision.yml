@@ -1,0 +1,134 @@
+---
+- name: Common provisioning for FlokiNET servers
+  hosts: all
+  gather_facts: true
+  vars_files:
+    - vars.yaml
+  tasks:
+    - name: Set hostname
+      ansible.builtin.hostname:
+        name: "{{ inventory_hostname }}"
+      become: true
+
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+      become: true
+
+    - name: Upgrade all packages
+      ansible.builtin.apt:
+        upgrade: dist
+      become: true
+
+    - name: Install base security packages
+      ansible.builtin.apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - unattended-upgrades
+          - ufw
+          - fail2ban
+          - secure-delete
+        state: present
+      become: true
+
+    - name: Configure UFW
+      ansible.builtin.ufw:
+        state: enabled
+        policy: deny
+        logging: 'on'
+      become: true
+
+    - name: Add SSH rule to UFW
+      ansible.builtin.ufw:
+        rule: allow
+        port: "{{ ssh_port }}"
+        proto: tcp
+      become: true
+
+    - name: Configure SSH for better security
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+      with_items:
+        - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin prohibit-password' }
+        - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
+        - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
+        - { regexp: '^#?AllowTcpForwarding', line: 'AllowTcpForwarding no' }
+        - { regexp: '^#?Port', line: 'Port {{ ssh_port }}' }
+        - { regexp: '^#?LogLevel', line: 'LogLevel ERROR' }
+        - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 3' }
+        - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval 300' }
+      become: true
+
+    - name: Restart SSH service
+      ansible.builtin.service:
+        name: ssh
+        state: restarted
+      become: true
+
+    - name: Setup directory for operational scripts
+      ansible.builtin.file:
+        path: /opt/c2
+        state: directory
+        mode: '0700'
+        owner: root
+        group: root
+      become: true
+
+    - name: Copy operational scripts
+      ansible.builtin.copy:
+        src: "../files/{{ item }}"
+        dest: "/opt/c2/{{ item }}"
+        mode: '0700'
+        owner: root
+        group: root
+      with_items:
+        - clean-logs.sh
+        - secure-exit.sh
+      become: true
+
+    - name: Setup cron to clean logs
+      ansible.builtin.cron:
+        name: "Log cleanup"
+        minute: "*/{{ log_rotation_hours * 60 }}"
+        job: "/opt/c2/clean-logs.sh >/dev/null 2>&1"
+      become: true
+      when: disable_history | bool
+
+    - name: Disable system history
+      ansible.builtin.lineinfile:
+        path: "{{ item }}"
+        line: "{{ line_item }}"
+        state: present
+        create: yes
+      with_items:
+        - /etc/profile
+        - /root/.bashrc
+      with_nested:
+        - [ 'export HISTFILESIZE=0', 'export HISTSIZE=0', 'unset HISTFILE' ]
+      loop_control:
+        loop_var: line_item
+      become: true
+      when: disable_history | bool
+
+    - name: Set memory security measures
+      ansible.builtin.lineinfile:
+        path: /etc/sysctl.conf
+        line: "{{ item }}"
+        state: present
+      with_items:
+        - "vm.swappiness=0"
+        - "kernel.randomize_va_space=2"
+      become: true
+      when: secure_memory | bool
+
+    - name: Apply sysctl settings
+      ansible.builtin.command: sysctl -p
+      become: true
+      when: secure_memory | bool
