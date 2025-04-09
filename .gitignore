@@ -1,2 +1,4 @@
 vars.yaml
 venv
+deployment*
+config.yml

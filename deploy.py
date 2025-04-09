@@ -311,13 +311,24 @@ def deploy_aws(config):
     os.environ['AWS_ACCESS_KEY_ID'] = config['aws_key']
     os.environ['AWS_SECRET_ACCESS_KEY'] = config['aws_secret']
     
+    # Prepare SSH key - for AWS we'll use AWS key pairs instead of local files
+    ssh_key_name = config.get('ssh_key_name')
+    if not ssh_key_name:
+        # Generate a random key name for AWS
+        rand_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+        timestamp = int(time.time()) % 10000
+        ssh_key_name = f"c2ingred-{rand_suffix}-{timestamp}"
+    
+    config['ssh_key_name'] = ssh_key_name
+    print(f"[+] Using AWS key pair name: {ssh_key_name}")
+    
     # Create a temporary inventory file for Ansible
     with open('inventory_aws.yml', 'w') as f:
         f.write("---\n")
         f.write("all:\n")
         f.write("  vars:\n")
-        f.write(f"    ansible_ssh_private_key_file: {config['ssh_key']}\n")
-        f.write(f"    ansible_user: {config['ssh_user']}\n")
+        f.write(f"    ansible_ssh_private_key_file: ~/.ssh/{ssh_key_name}.pem\n")
+        f.write(f"    ansible_user: {config.get('ssh_user', 'ec2-user')}\n")
         f.write(f"    ansible_python_interpreter: /usr/bin/python3\n")
         f.write("  children:\n")
         f.write("    redirectors:\n")
@@ -329,74 +340,136 @@ def deploy_aws(config):
         f.write("        c2:\n")
         f.write("          ansible_host: '{{ c2_ip }}'\n")
     
+    # Generate default names if not provided
+    rand_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    timestamp = int(time.time()) % 10000
+    redirector_name = config.get('redirector_name', f"srv-{rand_suffix}-{timestamp}")
+    c2_name = config.get('c2_name', f"node-{rand_suffix}-{timestamp}")
+    
+    # Update config with generated names for logging
+    config['redirector_name'] = redirector_name
+    config['c2_name'] = c2_name
+    
+    # Log important information
+    print(f"[+] Deployment information:")
+    print(f"    - AWS Key Pair Name: {ssh_key_name}")
+    print(f"    - Redirector Name: {redirector_name}")
+    print(f"    - C2 Name: {c2_name}")
+    print(f"    - AWS Region: {config.get('aws_region', 'default region')}")
+    print(f"    - Domain: {config.get('domain', 'example.com')}")
+    
     # Run AWS provisioning playbook
+    success = False
+    deployed_instances = []
+    
     try:
         # Create extra_vars dictionary with all config values 
         extra_vars = {
             'aws_access_key': config['aws_key'],
             'aws_secret_key': config['aws_secret'],
-            'aws_region': config['aws_region'],
-            'ami_map': config['ami_map'],
-            'size': config['size'],
-            'aws_instance_type': config['size'],
-            'redirector_name': config['redirector_name'],
-            'c2_name': config['c2_name'],
-            'teardown': config['teardown'],
-            'disable_history': config['disable_history'],
-            'secure_memory': config['secure_memory'],
-            'zero_logs': config['zero_logs'],
-            'redirector_only': config['redirector_only'],
-            'c2_only': config['c2_only'],
-            'debug': config['debug'],
-            'domain': config['domain'],
-            'letsencrypt_email': config['letsencrypt_email'],
-            'gophish_admin_port': config['gophish_admin_port'],
-            'smtp_auth_user': config['smtp_auth_user'],
-            'smtp_auth_pass': config['smtp_auth_pass'],
+            'aws_region': config.get('aws_region', DEFAULT_REGION.get('AWS')),
+            'ami_map': config.get('ami_map', {}),
+            'size': config.get('size', DEFAULT_SIZE.get('AWS')),
+            'aws_instance_type': config.get('size', DEFAULT_SIZE.get('AWS')),
+            'redirector_name': redirector_name,
+            'c2_name': c2_name,
+            'teardown': config.get('teardown', False),
+            'disable_history': config.get('disable_history', True),
+            'secure_memory': config.get('secure_memory', True),
+            'zero_logs': config.get('zero_logs', True),
+            'redirector_only': config.get('redirector_only', False),
+            'c2_only': config.get('c2_only', False),
+            'debug': config.get('debug', False),
+            'domain': config.get('domain', 'example.com'),
+            'letsencrypt_email': config.get('letsencrypt_email', 'admin@example.com'),
+            'gophish_admin_port': config.get('gophish_admin_port', str(random.randint(2000, 9000))),
+            'smtp_auth_user': config.get('smtp_auth_user', f"user{random.randint(1000, 9999)}"),
+            'smtp_auth_pass': config.get('smtp_auth_pass', ''.join(random.choices(string.ascii_letters + string.digits + "!@#$%^&*", k=20))),
+            'key_name': ssh_key_name,
+            'private_key_path': f"~/.ssh/{ssh_key_name}.pem",
         }
         
-        extra_vars_str = ' '.join([f"{k}={v}" for k, v in extra_vars.items() if not isinstance(v, dict)])
+        # Format extra vars for command line, handling special characters
+        extra_vars_list = []
+        for k, v in extra_vars.items():
+            if isinstance(v, bool):
+                extra_vars_list.append(f"{k}={str(v).lower()}")
+            elif isinstance(v, (int, float)):
+                extra_vars_list.append(f"{k}={v}")
+            elif isinstance(v, str):
+                # Escape quotes in string values
+                escaped_v = v.replace("'", "'\\''")
+                extra_vars_list.append(f"{k}='{escaped_v}'")
+            elif not isinstance(v, dict):  # Skip dict values
+                extra_vars_list.append(f"{k}={v}")
+        
+        extra_vars_str = " ".join(extra_vars_list)
         
         # Handle the ami_map special case
         ami_map_str = ""
-        if config['ami_map']:
+        if config.get('ami_map'):
             ami_map_str = f"ami_map='{json.dumps(config['ami_map'])}'"
         
         # Determine playbook to run based on deployment mode
-        if config['redirector_only']:
+        if extra_vars['redirector_only']:
             playbook = "AWS/redirector.yml"
             cmd = f"ansible-playbook -i inventory_aws.yml {playbook} -e '{extra_vars_str} {ami_map_str}'"
             
-            if config['debug']:
+            if extra_vars['debug']:
                 print(f"[+] Running: {cmd}")
             
             subprocess.run(cmd, shell=True, check=True)
-        elif config['c2_only']:
+            deployed_instances.append(redirector_name)
+        elif extra_vars['c2_only']:
             playbook = "AWS/c2.yml"
             cmd = f"ansible-playbook -i inventory_aws.yml {playbook} -e '{extra_vars_str} {ami_map_str}'"
             
-            if config['debug']:
+            if extra_vars['debug']:
                 print(f"[+] Running: {cmd}")
             
             subprocess.run(cmd, shell=True, check=True)
+            deployed_instances.append(c2_name)
         else:
             # For full deployment, run redirector first, then C2
             # First deploy redirector
             redirector_cmd = f"ansible-playbook -i inventory_aws.yml AWS/redirector.yml -e '{extra_vars_str} {ami_map_str}'"
-            if config['debug']:
+            if extra_vars['debug']:
                 print(f"[+] Running: {redirector_cmd}")
             subprocess.run(redirector_cmd, shell=True, check=True)
+            deployed_instances.append(redirector_name)
             
             # Then deploy C2 server with redirector IP
             c2_cmd = f"ansible-playbook -i inventory_aws.yml AWS/c2.yml -e '{extra_vars_str} {ami_map_str}'"
-            if config['debug']:
+            if extra_vars['debug']:
                 print(f"[+] Running: {c2_cmd}")
             subprocess.run(c2_cmd, shell=True, check=True)
+            deployed_instances.append(c2_name)
         
         print("[+] AWS infrastructure deployed successfully!")
+        success = True
         return True
     except subprocess.CalledProcessError as e:
         print(f"[-] Error: Failed to deploy AWS infrastructure: {e}")
+        
+        # Clean up deployed instances if any
+        if deployed_instances:
+            print(f"[!] Cleaning up deployed instances due to failure...")
+            for instance in deployed_instances:
+                cleanup_cmd = f"aws ec2 terminate-instances --instance-ids {instance}"
+                try:
+                    subprocess.run(cleanup_cmd, shell=True, check=False)
+                    print(f"[+] Terminated instance: {instance}")
+                except Exception as cleanup_err:
+                    print(f"[!] Failed to terminate instance {instance}: {cleanup_err}")
+        
+        # Delete the key pair
+        delete_key_cmd = f"aws ec2 delete-key-pair --key-name {ssh_key_name}"
+        try:
+            subprocess.run(delete_key_cmd, shell=True, check=False)
+            print(f"[+] Deleted key pair: {ssh_key_name}")
+        except Exception as key_err:
+            print(f"[!] Failed to delete key pair {ssh_key_name}: {key_err}")
+        
         return False
     finally:
         # Clean up temporary inventory file
@@ -410,13 +483,19 @@ def deploy_linode(config):
     # Set Linode environment variables
     os.environ['LINODE_TOKEN'] = config['linode_token']
     
+    # Prepare SSH key
+    ssh_key, ssh_key_content = prepare_ssh_key(config)
+    if not ssh_key or not ssh_key_content:
+        print("[-] Failed to prepare SSH key, aborting deployment")
+        return False
+    
     # Create a temporary inventory file for Ansible
     with open('inventory_linode.yml', 'w') as f:
         f.write("---\n")
         f.write("all:\n")
         f.write("  vars:\n")
-        f.write(f"    ansible_ssh_private_key_file: {config['ssh_key']}\n")
-        f.write(f"    ansible_user: {config['ssh_user']}\n")
+        f.write(f"    ansible_ssh_private_key_file: {ssh_key}\n")
+        f.write(f"    ansible_user: {config.get('ssh_user', 'root')}\n")
         f.write(f"    ansible_python_interpreter: /usr/bin/python3\n")
         f.write("  children:\n")
         f.write("    redirectors:\n")
@@ -428,74 +507,141 @@ def deploy_linode(config):
         f.write("        c2:\n")
         f.write("          ansible_host: '{{ c2_ip }}'\n")
     
+    # Generate default names if not provided
+    rand_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    timestamp = int(time.time()) % 10000  # Last 4 digits of timestamp
+    redirector_name = config.get('redirector_name', f"srv-{rand_suffix}-{timestamp}")
+    c2_name = config.get('c2_name', f"node-{rand_suffix}-{timestamp}")
+    
+    # Update config with generated names for logging
+    config['redirector_name'] = redirector_name
+    config['c2_name'] = c2_name
+    
+    # Log important information
+    print(f"[+] Deployment information:")
+    print(f"    - SSH Key: {ssh_key}")
+    print(f"    - Redirector Name: {redirector_name}")
+    print(f"    - C2 Name: {c2_name}")
+    print(f"    - Domain: {config.get('domain', 'example.com')}")
+    
     # Run Linode provisioning playbook
+    success = False
+    deployed_instances = []
+    
     try:
         extra_vars = {
             'linode_token': config['linode_token'],
-            'region': config['linode_region'],
-            'plan': config['size'],
-            'redirector_name': config['redirector_name'],
-            'c2_name': config['c2_name'],
-            'teardown': config['teardown'],
-            'disable_history': config['disable_history'],
-            'secure_memory': config['secure_memory'],
-            'zero_logs': config['zero_logs'],
-            'redirector_only': config['redirector_only'],
-            'c2_only': config['c2_only'],
-            'debug': config['debug'],
-            'domain': config['domain'],
-            'letsencrypt_email': config['letsencrypt_email'],
-            'gophish_admin_port': config['gophish_admin_port'],
-            'smtp_auth_user': config['smtp_auth_user'],
-            'smtp_auth_pass': config['smtp_auth_pass'],
+            'region': config.get('linode_region', DEFAULT_REGION.get('Linode', 'us-east')),
+            'plan': config.get('plan', DEFAULT_SIZE.get('Linode', 'g6-standard-1')),
+            'redirector_name': redirector_name,
+            'c2_name': c2_name,
+            'teardown': config.get('teardown', False),
+            'disable_history': config.get('disable_history', True),
+            'secure_memory': config.get('secure_memory', True),
+            'zero_logs': config.get('zero_logs', True),
+            'redirector_only': config.get('redirector_only', False),
+            'c2_only': config.get('c2_only', False),
+            'debug': config.get('debug', False),
+            'domain': config.get('domain', 'example.com'),
+            'letsencrypt_email': config.get('letsencrypt_email', 'admin@example.com'),
+            'gophish_admin_port': config.get('gophish_admin_port', str(random.randint(2000, 9000))),
+            'smtp_auth_user': config.get('smtp_auth_user', f"user{random.randint(1000, 9999)}"),
+            'smtp_auth_pass': config.get('smtp_auth_pass', ''.join(random.choices(string.ascii_letters + string.digits + "!@#$%^&*", k=20))),
+            'ssh_key_path': ssh_key,  # Path to the private key
+            'ssh_key': ssh_key_content,  # Content of public key
         }
         
-        extra_vars_str = ' '.join([f"{k}={v}" for k, v in extra_vars.items()])
+        # Format extra vars for command line, handling special characters
+        extra_vars_list = []
+        for k, v in extra_vars.items():
+            if isinstance(v, bool):
+                extra_vars_list.append(f"{k}={str(v).lower()}")
+            elif isinstance(v, (int, float)):
+                extra_vars_list.append(f"{k}={v}")
+            elif isinstance(v, str):
+                # Escape quotes in string values
+                escaped_v = v.replace("'", "'\\''")
+                extra_vars_list.append(f"{k}='{escaped_v}'")
+        
+        extra_vars_str = " ".join(extra_vars_list)
         
         # Determine playbook to run based on deployment mode
-        if config['redirector_only']:
+        if extra_vars['redirector_only']:
             playbook = "Linode/redirector.yml"
             cmd = f"ansible-playbook -i inventory_linode.yml {playbook} -e '{extra_vars_str}'"
             
-            if config['debug']:
+            if extra_vars['debug']:
                 print(f"[+] Running: {cmd}")
             
             subprocess.run(cmd, shell=True, check=True)
-        elif config['c2_only']:
+            deployed_instances.append(redirector_name)
+        elif extra_vars['c2_only']:
             playbook = "Linode/c2.yml"
             cmd = f"ansible-playbook -i inventory_linode.yml {playbook} -e '{extra_vars_str}'"
             
-            if config['debug']:
+            if extra_vars['debug']:
                 print(f"[+] Running: {cmd}")
             
             subprocess.run(cmd, shell=True, check=True)
+            deployed_instances.append(c2_name)
         else:
             # For full deployment, run redirector first, then C2
             # First deploy redirector
             redirector_cmd = f"ansible-playbook -i inventory_linode.yml Linode/redirector.yml -e '{extra_vars_str}'"
-            if config['debug']:
+            if extra_vars['debug']:
                 print(f"[+] Running: {redirector_cmd}")
             subprocess.run(redirector_cmd, shell=True, check=True)
+            deployed_instances.append(redirector_name)
             
             # Then deploy C2 server with redirector IP
             c2_cmd = f"ansible-playbook -i inventory_linode.yml Linode/c2.yml -e '{extra_vars_str}'"
-            if config['debug']:
+            if extra_vars['debug']:
                 print(f"[+] Running: {c2_cmd}")
             subprocess.run(c2_cmd, shell=True, check=True)
+            deployed_instances.append(c2_name)
         
         print("[+] Linode infrastructure deployed successfully!")
+        success = True
         return True
     except subprocess.CalledProcessError as e:
         print(f"[-] Error: Failed to deploy Linode infrastructure: {e}")
+        
+        # Clean up deployed instances if any
+        if deployed_instances:
+            print(f"[!] Cleaning up deployed instances due to failure...")
+            for instance in deployed_instances:
+                cleanup_cmd = f"linode-cli linodes delete {instance} --yes"
+                try:
+                    subprocess.run(cleanup_cmd, shell=True, check=False)
+                    print(f"[+] Deleted instance: {instance}")
+                except Exception as cleanup_err:
+                    print(f"[!] Failed to delete instance {instance}: {cleanup_err}")
+        
         return False
     finally:
         # Clean up temporary inventory file
         if os.path.exists('inventory_linode.yml'):
             os.remove('inventory_linode.yml')
+        
+        # If this is a new key and deployment failed, remove it
+        if not success and ssh_key and ssh_key.startswith(os.path.expanduser("~/.ssh/c2ingred_")):
+            try:
+                os.remove(ssh_key)
+                if os.path.exists(f"{ssh_key}.pub"):
+                    os.remove(f"{ssh_key}.pub")
+                print(f"[+] Removed generated SSH key due to deployment failure")
+            except Exception as key_err:
+                print(f"[!] Failed to remove SSH key {ssh_key}: {key_err}")
 
 def deploy_flokinet(config):
     """Deploy infrastructure using FlokiNET provider"""
     print("[+] Deploying FlokiNET infrastructure...")
+    
+    # Prepare SSH key
+    ssh_key, ssh_key_content = prepare_ssh_key(config)
+    if not ssh_key or not ssh_key_content:
+        print("[-] Failed to prepare SSH key, aborting deployment")
+        return False
     
     # OPSEC: Use the random SSH port from config
     ssh_port = config.get('ssh_port', random.randint(20000, 65000))
@@ -563,59 +709,80 @@ def deploy_flokinet(config):
     # Prepare vars.yaml with dynamic IPs
     prepare_flokinet_vars(config)
     
+    # Log important information
+    print(f"[+] Deployment information:")
+    print(f"    - SSH Key: {ssh_key}")
+    print(f"    - SSH Port: {ssh_port}")
+    print(f"    - Redirector IP: {redirector_ip}")
+    print(f"    - C2 IP: {c2_ip}")
+    print(f"    - Domain: {config.get('domain', 'example.com')}")
+    
     # Create temporary inventory files for Ansible with randomized names for OPSEC
     inventory_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
     redirector_inventory = None
     c2_inventory = None
     
-    if not config['c2_only']:
-        redirector_inventory = f'inventory_r_{inventory_suffix}.yml'
-        with open(redirector_inventory, 'w') as f:
-            os.chmod(redirector_inventory, 0o600)  # Secure permissions
-            f.write("---\n")
-            f.write("redirector:\n")
-            f.write(f"  hosts:\n")
-            f.write(f"    redirector:\n")
-            f.write(f"      ansible_host: {redirector_ip}\n")
-            f.write(f"      ansible_user: {config['ssh_user']}\n")
-            if config.get('ssh_key'):
-                f.write(f"      ansible_ssh_private_key_file: {config['ssh_key']}\n")
-            f.write(f"      ansible_python_interpreter: /usr/bin/python3\n")
-            f.write(f"      ansible_port: {ssh_port}\n")  # Use custom SSH port
+    success = False
     
-    if not config['redirector_only']:
-        c2_inventory = f'inventory_c_{inventory_suffix}.yml'
-        with open(c2_inventory, 'w') as f:
-            os.chmod(c2_inventory, 0o600)  # Secure permissions
-            f.write("---\n")
-            f.write("c2:\n")
-            f.write(f"  hosts:\n")
-            f.write(f"    c2:\n")
-            f.write(f"      ansible_host: {c2_ip}\n")
-            f.write(f"      ansible_user: {config['ssh_user']}\n")
-            if config.get('ssh_key'):
-                f.write(f"      ansible_ssh_private_key_file: {config['ssh_key']}\n")
-            f.write(f"      ansible_python_interpreter: /usr/bin/python3\n")
-            f.write(f"      ansible_port: {ssh_port}\n")  # Use custom SSH port
-    
-    # Run FlokiNET provisioning playbooks
     try:
+        if not config['c2_only']:
+            redirector_inventory = f'inventory_r_{inventory_suffix}.yml'
+            with open(redirector_inventory, 'w') as f:
+                os.chmod(redirector_inventory, 0o600)  # Secure permissions
+                f.write("---\n")
+                f.write("redirector:\n")
+                f.write(f"  hosts:\n")
+                f.write(f"    redirector:\n")
+                f.write(f"      ansible_host: {redirector_ip}\n")
+                f.write(f"      ansible_user: {config['ssh_user']}\n")
+                f.write(f"      ansible_ssh_private_key_file: {ssh_key}\n")
+                f.write(f"      ansible_python_interpreter: /usr/bin/python3\n")
+                f.write(f"      ansible_port: {ssh_port}\n")  # Use custom SSH port
+        
+        if not config['redirector_only']:
+            c2_inventory = f'inventory_c_{inventory_suffix}.yml'
+            with open(c2_inventory, 'w') as f:
+                os.chmod(c2_inventory, 0o600)  # Secure permissions
+                f.write("---\n")
+                f.write("c2:\n")
+                f.write(f"  hosts:\n")
+                f.write(f"    c2:\n")
+                f.write(f"      ansible_host: {c2_ip}\n")
+                f.write(f"      ansible_user: {config['ssh_user']}\n")
+                f.write(f"      ansible_ssh_private_key_file: {ssh_key}\n")
+                f.write(f"      ansible_python_interpreter: /usr/bin/python3\n")
+                f.write(f"      ansible_port: {ssh_port}\n")  # Use custom SSH port
+        
         # Build extra vars string
         extra_vars = {
             'redirector_ip': redirector_ip,
             'c2_ip': c2_ip,
-            'disable_history': config['disable_history'],
-            'secure_memory': config['secure_memory'],
-            'zero_logs': config['zero_logs'],
-            'domain': config['domain'],
-            'letsencrypt_email': config['letsencrypt_email'],
-            'gophish_admin_port': config['gophish_admin_port'],
-            'smtp_auth_user': config['smtp_auth_user'],
-            'smtp_auth_pass': config['smtp_auth_pass'],
-            'ssh_port': ssh_port
+            'disable_history': config.get('disable_history', True),
+            'secure_memory': config.get('secure_memory', True),
+            'zero_logs': config.get('zero_logs', True),
+            'domain': config.get('domain', 'example.com'),
+            'letsencrypt_email': config.get('letsencrypt_email', 'admin@example.com'),
+            'gophish_admin_port': config.get('gophish_admin_port', str(random.randint(2000, 9000))),
+            'smtp_auth_user': config.get('smtp_auth_user', f"user{random.randint(1000, 9999)}"),
+            'smtp_auth_pass': config.get('smtp_auth_pass', ''.join(random.choices(string.ascii_letters + string.digits + "!@#$%^&*", k=20))),
+            'ssh_port': ssh_port,
+            'ssh_key_path': ssh_key,
+            'ssh_key_content': ssh_key_content,
         }
         
-        extra_vars_str = ' '.join([f"{k}='{v}'" for k, v in extra_vars.items()])
+        # Format extra vars for command line, handling special characters
+        extra_vars_list = []
+        for k, v in extra_vars.items():
+            if isinstance(v, bool):
+                extra_vars_list.append(f"{k}={str(v).lower()}")
+            elif isinstance(v, (int, float)):
+                extra_vars_list.append(f"{k}={v}")
+            elif isinstance(v, str):
+                # Escape quotes in string values
+                escaped_v = v.replace("'", "'\\''")
+                extra_vars_list.append(f"{k}='{escaped_v}'")
+        
+        extra_vars_str = " ".join(extra_vars_list)
         
         # Common provisioning for both servers
         if not config['c2_only'] and redirector_inventory:
@@ -647,6 +814,7 @@ def deploy_flokinet(config):
             subprocess.run(cmd, shell=True, check=True)
         
         print("[+] FlokiNET infrastructure deployed successfully!")
+        success = True
         return True
     except subprocess.CalledProcessError as e:
         print(f"[-] Error: Failed to deploy FlokiNET infrastructure: {e}")
@@ -659,8 +827,18 @@ def deploy_flokinet(config):
                 with open(inv_file, 'w') as f:
                     f.write('\0' * 1024)  # Overwrite with null bytes
                 os.remove(inv_file)
-                if config['debug']:
+                if config.get('debug'):
                     print(f"[+] Removed temporary inventory file: {inv_file}")
+        
+        # If this is a new key and deployment failed, remove it
+        if not success and ssh_key and ssh_key.startswith(os.path.expanduser("~/.ssh/c2ingred_")):
+            try:
+                os.remove(ssh_key)
+                if os.path.exists(f"{ssh_key}.pub"):
+                    os.remove(f"{ssh_key}.pub")
+                print(f"[+] Removed generated SSH key due to deployment failure")
+            except Exception as key_err:
+                print(f"[!] Failed to remove SSH key {ssh_key}: {key_err}")
 
 def prepare_flokinet_vars(config):
     """Prepare FlokiNET vars.yaml with dynamic values"""
@@ -738,9 +916,9 @@ def ensure_provider_files_exist(config):
     
     # Basic file existence checks
     required_files = {
-        'aws': ['redirector.yml', 'c2.yml'],
-        'linode': ['redirector.yml', 'c2.yml'],
-        'flokinet': ['provision.yml', 'redirector.yml', 'c2.yml']
+        'AWS': ['redirector.yml', 'c2.yml'],
+        'Linode': ['redirector.yml', 'c2.yml'],
+        'FlokiNET': ['provision.yml', 'redirector.yml', 'c2.yml']
     }
     
     # Check for shared files directory
@@ -759,7 +937,7 @@ def ensure_provider_files_exist(config):
     missing_files = []
     
     # Check provider-specific files
-    for file in required_files.get(provider.lower(), []):
+    for file in required_files.get(provider, []):
         full_path = f"{provider}/{file}"
         if not os.path.exists(full_path):
             missing_files.append(full_path)
@@ -778,13 +956,13 @@ def ensure_provider_files_exist(config):
     
     return True
 
-def generate_ssh_key(instance_label=None):
+def generate_ssh_key():
     """Generate a new SSH key with randomized name for better OPSEC"""
-    # Create a unique key name based on instance label or random string
-    if not instance_label:
-        instance_label = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    # Create a unique key name with random string
+    rand_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    timestamp = int(time.time()) % 10000  # Last 4 digits of timestamp
     
-    key_name = f"c2ingred_{instance_label}_{int(time.time())}"
+    key_name = f"c2ingred_{rand_suffix}_{timestamp}"
     key_path = os.path.expanduser(f"~/.ssh/{key_name}")
     
     print(f"[+] Generating new SSH key: {key_path}")
@@ -793,10 +971,51 @@ def generate_ssh_key(instance_label=None):
         # Set proper permissions
         os.chmod(key_path, 0o600)
         os.chmod(f"{key_path}.pub", 0o644)
+        
+        # Log the key info for reference
+        print(f"[+] SSH private key: {key_path}")
+        print(f"[+] SSH public key: {key_path}.pub")
+        
         return key_path
     except subprocess.CalledProcessError as e:
         print(f"[-] Error: Failed to generate SSH key: {e}")
         return None
+
+def prepare_ssh_key(config):
+    """Prepare and validate SSH key, generating a new one if needed"""
+    # Check if SSH key is provided
+    ssh_key = config.get('ssh_key')
+    
+    # If key not provided or doesn't exist, generate a new one
+    if not ssh_key or not os.path.exists(ssh_key):
+        if ssh_key and not os.path.exists(ssh_key):
+            print(f"[-] Warning: Specified SSH key {ssh_key} not found")
+        
+        ssh_key = generate_ssh_key()
+        if not ssh_key:
+            return None, None
+        
+        config['ssh_key'] = ssh_key
+    
+    # Ensure the public key exists
+    ssh_public_key = f"{ssh_key}.pub"
+    if not os.path.exists(ssh_public_key):
+        print(f"[-] Warning: SSH public key not found at {ssh_public_key}, generating new key pair")
+        ssh_key = generate_ssh_key()
+        if not ssh_key:
+            return None, None
+        
+        config['ssh_key'] = ssh_key
+        ssh_public_key = f"{ssh_key}.pub"
+    
+    # Read the public key content
+    try:
+        with open(ssh_public_key, 'r') as f:
+            ssh_key_content = f.read().strip()
+        return ssh_key, ssh_key_content
+    except Exception as e:
+        print(f"[-] Error reading SSH public key: {e}")
+        return None, None
 
 def interactive_config():
     """Interactively collect configuration"""
@@ -1082,14 +1301,14 @@ def cleanup_sensitive_files(config):
     return True
 
 def save_config(config):
-    """Save configuration to config.yml file"""
+    """Save configuration to config.yml file and create detailed deployment log"""
     # Make a copy to avoid modifying the original
     config_to_save = config.copy()
     
     # Remove ALL sensitive data before saving
     sensitive_keys = [
         'aws_key', 'aws_secret', 'linode_token', 
-        'smtp_auth_pass', 'ssh_key', 'ssh_key_path',
+        'smtp_auth_pass', 'ssh_key_content',
         'flokinet_redirector_ip', 'flokinet_c2_ip',
         'c2_ip', 'redirector_ip'
     ]
@@ -1106,7 +1325,8 @@ def save_config(config):
     # Use a more secure way to write sensitive files
     # Ensure the file doesn't exist first to prevent race conditions
     if os.path.exists('config.yml'):
-        os.remove('config.yml')
+        # Instead of removing, just open in write mode to overwrite
+        pass
     
     # Create with restricted permissions
     with open('config.yml', 'w') as f:
@@ -1128,18 +1348,27 @@ def save_config(config):
         # Log general info
         f.write(f"Provider: {config['provider']}\n")
         
+        # Log SSH key information
+        f.write(f"SSH Key: {config.get('ssh_key', 'Not specified')}\n")
+        if 'ssh_key_name' in config:
+            f.write(f"SSH Key Name: {config['ssh_key_name']}\n")
+        
+        # Log custom SSH port if used
+        if config.get('ssh_port') and config.get('ssh_port') != 22:
+            f.write(f"SSH Port: {config['ssh_port']}\n")
+        
         # Log provider-specific info without exposing sensitive details
-        if config['provider'] == 'aws':
+        if config['provider'] == 'AWS':
             f.write(f"AWS Region: {config.get('aws_region', 'random')}\n")
             f.write(f"Instance Type: {config.get('size', 'default')}\n")
-            f.write(f"Redirector Name: {config['redirector_name']}\n")
-            f.write(f"C2 Name: {config['c2_name']}\n")
-        elif config['provider'] == 'linode':
+            f.write(f"Redirector Name: {config.get('redirector_name', 'Not specified')}\n")
+            f.write(f"C2 Name: {config.get('c2_name', 'Not specified')}\n")
+        elif config['provider'] == 'Linode':
             f.write(f"Linode Region: {config.get('linode_region', 'random')}\n")
-            f.write(f"Plan: {config.get('size', 'default')}\n")
-            f.write(f"Redirector Name: {config['redirector_name']}\n")
-            f.write(f"C2 Name: {config['c2_name']}\n")
-        elif config['provider'] == 'flokinet':
+            f.write(f"Plan: {config.get('plan', 'default')}\n")
+            f.write(f"Redirector Name: {config.get('redirector_name', 'Not specified')}\n")
+            f.write(f"C2 Name: {config.get('c2_name', 'Not specified')}\n")
+        elif config['provider'] == 'FlokiNET':
             # IPs are sensitive for FlokiNET, only log region
             f.write(f"FlokiNET Region: {config.get('region', 'anonymous')}\n")
             # Note that we're not logging IPs directly
@@ -1151,6 +1380,14 @@ def save_config(config):
                 f.write(f"Redirector Domain: cdn.{config['domain']}\n")
             if not config.get('redirector_only'):
                 f.write(f"C2 Domain: mail.{config['domain']}\n")
+        
+        # Log gophish admin port
+        if config.get('gophish_admin_port'):
+            f.write(f"GoPhish Admin Port: {config['gophish_admin_port']}\n")
+        
+        # Log SMTP auth user
+        if config.get('smtp_auth_user'):
+            f.write(f"SMTP Auth User: {config['smtp_auth_user']}\n")
         
         # Log OPSEC settings
         f.write(f"\nOPSEC Settings:\n")
@@ -1175,6 +1412,12 @@ def main():
     else:
         config = load_config(args)
     
+    # Ensure provider has proper case
+    if config['provider'] and config['provider'].lower() in ['aws', 'linode', 'flokinet']:
+        # Convert to proper case if necessary
+        provider_map = {'aws': 'AWS', 'linode': 'Linode', 'flokinet': 'FlokiNET'}
+        config['provider'] = provider_map.get(config['provider'].lower(), config['provider'])
+    
     # Validate configuration
     if not validate_config(config):
         return
@@ -1192,29 +1435,30 @@ def main():
     # Save configuration
     save_config(config)
     
+    # Deploy infrastructure based on provider
     success = False
     try:
-        # Deploy infrastructure based on provider
-        if config['provider'] == 'aws':
+        if config['provider'] == 'AWS':
             success = deploy_aws(config)
-        elif config['provider'] == 'linode':
+        elif config['provider'] == 'Linode':
             success = deploy_linode(config)
-        elif config['provider'] == 'flokinet':
+        elif config['provider'] == 'FlokiNET':
             success = deploy_flokinet(config)
         else:
             print(f"[-] Error: Unsupported provider: {config['provider']}")
             return
-    finally:
-        # OPSEC: Always offer to clean up sensitive files, regardless of success
-        if not config.get('debug'):  # Skip cleanup in debug mode
-            cleanup_sensitive_files(config)
+    except Exception as e:
+        print(f"[-] Unexpected error during deployment: {e}")
+        return
     
+    # Only offer cleanup if deployment was successful
     if success:
         print("\n[+] Deployment completed successfully!")
-        if config['provider'] != 'flokinet':
+        
+        if config['provider'] != 'FlokiNET':
             print("\n[+] Your infrastructure is now ready to use!")
-            print(f"[+] Redirector: {config['redirector_name']}")
-            print(f"[+] C2 Server: {config['c2_name']}")
+            print(f"[+] Redirector: {config.get('redirector_name', 'redirector')}")
+            print(f"[+] C2 Server: {config.get('c2_name', 'c2')}")
         else:
             print("\n[+] Your FlokiNET infrastructure is now configured with:")
             print(f"[+] Zero-logs configuration")
@@ -1222,7 +1466,7 @@ def main():
             print(f"[+] Sliver C2 framework")
             print(f"[+] Anti-forensics capabilities")
             print("\n[+] To use the automated shell handler, configure your Rubber Ducky with:")
-            print(f"[+] Redirector IP: {config['flokinet_redirector_ip']}")
+            print(f"[+] Redirector IP: {config.get('flokinet_redirector_ip', 'IP_NOT_PROVIDED')}")
             if config.get('domain'):
                 print(f"[+] or Domain: cdn.{config['domain']}")
             print(f"[+] Port: {config.get('shell_handler_port', 4444)} (shell handler port)")
@@ -1231,16 +1475,20 @@ def main():
             if config.get('domain'):
                 print("\n[!] Don't forget to configure your DNS records:")
                 if not config.get('c2_only'):
-                    print(f"[!] - Add A record for cdn.{config['domain']} pointing to {config['flokinet_redirector_ip']}")
+                    print(f"[!] - Add A record for cdn.{config['domain']} pointing to {config.get('flokinet_redirector_ip', 'IP_NOT_PROVIDED')}")
                 if not config.get('redirector_only'):
-                    print(f"[!] - Add A record for mail.{config['domain']} pointing to {config['flokinet_c2_ip']}")
+                    print(f"[!] - Add A record for mail.{config['domain']} pointing to {config.get('flokinet_c2_ip', 'IP_NOT_PROVIDED')}")
+        
+        # Display non-standard SSH port warning if applicable
+        if config.get('ssh_port') != 22:
+            print(f"\n[!] IMPORTANT: Non-standard SSH port {config.get('ssh_port')} is being used")
+            print(f"[!] Future SSH connections will require: ssh -p {config.get('ssh_port')} user@host")
+        
+        # OPSEC: Clean up sensitive files after successful deployment
+        if not config.get('debug'):  # Skip cleanup in debug mode
+            cleanup_sensitive_files(config)
     else:
         print("\n[-] Deployment failed.")
-        
-    # Display non-standard SSH port warning if applicable
-    if success and config.get('ssh_port') != 22:
-        print(f"\n[!] IMPORTANT: Non-standard SSH port {config.get('ssh_port')} is being used")
-        print(f"[!] Future SSH connections will require: ssh -p {config.get('ssh_port')} user@host")
 
 if __name__ == "__main__":
     main()

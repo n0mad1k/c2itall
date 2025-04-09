@@ -15,12 +15,12 @@
     - name: Create Linode redirector instance
       community.general.linode_v4:
         label: "{{ instance_name }}"
-        type: "{{ instance_type }}"
+        type: "{{ plan }}"
         region: "{{ region }}"
         image: "{{ linode_image }}"
         root_pass: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
         authorized_keys: 
-          - "{{ lookup('file', ssh_key) }}"
+          - "{{ ssh_key_content }}"
         state: present
       register: redirector_instance
 
