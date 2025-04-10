@@ -3,33 +3,28 @@
   hosts: localhost
   gather_facts: false
   connection: local
-  vars:
-    region: "{{ linode_region | default('us-east') }}"
-    instance_type: "{{ size | default('g6-standard-1') }}"
-    instance_name: "{{ redirector_name | default('redirector') }}"
-    domain: "{{ domain | default('example.com') }}"
-    redirector_subdomain: "cdn"
-    linode_image: "linode/debian11"
-
+  vars_files:
+    - vars.yaml
   tasks:
     - name: Create Linode redirector instance
       community.general.linode_v4:
-        label: "{{ instance_name }}"
+        access_token: "{{ linode_token }}"
+        label: "{{ redirector_name }}"
         type: "{{ plan }}"
         region: "{{ region }}"
-        image: "{{ linode_image }}"
-        root_pass: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
-        authorized_keys: 
-          - "{{ ssh_key_content }}"
+        image: "linode/debian11"
+        root_pass: "{{ lookup('password', '/dev/null length=16') }}"
+        authorized_keys:
+          - "{{ lookup('file', ssh_key_path + '.pub') }}"
         state: present
       register: redirector_instance
 
     - name: Save redirector IP
-      set_fact:
+      ansible.builtin.set_fact:
         redirector_ip: "{{ redirector_instance.instance.ipv4[0] }}"
 
     - name: Wait for SSH to become available
-      wait_for:
+      ansible.builtin.wait_for:
         host: "{{ redirector_ip }}"
         port: 22
         delay: 10
@@ -37,11 +32,11 @@
         state: started
 
     - name: Add redirector to inventory
-      add_host:
-        name: redirector
+      ansible.builtin.add_host:
+        name: "redirector"
         ansible_host: "{{ redirector_ip }}"
         ansible_user: "{{ ssh_user | default('root') }}"
-        ansible_ssh_private_key_file: "{{ ssh_key | replace('.pub', '') }}"
+        ansible_ssh_private_key_file: "{{ ssh_key_path }}"
         groups: redirectors
 
 - name: Configure redirector
