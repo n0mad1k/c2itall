@@ -53,7 +53,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='Deploy C2 Red Team infrastructure')
     
     # Provider selection
-    parser.add_argument('-p', '--provider', choices=PROVIDERS, default="aws", help='Provider to use for deployment')
+    parser.add_argument('-p', '--provider', choices=PROVIDERS, default=None, help='Provider to use for deployment')
     
     # AWS-specific arguments
     parser.add_argument('--aws-key', help='AWS access key')
@@ -92,12 +92,175 @@ def parse_arguments():
     parser.add_argument('--ssh-after-deploy', action='store_true', help='SSH into the instance after deployment')
     parser.add_argument('--copy-ssh-key', action='store_true', help='Copy SSH key to the server for passwordless login')
     parser.add_argument('--teardown', action='store_true', help='Tear down existing infrastructure')
+
+    # Interactive mode
+    parser.add_argument('--interactive', action='store_true', help='Run in interactive wizard mode')
     
     return parser.parse_args()
 
+def interactive_setup():
+    """Interactive setup wizard for deployment"""
+    config = {}
+    
+    print("\n====== C2ingRed Interactive Setup Wizard ======\n")
+    
+    # Select provider
+    print("Available cloud providers:")
+    for i, provider in enumerate(PROVIDERS, 1):
+        print(f"  {i}. {provider.capitalize()}")
+    
+    while True:
+        try:
+            provider_choice = int(input("\nSelect a provider (1-3): "))
+            if 1 <= provider_choice <= len(PROVIDERS):
+                config['provider'] = PROVIDERS[provider_choice - 1]
+                break
+            else:
+                print(f"Please enter a number between 1 and {len(PROVIDERS)}")
+        except ValueError:
+            print("Please enter a valid number")
+    
+    # Load vars file for the selected provider
+    vars_file = f"{config['provider'].upper()}/vars.yaml"
+    vars_data = {}
+    if os.path.exists(vars_file):
+        try:
+            with open(vars_file, 'r') as f:
+                vars_data = yaml.safe_load(f) or {}
+            print(f"Loaded configuration from {vars_file}")
+        except Exception as e:
+            print(f"Warning: Failed to load {vars_file}: {e}")
+    
+    # Provider-specific configuration
+    if config['provider'] == "aws":
+        config['aws_access_key'] = input("\nAWS Access Key [leave blank to use AWS CLI profile]: ") or None
+        config['aws_secret_key'] = input("AWS Secret Key [leave blank to use AWS CLI profile]: ") or None
+        
+        # Show available regions
+        aws_regions = vars_data.get('aws_region_choices', [])
+        if aws_regions:
+            print("\nAvailable AWS regions:")
+            for i, region in enumerate(aws_regions, 1):
+                print(f"  {i}. {region}")
+            
+            while True:
+                region_input = input("\nSelect a region (number) or press Enter for random: ")
+                if not region_input:
+                    config['aws_region'] = None  # Random
+                    break
+                try:
+                    region_choice = int(region_input)
+                    if 1 <= region_choice <= len(aws_regions):
+                        config['aws_region'] = aws_regions[region_choice - 1]
+                        break
+                    else:
+                        print(f"Please enter a number between 1 and {len(aws_regions)}")
+                except ValueError:
+                    print("Please enter a valid number or press Enter")
+        else:
+            config['aws_region'] = input("\nAWS Region [leave blank for us-east-1]: ") or "us-east-1"
+    
+    elif config['provider'] == "linode":
+        config['linode_token'] = input("\nLinode API Token: ")
+        
+        # Show available regions
+        linode_regions = vars_data.get('region_choices', [])
+        if linode_regions:
+            print("\nAvailable Linode regions:")
+            for i, region in enumerate(linode_regions, 1):
+                print(f"  {i}. {region}")
+            
+            while True:
+                region_input = input("\nSelect a region (number) or press Enter for random: ")
+                if not region_input:
+                    config['linode_region'] = None  # Random
+                    break
+                try:
+                    region_choice = int(region_input)
+                    if 1 <= region_choice <= len(linode_regions):
+                        config['linode_region'] = linode_regions[region_choice - 1]
+                        break
+                    else:
+                        print(f"Please enter a number between 1 and {len(linode_regions)}")
+                except ValueError:
+                    print("Please enter a valid number or press Enter")
+    
+    elif config['provider'] == "flokinet":
+        print("\nFlokiNET requires pre-provisioned servers.")
+        config['flokinet_redirector_ip'] = input("FlokiNET Redirector IP Address: ")
+        config['flokinet_c2_ip'] = input("FlokiNET C2 Server IP Address: ")
+        config['ssh_user'] = input(f"SSH User [default: {DEFAULT_SSH_USER['flokinet']}]: ") or DEFAULT_SSH_USER['flokinet']
+        
+        ssh_key = input("Path to SSH Private Key [leave blank to generate new key]: ")
+        if ssh_key:
+            config['ssh_key'] = os.path.expanduser(ssh_key)
+        else:
+            config['ssh_key'] = None  # Will generate a new key
+    
+    # Deployment type
+    print("\nDeployment type:")
+    print("  1. Full deployment (Redirector + C2)")
+    print("  2. Redirector only")
+    print("  3. C2 server only")
+    
+    while True:
+        try:
+            deploy_choice = int(input("\nSelect deployment type (1-3): "))
+            if deploy_choice == 1:
+                config['redirector_only'] = False
+                config['c2_only'] = False
+                break
+            elif deploy_choice == 2:
+                config['redirector_only'] = True
+                config['c2_only'] = False
+                break
+            elif deploy_choice == 3:
+                config['redirector_only'] = False
+                config['c2_only'] = True
+                break
+            else:
+                print("Please enter a number between 1 and 3")
+        except ValueError:
+            print("Please enter a valid number")
+    
+    # Domain configuration
+    config['domain'] = input("\nDomain name [default: example.com]: ") or "example.com"
+    config['letsencrypt_email'] = input(f"Email for Let's Encrypt [default: admin@{config['domain']}]: ") or f"admin@{config['domain']}"
+    
+    # Security options
+    print("\nSecurity options:")
+    disable_history = input("Disable command history? (y/n) [default: y]: ").lower() != 'n'
+    secure_memory = input("Enable secure memory settings? (y/n) [default: y]: ").lower() != 'n'
+    zero_logs = input("Enable zero-logs configuration? (y/n) [default: y]: ").lower() != 'n'
+    
+    config['disable_history'] = disable_history
+    config['secure_memory'] = secure_memory
+    config['zero_logs'] = zero_logs
+    
+    # Post-deployment options
+    config['ssh_after_deploy'] = input("\nSSH into instance after deployment? (y/n) [default: n]: ").lower() == 'y'
+    
+    # Debug mode
+    config['debug'] = input("Enable debug mode? (y/n) [default: n]: ").lower() == 'y'
+    
+    print("\n====== Configuration Summary ======")
+    for key, value in config.items():
+        if key not in ['aws_secret_key', 'linode_token']:
+            print(f"  {key}: {value}")
+    
+    confirm = input("\nProceed with deployment? (y/n): ").lower()
+    if confirm != 'y':
+        print("Deployment cancelled.")
+        sys.exit(0)
+    
+    return config
+
 def load_vars_file(provider):
     """Load vars.yaml for the specified provider"""
-    vars_file = f"{provider}/vars.yaml"
+    # Handle case sensitivity in directory names
+    provider_dir = provider.upper()
+    vars_file = f"{provider_dir}/vars.yaml"
+    
     if os.path.exists(vars_file):
         try:
             with open(vars_file, 'r') as f:
@@ -233,6 +396,8 @@ def run_ansible_playbook(playbook, inventory, config, debug=False):
 def deploy_infrastructure(config):
     """Deploy infrastructure based on provider and configuration"""
     provider = config['provider']
+    # Convert provider to uppercase for directory paths
+    provider_dir = provider.upper()
     logging.info(f"Deploying {provider} infrastructure...")
     
     # Set provider-specific environment variables
@@ -253,10 +418,10 @@ def deploy_infrastructure(config):
     
     # Determine playbook path based on deployment mode
     if config.get('redirector_only'):
-        playbook = f"{provider}/redirector.yml"
+        playbook = f"{provider_dir}/redirector.yml"
         deployment_type = "redirector"
     elif config.get('c2_only'):
-        playbook = f"{provider}/c2.yml"
+        playbook = f"{provider_dir}/c2.yml"
         deployment_type = "c2"
     else:
         # Full deployment
@@ -270,7 +435,7 @@ def deploy_infrastructure(config):
             return deploy_flokinet_c2(config)
         else:
             # AWS and Linode use a single playbook for full deployment
-            playbook = f"{provider}/c2-deploy.yaml"
+            playbook = f"{provider_dir}/c2-deploy.yaml"
             deployment_type = "local"
     
     # Create inventory file
@@ -312,7 +477,7 @@ def deploy_flokinet_redirector(config):
     inventory_path = create_inventory_file(config, "redirector")
     
     # Run the playbook
-    playbook = "FlokiNET/redirector.yml"
+    playbook = "FLOKINET/redirector.yml"
     try:
         success, stdout, stderr = run_ansible_playbook(
             playbook, inventory_path, config, config.get('debug', False)
@@ -348,7 +513,7 @@ def deploy_flokinet_c2(config):
     inventory_path = create_inventory_file(config, "c2")
     
     # Run the playbook
-    playbook = "FlokiNET/c2.yml"
+    playbook = "FLOKINET/c2.yml"
     try:
         success, stdout, stderr = run_ansible_playbook(
             playbook, inventory_path, config, config.get('debug', False)
@@ -436,22 +601,24 @@ def ssh_to_instance(config):
 def cleanup_resources(config):
     """Clean up resources if deployment fails"""
     provider = config.get('provider')
+    provider_dir = provider.upper() if provider else None
     logging.info(f"Cleaning up {provider} resources...")
     
     # Use Ansible for cleanup
-    playbook = f"{provider}/cleanup.yml"
-    if os.path.exists(playbook):
-        logging.info(f"Running cleanup playbook: {playbook}")
-        inventory_path = create_inventory_file(config, "local")
-        try:
-            run_ansible_playbook(playbook, inventory_path, config)
-        except Exception as e:
-            logging.error(f"Cleanup playbook failed: {e}")
-        finally:
-            if os.path.exists(inventory_path):
-                os.unlink(inventory_path)
-    else:
-        logging.warning(f"No cleanup playbook found at {playbook}")
+    if provider_dir:
+        playbook = f"{provider_dir}/cleanup.yml"
+        if os.path.exists(playbook):
+            logging.info(f"Running cleanup playbook: {playbook}")
+            inventory_path = create_inventory_file(config, "local")
+            try:
+                run_ansible_playbook(playbook, inventory_path, config)
+            except Exception as e:
+                logging.error(f"Cleanup playbook failed: {e}")
+            finally:
+                if os.path.exists(inventory_path):
+                    os.unlink(inventory_path)
+        else:
+            logging.warning(f"No cleanup playbook found at {playbook}")
     
     # Clean up SSH key if we generated one
     ssh_key = config.get('ssh_key')
@@ -464,6 +631,93 @@ def cleanup_resources(config):
         except Exception as e:
             logging.error(f"Failed to remove SSH key: {e}")
 
+def check_dependencies():
+    """Check if required dependencies are installed"""
+    dependencies = {
+        "ansible": "ansible-playbook --version",
+        "aws": "aws --version",
+        "linode-cli": "linode-cli --version",
+    }
+    
+    missing = []
+    for dep, cmd in dependencies.items():
+        try:
+            subprocess.run(cmd.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            missing.append(dep)
+    
+    if missing:
+        logging.warning(f"Missing dependencies: {', '.join(missing)}")
+        print("\nWarning: The following dependencies are missing or not in PATH:")
+        for dep in missing:
+            print(f"  - {dep}")
+        print("\nPlease install them to ensure proper functionality.")
+        print("You can install Python dependencies with: pip install -r requirements.txt")
+        
+        if "ansible" in missing:
+            print("\nTo install Ansible: pip install ansible")
+        
+        if "aws" in missing:
+            print("\nTo install AWS CLI: pip install awscli")
+        
+        if "linode-cli" in missing:
+            print("\nTo install Linode CLI: pip install linode-cli")
+        
+        confirm = input("\nContinue anyway? (y/n): ").lower()
+        if confirm != 'y':
+            sys.exit(1)
+
+def teardown_infrastructure(config):
+    """Tear down existing infrastructure"""
+    provider = config['provider']
+    provider_dir = provider.upper()
+    logging.info(f"Tearing down {provider} infrastructure...")
+    
+    # Set provider-specific environment variables
+    if provider == "aws":
+        if config.get('aws_access_key'):
+            os.environ['AWS_ACCESS_KEY_ID'] = config['aws_access_key']
+        if config.get('aws_secret_key'):
+            os.environ['AWS_SECRET_ACCESS_KEY'] = config['aws_secret_key']
+    elif provider == "linode":
+        if config.get('linode_token'):
+            os.environ['LINODE_TOKEN'] = config['linode_token']
+    
+    # Run cleanup playbook
+    playbook = f"{provider_dir}/cleanup.yml"
+    if os.path.exists(playbook):
+        # Add confirm_cleanup=false to skip confirmation in playbook
+        config['confirm_cleanup'] = False
+        
+        # Create inventory for local execution
+        inventory_path = create_inventory_file(config, "local")
+        
+        try:
+            success, stdout, stderr = run_ansible_playbook(
+                playbook, inventory_path, config, config.get('debug', False)
+            )
+            
+            if success:
+                logging.info(f"Successfully tore down {provider} infrastructure")
+            else:
+                logging.error(f"Failed to tear down {provider} infrastructure")
+                logging.error(stderr)
+            
+            # Clean up inventory
+            if os.path.exists(inventory_path):
+                os.unlink(inventory_path)
+            
+            return success
+        except Exception as e:
+            logging.error(f"Teardown failed: {e}")
+            # Clean up inventory
+            if os.path.exists(inventory_path):
+                os.unlink(inventory_path)
+            return False
+    else:
+        logging.error(f"No cleanup playbook found at {playbook}")
+        return False
+
 def main():
     """Main function to run the deployment"""
     # Set up logging
@@ -472,74 +726,84 @@ def main():
     # Parse command line arguments
     args = parse_arguments()
     
-    # Override provider if --flokinet is specified
-    if args.flokinet:
-        args.provider = "flokinet"
+    # Check dependencies
+    check_dependencies()
     
-    # Load variables from provider-specific vars.yaml
-    vars_data = load_vars_file(args.provider)
-    
-    # Build configuration by combining args and vars_data
-    config = {}
-    
-    # Provider settings
-    config['provider'] = args.provider
-    
-    # AWS settings
-    if args.provider == "aws":
-        config['aws_access_key'] = args.aws_key or vars_data.get('aws_access_key')
-        config['aws_secret_key'] = args.aws_secret or vars_data.get('aws_secret_key')
-        config['aws_region'] = args.aws_region or args.region
-        config['aws_region_choices'] = vars_data.get('aws_region_choices', [])
-        config['ami_map'] = vars_data.get('ami_map', {})
-    
-    # Linode settings
-    elif args.provider == "linode":
-        config['linode_token'] = args.linode_token or vars_data.get('linode_token')
-        config['linode_region'] = args.linode_region or args.region
-        config['region_choices'] = vars_data.get('region_choices', [])
-        config['plan'] = vars_data.get('plan', 'g6-standard-1')
-        config['image'] = vars_data.get('image', 'linode/debian11')
-    
-    # FlokiNET settings
-    elif args.provider == "flokinet":
-        config['flokinet_redirector_ip'] = args.flokinet_redirector_ip or vars_data.get('redirector_ip')
-        config['flokinet_c2_ip'] = args.flokinet_c2_ip or vars_data.get('c2_ip')
-        config['flokinet_region_choices'] = vars_data.get('flokinet_region_choices', [])
-        config['ssh_port'] = vars_data.get('ssh_port', 22)
-    
-    # SSH settings
-    config['ssh_user'] = args.ssh_user or DEFAULT_SSH_USER.get(args.provider)
-    if args.ssh_key:
-        config['ssh_key'] = os.path.expanduser(args.ssh_key)
+    # Use interactive mode if specified or if no provider is given
+    if args.interactive or args.provider is None and not args.flokinet:
+        config = interactive_setup()
     else:
-        config['ssh_key'] = generate_ssh_key()
-    
-    # Generate random instance names
-    rand_suffix = generate_random_string()
-    timestamp = int(time.time()) % 10000
-    config['redirector_name'] = args.redirector_name or f"srv-{rand_suffix}-{timestamp}"
-    config['c2_name'] = args.c2_name or f"node-{rand_suffix}-{timestamp}"
-    
-    # Deployment options
-    config['redirector_only'] = args.redirector_only
-    config['c2_only'] = args.c2_only
-    config['debug'] = args.debug
-    config['domain'] = args.domain or vars_data.get('domain', 'example.com')
-    config['letsencrypt_email'] = args.letsencrypt_email or vars_data.get('letsencrypt_email', f"admin@{config['domain']}")
-    
-    # OPSEC settings
-    config['disable_history'] = args.disable_history if args.disable_history is not None else vars_data.get('disable_history', True)
-    config['secure_memory'] = args.secure_memory if args.secure_memory is not None else vars_data.get('secure_memory', True)
-    config['zero_logs'] = args.zero_logs if args.zero_logs is not None else vars_data.get('zero_logs', True)
-    
-    # Other settings from vars_data
-    config['gophish_admin_port'] = vars_data.get('gophish_admin_port', str(random.randint(2000, 9000)))
-    config['smtp_auth_user'] = vars_data.get('smtp_auth_user', f"user{random.randint(1000, 9999)}")
-    config['smtp_auth_pass'] = vars_data.get('smtp_auth_pass', ''.join(random.choices(string.ascii_letters + string.digits, k=20)))
+        # Override provider if --flokinet is specified
+        if args.flokinet:
+            args.provider = "flokinet"
+        
+        # Load variables from provider-specific vars.yaml
+        vars_data = load_vars_file(args.provider)
+        
+        # Build configuration by combining args and vars_data
+        config = {}
+        
+        # Provider settings
+        config['provider'] = args.provider
+        
+        # AWS settings
+        if args.provider == "aws":
+            config['aws_access_key'] = args.aws_key or vars_data.get('aws_access_key')
+            config['aws_secret_key'] = args.aws_secret or vars_data.get('aws_secret_key')
+            config['aws_region'] = args.aws_region or args.region
+            config['aws_region_choices'] = vars_data.get('aws_region_choices', [])
+            config['ami_map'] = vars_data.get('ami_map', {})
+        
+        # Linode settings
+        elif args.provider == "linode":
+            config['linode_token'] = args.linode_token or vars_data.get('linode_token')
+            config['linode_region'] = args.linode_region or args.region
+            config['region_choices'] = vars_data.get('region_choices', [])
+            config['plan'] = vars_data.get('plan', 'g6-standard-1')
+            config['image'] = vars_data.get('image', 'linode/kali')
+        
+        # FlokiNET settings
+        elif args.provider == "flokinet":
+            config['flokinet_redirector_ip'] = args.flokinet_redirector_ip or vars_data.get('redirector_ip')
+            config['flokinet_c2_ip'] = args.flokinet_c2_ip or vars_data.get('c2_ip')
+            config['flokinet_region_choices'] = vars_data.get('flokinet_region_choices', [])
+            config['ssh_port'] = vars_data.get('ssh_port', 22)
+        
+        # SSH settings
+        config['ssh_user'] = args.ssh_user or DEFAULT_SSH_USER.get(args.provider)
+        if args.ssh_key:
+            config['ssh_key'] = os.path.expanduser(args.ssh_key)
+        else:
+            config['ssh_key'] = generate_ssh_key()
+        
+        # Generate random instance names
+        rand_suffix = generate_random_string()
+        timestamp = int(time.time()) % 10000
+        config['redirector_name'] = args.redirector_name or f"srv-{rand_suffix}-{timestamp}"
+        config['c2_name'] = args.c2_name or f"node-{rand_suffix}-{timestamp}"
+        
+        # Deployment options
+        config['redirector_only'] = args.redirector_only
+        config['c2_only'] = args.c2_only
+        config['debug'] = args.debug
+        config['domain'] = args.domain or vars_data.get('domain', 'example.com')
+        config['letsencrypt_email'] = args.letsencrypt_email or vars_data.get('letsencrypt_email', f"admin@{config['domain']}")
+        
+        # OPSEC settings
+        config['disable_history'] = args.disable_history if args.disable_history is not None else vars_data.get('disable_history', True)
+        config['secure_memory'] = args.secure_memory if args.secure_memory is not None else vars_data.get('secure_memory', True)
+        config['zero_logs'] = args.zero_logs if args.zero_logs is not None else vars_data.get('zero_logs', True)
+        
+        # Other settings from vars_data
+        config['gophish_admin_port'] = vars_data.get('gophish_admin_port', str(random.randint(2000, 9000)))
+        config['smtp_auth_user'] = vars_data.get('smtp_auth_user', f"user{random.randint(1000, 9999)}")
+        config['smtp_auth_pass'] = vars_data.get('smtp_auth_pass', ''.join(random.choices(string.ascii_letters + string.digits, k=20)))
+        
+        # SSH after deploy
+        config['ssh_after_deploy'] = args.ssh_after_deploy
     
     # Validate deployment mode
-    if config['redirector_only'] and config['c2_only']:
+    if config.get('redirector_only') and config.get('c2_only'):
         logging.error("Cannot specify both --redirector-only and --c2-only")
         return
     
@@ -552,6 +816,11 @@ def main():
             else:
                 logging.info(f"  {key}: {value}")
     
+    # Check if this is a teardown operation
+    if args.teardown:
+        teardown_infrastructure(config)
+        return
+    
     # Run deployment
     try:
         success = deploy_infrastructure(config)
@@ -560,7 +829,7 @@ def main():
             logging.info("Deployment completed successfully!")
             
             # SSH into instance if requested
-            if args.ssh_after_deploy:
+            if config.get('ssh_after_deploy'):
                 ssh_to_instance(config)
         else:
             logging.error("Deployment failed!")

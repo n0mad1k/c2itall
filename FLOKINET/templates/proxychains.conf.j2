@@ -1,0 +1,67 @@
+# FlokiNET/templates/proxychains.conf.j2
+# ProxyChains configuration for C2 server
+# Routes traffic through Tor for anonymity
+
+# Dynamic chain - Each connection through the proxy list
+# Uses chained proxies in the order they appear in the list
+dynamic_chain
+
+# Proxy DNS requests - no leak for DNS data
+proxy_dns
+
+# Randomize the order of the proxies on each start
+# random_chain
+
+# Set the type of chain (dynamic, strict, random)
+# strict_chain
+# random_chain
+
+# Quiet mode (less console output)
+quiet_mode
+
+# ProxyList format:
+#       type  host  port [user pass]
+#       (values separated by 'tab' or 'blank')
+[ProxyList]
+# add proxy here ...
+# socks5 	127.0.0.1	1080
+socks5 	127.0.0.1	9050
+
+# FlokiNET/templates/iptables-rules.j2
+# Hardened iptables rules for FlokiNET C2 server
+# Applied at system startup
+
+*filter
+:INPUT DROP [0:0]
+:FORWARD DROP [0:0]
+:OUTPUT ACCEPT [0:0]
+
+# Allow established and related connections
+-A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+# Allow loopback
+-A INPUT -i lo -j ACCEPT
+
+# Allow SSH
+-A INPUT -p tcp -m state --state NEW -m tcp --dport {{ ssh_port | default(22) }} -j ACCEPT
+
+# Allow HTTP/HTTPS
+-A INPUT -p tcp -m state --state NEW -m tcp --dport 80 -j ACCEPT
+-A INPUT -p tcp -m state --state NEW -m tcp --dport 443 -j ACCEPT
+
+# Allow Sliver C2 ports
+-A INPUT -p tcp -m state --state NEW -m tcp --dport 8888 -j ACCEPT
+-A INPUT -p tcp -m state --state NEW -m tcp --dport 31337 -j ACCEPT
+
+# Allow shell handler port
+{% if shell_handler_port is defined %}
+-A INPUT -p tcp -m state --state NEW -m tcp --dport {{ shell_handler_port }} -j ACCEPT
+{% endif %}
+
+# Block all other incoming traffic
+-A INPUT -j DROP
+
+# Allow all outbound traffic by default
+-A OUTPUT -j ACCEPT
+
+COMMIT

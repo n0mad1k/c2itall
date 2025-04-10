@@ -1,0 +1,48 @@
+# FlokiNET/templates/torrc.j2
+#
+# Tor configuration for C2 server
+# Hardened configuration for operational security
+
+# General settings
+DataDirectory /var/lib/tor
+RunAsDaemon 1
+ControlPort 9051
+CookieAuthentication 1
+CookieAuthFileGroupReadable 0
+DisableDebuggerAttachment 1
+
+# Network settings
+SOCKSPort 127.0.0.1:9050
+SOCKSPolicy accept 127.0.0.1/8
+SOCKSPolicy reject *
+Log notice file /var/log/tor/notices.log
+SafeSocks 1
+TestSocks 0
+
+# Circuit settings
+NumEntryGuards 4
+EnforceDistinctSubnets 1
+CircuitBuildTimeout 60
+PathsNeededToBuildCircuits 0.95
+NewCircuitPeriod 900
+MaxCircuitDirtiness 1800
+
+# Security settings
+StrictNodes 1
+WarnPlaintextPorts 23,109,110,143,80,21
+ReachableAddresses *:80,*:443
+ReachableAddresses reject *:*
+ReachableAddresses accept *:80
+ReachableAddresses accept *:443
+
+# Obfuscation settings
+Bridge obfs4 {{ bridge_address | default('placeholderbridge.example.org:443') }} {{ bridge_fingerprint | default('PLACEHOLDERFINGERPRINT') }} cert=PLACEHOLDER
+UseBridges 1
+ClientTransportPlugin obfs4 exec /usr/bin/obfs4proxy
+ClientTransportPlugin meek exec /usr/bin/obfs4proxy
+
+# Exit policy (no exits allowed)
+ExitPolicy reject *:*
+
+# DNS resolution
+AutomapHostsOnResolve 1
