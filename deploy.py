@@ -17,6 +17,9 @@ import logging
 import glob
 from datetime import datetime
 
+# Disable Ansible host key checking
+os.environ["ANSIBLE_HOST_KEY_CHECKING"] = "False"
+
 # Constants
 PROVIDERS = ["aws", "linode", "flokinet"]
 DEFAULT_REGION = {
@@ -240,7 +243,8 @@ def load_config(args):
     
     # Generate strong random password if not specified
     if not vars_data.get('smtp_auth_pass'):
-        charset = string.ascii_letters + string.digits + "!@#$%^&*()-_=+[]{};:,.<>?"
+        # Only use letters and digits for safety - no special characters
+        charset = string.ascii_letters + string.digits
         random_pass = ''.join(random.choices(charset, k=20))
         config['smtp_auth_pass'] = random_pass
     else:
@@ -902,179 +906,193 @@ def deploy_linode(config):
             f.write(f"Domain: {config.get('domain', 'example.com')}\n")
             f.write(f"==== END DEPLOYMENT INFORMATION ====\n\n")
         
-        # Build variables for command with ALL required parameters
-        extra_vars = {
-            'linode_token': config['linode_token'],
-            'region': config.get('linode_region', 'us-east'),
-            'plan': config.get('size', 'g6-standard-1'),
-            'redirector_name': redirector_name,
-            'c2_name': c2_name,
-            'teardown': config.get('teardown', False),
-            'disable_history': config.get('disable_history', True),
-            'secure_memory': config.get('secure_memory', True),
-            'zero_logs': config.get('zero_logs', True),
-            'redirector_only': config.get('redirector_only', False),
-            'c2_only': config.get('c2_only', False),
-            'debug': config.get('debug', False),
-            'domain': config.get('domain', 'example.com'),
-            'letsencrypt_email': config.get('letsencrypt_email', 'admin@example.com'),
-            'gophish_admin_port': config.get('gophish_admin_port', str(random.randint(2000, 9000))),
-            'smtp_auth_user': config.get('smtp_auth_user', f"user{random.randint(1000, 9999)}"),
-            'smtp_auth_pass': config.get('smtp_auth_pass', ''.join(random.choices(string.ascii_letters + string.digits + "!@#$%^&*", k=20))),
-            'ssh_key_path': ssh_key,  # Path to the private key
-            'ssh_user': config.get('ssh_user', 'root'),
-            'instance_label': c2_name if config.get('c2_only', False) else redirector_name,
-            'linode_image': 'linode/debian11',
-        }
+        # Create vars.yml file for Ansible with variables
+        vars_file = f"temp_vars_{int(time.time())}.yml"
+        with open(vars_file, 'w') as f:
+            # Essential variables that must match playbook expectations
+            f.write(f"---\n")
+            f.write(f"linode_token: '{config['linode_token']}'\n")
+            f.write(f"redirector_name: '{redirector_name}'\n")
+            f.write(f"c2_name: '{c2_name}'\n")
+            f.write(f"region: '{config.get('linode_region', 'us-east')}'\n")
+            f.write(f"plan: '{config.get('size', 'g6-standard-1')}'\n")
+            f.write(f"domain: '{config.get('domain', 'example.com')}'\n")
+            f.write(f"letsencrypt_email: '{config.get('letsencrypt_email', 'admin@example.com')}'\n")
+            f.write(f"gophish_admin_port: '{config.get('gophish_admin_port', str(random.randint(2000, 9000)))}'\n")
+            f.write(f"smtp_auth_user: '{config.get('smtp_auth_user', f'user{random.randint(1000, 9999)}')}'\n")
+            # Only use alphanumeric characters for password to avoid escaping issues
+            password = config.get('smtp_auth_pass', ''.join(random.choices(string.ascii_letters + string.digits, k=20)))
+            f.write(f"smtp_auth_pass: '{password}'\n")
+            f.write(f"ssh_key_path: '{ssh_key}'\n")
+            f.write(f"ssh_user: '{config.get('ssh_user', 'root')}'\n")
+            f.write(f"instance_label: '{c2_name if config.get('c2_only', False) else redirector_name}'\n")
+            f.write(f"linode_image: 'linode/debian11'\n")
+            # Boolean values
+            f.write(f"teardown: {str(config.get('teardown', False)).lower()}\n")
+            f.write(f"disable_history: {str(config.get('disable_history', True)).lower()}\n")
+            f.write(f"secure_memory: {str(config.get('secure_memory', True)).lower()}\n")
+            f.write(f"zero_logs: {str(config.get('zero_logs', True)).lower()}\n")
+            f.write(f"redirector_only: {str(config.get('redirector_only', False)).lower()}\n")
+            f.write(f"c2_only: {str(config.get('c2_only', False)).lower()}\n")
+            f.write(f"debug: {str(config.get('debug', False)).lower()}\n")
         
-        # Format extra vars for command line
-        extra_vars_list = []
-        for k, v in extra_vars.items():
-            if isinstance(v, bool):
-                extra_vars_list.append(f"{k}={str(v).lower()}")
-            elif isinstance(v, (int, float)):
-                extra_vars_list.append(f"{k}={v}")
-            elif isinstance(v, str):
-                # Escape quotes in string values
-                escaped_v = v.replace("'", "'\\''")
-                extra_vars_list.append(f"{k}='{escaped_v}'")
+        # Make the vars file readable only by owner
+        os.chmod(vars_file, 0o600)
         
-        extra_vars_str = " ".join(extra_vars_list)
-        
-        # Log extra vars for debugging (masking sensitive info)
+        # Log vars file creation
         with open(log_file, 'a') as f:
-            f.write("==== EXTRA VARS ====\n")
-            for k, v in extra_vars.items():
-                if k in ['linode_token', 'smtp_auth_pass']:
-                    v_masked = str(v)[:4] + '****' if v else 'None'
-                    f.write(f"{k}: {v_masked}\n")
-                else:
-                    f.write(f"{k}: {v}\n")
-            f.write("==== END EXTRA VARS ====\n\n")
+            f.write(f"==== CREATED VARS FILE: {vars_file} ====\n")
+            f.write(f"(File contains sensitive data, not logging content)\n")
+            f.write(f"==== END VARS FILE INFO ====\n\n")
         
-        # Execute deployment based on deployment mode
-        if extra_vars['redirector_only']:
-            playbook = "Linode/redirector.yml"
-            cmd = f"ansible-playbook -i {inventory_file} {playbook} -e '{extra_vars_str}' -vvv"
-            
-            with open(log_file, 'a') as f:
-                f.write(f"==== RUNNING REDIRECTOR PLAYBOOK ====\n")
-                f.write(f"Command: {cmd}\n\n")
-            
-            print(f"[+] Running: {cmd}")
-            success, stdout, stderr = run_command_with_logging(cmd, config, log_file)
-            if not success:
-                print(f"[-] Redirector deployment failed. See {log_file} for details.")
-                # Get the deployed instance ID for cleanup
-                try:
-                    linode_id = get_linode_id(redirector_name, config)
-                    if linode_id:
-                        deployed_instances.append((redirector_name, linode_id))
-                except Exception as e:
-                    print(f"[!] Failed to get instance ID: {e}")
-                return False, [log_file], deployed_instances
-            
-            # Store redirector IP and key path for SSH access later
-            linode_id = get_linode_id(redirector_name, config)
-            if linode_id:
-                deployed_instances.append((redirector_name, linode_id))
-            config['redirector_ip'] = get_linode_ip(linode_id, config)
-            config['redirector_key_path'] = ssh_key
-            
-        elif extra_vars['c2_only']:
-            playbook = "Linode/c2.yml"
-            cmd = f"ansible-playbook -i {inventory_file} {playbook} -e '{extra_vars_str}' -vvv"
-            
-            with open(log_file, 'a') as f:
-                f.write(f"==== RUNNING C2 PLAYBOOK ====\n")
-                f.write(f"Command: {cmd}\n\n")
-            
-            print(f"[+] Running: {cmd}")
-            success, stdout, stderr = run_command_with_logging(cmd, config, log_file)
-            if not success:
-                print(f"[-] C2 server deployment failed. See {log_file} for details.")
-                # Get the deployed instance ID for cleanup
-                try:
-                    linode_id = get_linode_id(c2_name, config)
-                    if linode_id:
-                        deployed_instances.append((c2_name, linode_id))
-                except Exception as e:
-                    print(f"[!] Failed to get instance ID: {e}")
-                return False, [log_file], deployed_instances
-            
-            # Store C2 IP and key path for SSH access later
-            linode_id = get_linode_id(c2_name, config)
-            if linode_id:
-                deployed_instances.append((c2_name, linode_id))
-            config['c2_ip'] = get_linode_ip(linode_id, config)
-            config['c2_key_path'] = ssh_key
-            
-        else:
-            # For full deployment, run redirector first, then C2
-            redirector_cmd = f"ansible-playbook -i {inventory_file} Linode/redirector.yml -e '{extra_vars_str}' -vvv"
-            
-            with open(log_file, 'a') as f:
-                f.write(f"==== RUNNING REDIRECTOR PLAYBOOK (FULL DEPLOYMENT) ====\n")
-                f.write(f"Command: {redirector_cmd}\n\n")
-            
-            print(f"[+] Running: {redirector_cmd}")
-            success, stdout, stderr = run_command_with_logging(redirector_cmd, config, log_file)
-            if not success:
-                print(f"[-] Redirector deployment failed. See {log_file} for details.")
-                # Get the deployed instance ID for cleanup
-                try:
-                    linode_id = get_linode_id(redirector_name, config)
-                    if linode_id:
-                        deployed_instances.append((redirector_name, linode_id))
-                except Exception as e:
-                    print(f"[!] Failed to get instance ID: {e}")
-                return False, [log_file], deployed_instances
+        try:
+            # Execute deployment based on deployment mode
+            if config.get('redirector_only', False):
+                playbook = "Linode/redirector.yml"
+                cmd = f"ansible-playbook -i {inventory_file} {playbook} -e @{vars_file} -v"
                 
-            # Get and store redirector IP for C2 configuration
-            linode_id = get_linode_id(redirector_name, config)
-            if linode_id:
-                deployed_instances.append((redirector_name, linode_id))
-            redirector_ip = get_linode_ip(linode_id, config)
-            config['redirector_ip'] = redirector_ip
-            config['redirector_key_path'] = ssh_key
-            
-            # Update extra vars with redirector IP
-            extra_vars['redirector_ip'] = redirector_ip
-            extra_vars_list.append(f"redirector_ip='{redirector_ip}'")
-            extra_vars_str = " ".join(extra_vars_list)
-            
-            # Log updated extra_vars
-            with open(log_file, 'a') as f:
-                f.write(f"==== UPDATED EXTRA VARS WITH REDIRECTOR IP ====\n")
-                f.write(f"redirector_ip: {redirector_ip}\n")
-                f.write(f"==== END UPDATED EXTRA VARS ====\n\n")
-            
-            # Then deploy C2 server with redirector IP
-            c2_cmd = f"ansible-playbook -i {inventory_file} Linode/c2.yml -e '{extra_vars_str}' -vvv"
-            
-            with open(log_file, 'a') as f:
-                f.write(f"==== RUNNING C2 PLAYBOOK (FULL DEPLOYMENT) ====\n")
-                f.write(f"Command: {c2_cmd}\n\n")
-            
-            print(f"[+] Running: {c2_cmd}")
-            success, stdout, stderr = run_command_with_logging(c2_cmd, config, log_file)
-            if not success:
-                print(f"[-] C2 server deployment failed. See {log_file} for details.")
-                # Get the deployed instance ID for cleanup
+                with open(log_file, 'a') as f:
+                    f.write(f"==== RUNNING REDIRECTOR PLAYBOOK ====\n")
+                    f.write(f"Command: {cmd}\n\n")
+                
+                print(f"[+] Running: {cmd}")
+                success, stdout, stderr = run_command_with_logging(cmd, config, log_file)
+                if not success:
+                    print(f"[-] Redirector deployment failed. See {log_file} for details.")
+                    # Get the deployed instance ID for cleanup - only if actually created
+                    try:
+                        linode_id = get_linode_id(redirector_name, config)
+                        if linode_id:
+                            deployed_instances.append((redirector_name, linode_id))
+                    except Exception as e:
+                        print(f"[!] Note: No instance to clean up: {e}")
+                    return False, [log_file], deployed_instances
+                
+                # Store redirector IP and key path for SSH access later
+                try:
+                    linode_id = get_linode_id(redirector_name, config)
+                    if linode_id:
+                        deployed_instances.append((redirector_name, linode_id))
+                        config['redirector_ip'] = get_linode_ip(linode_id, config)
+                        config['redirector_key_path'] = ssh_key
+                except Exception as e:
+                    print(f"[!] Warning: Failed to get redirector IP: {e}")
+                
+            elif config.get('c2_only', False):
+                playbook = "Linode/c2.yml"
+                cmd = f"ansible-playbook -i {inventory_file} {playbook} -e @{vars_file} -v"
+                
+                with open(log_file, 'a') as f:
+                    f.write(f"==== RUNNING C2 PLAYBOOK ====\n")
+                    f.write(f"Command: {cmd}\n\n")
+                
+                print(f"[+] Running: {cmd}")
+                success, stdout, stderr = run_command_with_logging(cmd, config, log_file)
+                if not success:
+                    print(f"[-] C2 server deployment failed. See {log_file} for details.")
+                    # Get the deployed instance ID for cleanup - only if actually created
+                    try:
+                        linode_id = get_linode_id(c2_name, config)
+                        if linode_id:
+                            deployed_instances.append((c2_name, linode_id))
+                    except Exception as e:
+                        print(f"[!] Note: No instance to clean up: {e}")
+                    return False, [log_file], deployed_instances
+                
+                # Store C2 IP and key path for SSH access later
                 try:
                     linode_id = get_linode_id(c2_name, config)
                     if linode_id:
                         deployed_instances.append((c2_name, linode_id))
+                        config['c2_ip'] = get_linode_ip(linode_id, config)
+                        config['c2_key_path'] = ssh_key
                 except Exception as e:
-                    print(f"[!] Failed to get instance ID: {e}")
-                return False, [log_file], deployed_instances
-            
-            # Store C2 IP and key path for SSH access later
-            linode_id = get_linode_id(c2_name, config)
-            if linode_id:
-                deployed_instances.append((c2_name, linode_id))
-            config['c2_ip'] = get_linode_ip(linode_id, config)
-            config['c2_key_path'] = ssh_key
+                    print(f"[!] Warning: Failed to get C2 IP: {e}")
+                
+            else:
+                # For full deployment, run redirector first, then C2
+                redirector_cmd = f"ansible-playbook -i {inventory_file} Linode/redirector.yml -e @{redirector_name} -v"
+                
+                with open(log_file, 'a') as f:
+                    f.write(f"==== RUNNING REDIRECTOR PLAYBOOK (FULL DEPLOYMENT) ====\n")
+                    f.write(f"Command: {redirector_cmd}\n\n")
+                
+                print(f"[+] Running: {redirector_cmd}")
+                success, stdout, stderr = run_command_with_logging(redirector_cmd, config, log_file)
+                if not success:
+                    print(f"[-] Redirector deployment failed. See {log_file} for details.")
+                    # Get the deployed instance ID for cleanup - only if actually created
+                    try:
+                        linode_id = get_linode_id(redirector_name, config)
+                        if linode_id:
+                            deployed_instances.append((redirector_name, linode_id))
+                    except Exception as e:
+                        print(f"[!] Note: No instance to clean up: {e}")
+                    return False, [log_file], deployed_instances
+                    
+                # Get and store redirector IP for C2 configuration
+                try:
+                    linode_id = get_linode_id(redirector_name, config)
+                    if linode_id:
+                        deployed_instances.append((redirector_name, linode_id))
+                        redirector_ip = get_linode_ip(linode_id, config)
+                        config['redirector_ip'] = redirector_ip
+                        config['redirector_key_path'] = ssh_key
+                        
+                        # Update vars file with redirector IP
+                        with open(vars_file, 'a') as f:
+                            f.write(f"redirector_ip: '{redirector_ip}'\n")
+                            
+                        with open(log_file, 'a') as f:
+                            f.write(f"==== UPDATED VARS FILE WITH REDIRECTOR IP ====\n")
+                            f.write(f"redirector_ip: {redirector_ip}\n")
+                            f.write(f"==== END UPDATED VARS ====\n\n")
+                except Exception as e:
+                    print(f"[!] Warning: Failed to get redirector IP: {e}")
+                    return False, [log_file], deployed_instances
+                
+                # Then deploy C2 server with redirector IP
+                c2_cmd = f"ansible-playbook -i {inventory_file} Linode/c2.yml -e @{vars_file} -v"
+                
+                with open(log_file, 'a') as f:
+                    f.write(f"==== RUNNING C2 PLAYBOOK (FULL DEPLOYMENT) ====\n")
+                    f.write(f"Command: {c2_cmd}\n\n")
+                
+                print(f"[+] Running: {c2_cmd}")
+                success, stdout, stderr = run_command_with_logging(c2_cmd, config, log_file)
+                if not success:
+                    print(f"[-] C2 server deployment failed. See {log_file} for details.")
+                    # Get the deployed instance ID for cleanup - only if actually created
+                    try:
+                        linode_id = get_linode_id(c2_name, config)
+                        if linode_id:
+                            deployed_instances.append((c2_name, linode_id))
+                    except Exception as e:
+                        print(f"[!] Note: No instance to clean up: {e}")
+                    return False, [log_file], deployed_instances
+                
+                # Store C2 IP and key path for SSH access later
+                try:
+                    linode_id = get_linode_id(c2_name, config)
+                    if linode_id:
+                        deployed_instances.append((c2_name, linode_id))
+                        config['c2_ip'] = get_linode_ip(linode_id, config)
+                        config['c2_key_path'] = ssh_key
+                except Exception as e:
+                    print(f"[!] Warning: Failed to get C2 IP: {e}")
+                
+        finally:
+            # Securely remove the vars file
+            try:
+                if os.path.exists(vars_file):
+                    # Overwrite with random data before removing
+                    with open(vars_file, 'wb') as f:
+                        f.write(os.urandom(1024))
+                    os.remove(vars_file)
+                    with open(log_file, 'a') as f:
+                        f.write(f"==== SECURELY REMOVED VARS FILE ====\n")
+            except Exception as e:
+                print(f"[!] Warning: Failed to clean up vars file: {e}")
         
         # Deploy tracker if requested
         if config.get('deploy_tracker'):
@@ -1135,7 +1153,7 @@ def deploy_linode(config):
                 f.write(f"Inventory file removed successfully\n")
                 f.write(f"==== END REMOVAL ====\n\n")
         
-        # If failure, clean up deployed instances
+        # If failure, clean up deployed instances with better error handling
         if not success and deployed_instances:
             with open(log_file, 'a') as f:
                 f.write(f"==== CLEANING UP DEPLOYED INSTANCES ====\n")
@@ -1144,21 +1162,41 @@ def deploy_linode(config):
             
             for instance_name, instance_id in deployed_instances:
                 with open(log_file, 'a') as f:
-                    f.write(f"Cleaning up instance: {instance_name} (ID: {instance_id})\n")
+                    f.write(f"Checking if instance exists: {instance_name} (ID: {instance_id})\n")
                 
+                # First verify if the instance actually exists before attempting deletion
+                instance_exists = False
                 try:
-                    cleanup_cmd = f"linode-cli linodes delete {instance_id} --yes"
-                    print(f"[+] Running cleanup command: {cleanup_cmd}")
-                    subprocess.run(cleanup_cmd, shell=True, check=False)
-                    print(f"[+] Deleted instance: {instance_name}")
-                    
+                    # Check if instance exists
+                    check_cmd = f"linode-cli linodes list --json --label {instance_name}"
+                    result = subprocess.run(check_cmd, shell=True, check=False, capture_output=True, text=True)
+                    if result.returncode == 0 and result.stdout.strip() != "[]" and result.stdout.strip() != "":
+                        instance_exists = True
+                        with open(log_file, 'a') as f:
+                            f.write(f"Instance {instance_name} exists and will be deleted\n")
+                    else:
+                        with open(log_file, 'a') as f:
+                            f.write(f"Instance {instance_name} doesn't exist or already deleted\n")
+                except Exception as check_err:
+                    print(f"[!] Error checking if instance exists: {check_err}")
                     with open(log_file, 'a') as f:
-                        f.write(f"Instance {instance_name} deleted successfully\n")
-                except Exception as cleanup_err:
-                    print(f"[!] Failed to delete instance {instance_name}: {cleanup_err}")
-                    
-                    with open(log_file, 'a') as f:
-                        f.write(f"Failed to delete instance {instance_name}: {cleanup_err}\n")
+                        f.write(f"Error checking instance: {check_err}\n")
+                
+                # Only attempt deletion if the instance exists
+                if instance_exists:
+                    try:
+                        cleanup_cmd = f"linode-cli linodes delete {instance_id} --yes"
+                        print(f"[+] Running cleanup command: {cleanup_cmd}")
+                        subprocess.run(cleanup_cmd, shell=True, check=False)
+                        print(f"[+] Deleted instance: {instance_name}")
+                        
+                        with open(log_file, 'a') as f:
+                            f.write(f"Instance {instance_name} deleted successfully\n")
+                    except Exception as cleanup_err:
+                        print(f"[!] Failed to delete instance {instance_name}: {cleanup_err}")
+                        
+                        with open(log_file, 'a') as f:
+                            f.write(f"Failed to delete instance {instance_name}: {cleanup_err}\n")
             
             with open(log_file, 'a') as f:
                 f.write(f"==== END CLEANUP ====\n\n")
@@ -1647,30 +1685,26 @@ def ensure_provider_files_exist(config):
     
     return True
 
-def generate_ssh_key():
-    """Generate a new SSH key with randomized name for better OPSEC"""
-    # Create a unique key name with random string
-    rand_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
-    timestamp = int(time.time()) % 10000  # Last 4 digits of timestamp
-    
-    key_name = f"c2itall_{rand_suffix}_{timestamp}"
-    key_path = os.path.expanduser(f"~/.ssh/{key_name}")
-    
-    print(f"[+] Generating new SSH key: {key_path}")
-    try:
-        subprocess.run(["ssh-keygen", "-t", "ed25519", "-f", key_path, "-N", ""], check=True)
-        # Set proper permissions
-        os.chmod(key_path, 0o600)
-        os.chmod(f"{key_path}.pub", 0o644)
-        
-        # Log the key info for reference
-        print(f"[+] SSH private key: {key_path}")
-        print(f"[+] SSH public key: {key_path}.pub")
-        
-        return key_path
-    except subprocess.CalledProcessError as e:
-        print(f"[-] Error: Failed to generate SSH key: {e}")
-        return None
+def generate_random_string(length=12):
+    """Generate a random string of letters and digits."""
+    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
+
+def generate_ssh_key(key_name):
+    """Generate an SSH key with the given key name."""
+    ssh_dir = os.path.expanduser("~/.ssh")
+    os.makedirs(ssh_dir, exist_ok=True)
+
+    private_key_path = os.path.join(ssh_dir, key_name)
+    public_key_path = f"{private_key_path}.pub"
+
+    print(f"Generating SSH key: {key_name}")
+    subprocess.run(
+        ["ssh-keygen", "-t", "ed25519", "-f", private_key_path, "-N", "", "-C", ""],
+        check=True
+    )
+
+    os.chmod(private_key_path, 0o600)
+    return private_key_path, public_key_path
 
 def prepare_ssh_key(config):
     """Prepare and validate SSH key, generating a new one if needed"""
@@ -1755,7 +1789,7 @@ def get_instance_ip(instance_name, config):
         return None
 
 def get_linode_id(instance_name, config):
-    """Get the ID of a Linode instance by name"""
+    """Get the ID of a Linode instance by name with better error handling"""
     try:
         cmd = [
             "linode-cli", "--json", "linodes", "list", 
@@ -1772,39 +1806,48 @@ def get_linode_id(instance_name, config):
             print(f"[+] Found Linode ID for {instance_name}: {linode_id}")
             return linode_id
         else:
-            print(f"[-] Could not find Linode ID for instance {instance_name}")
+            print(f"[*] No Linode instance found with name: {instance_name}")
             return None
     except subprocess.CalledProcessError as e:
-        print(f"[-] Error getting Linode ID: {e}")
-        print(f"    Command output: {e.stderr.decode() if e.stderr else 'No error output'}")
+        error_output = e.stderr.decode() if e.stderr else "No error output"
+        print(f"[*] Linode CLI failed when looking up instance {instance_name}: {error_output}")
+        return None
+    except json.JSONDecodeError as e:
+        print(f"[*] JSON parsing error when looking up instance {instance_name}: {e}")
         return None
     except Exception as e:
-        print(f"[-] Unexpected error getting Linode ID: {e}")
+        print(f"[*] Unexpected error getting Linode ID for {instance_name}: {e}")
         return None
 
-def get_linode_ip(linode_id, config):
-    """Get the IP address of a Linode instance by ID"""
+def get_linode_id(instance_name, config):
+    """Get the ID of a Linode instance by name with better error handling"""
     try:
         cmd = [
-            "linode-cli", "linodes", "view", 
-            str(linode_id), 
-            "--json"
+            "linode-cli", "--json", "linodes", "list", 
+            "--label", instance_name
         ]
         
-        result = subprocess.check_output(cmd).decode().strip()
+        result = subprocess.check_output(cmd, stderr=subprocess.PIPE)
         
         # Parse the JSON response
-        instance = json.loads(result)
+        instances = json.loads(result.decode())
         
-        if instance and 'ipv4' in instance and instance['ipv4']:
-            ip = instance['ipv4'][0]
-            print(f"[+] Found IP address for Linode {linode_id}: {ip}")
-            return ip
+        if instances and len(instances) > 0:
+            linode_id = instances[0]['id']
+            print(f"[+] Found Linode ID for {instance_name}: {linode_id}")
+            return linode_id
         else:
-            print(f"[-] Could not find IP address for Linode {linode_id}")
+            print(f"[*] No Linode instance found with name: {instance_name}")
             return None
     except subprocess.CalledProcessError as e:
-        print(f"[-] Error getting Linode IP: {e}")
+        error_output = e.stderr.decode() if e.stderr else "No error output"
+        print(f"[*] Linode CLI failed when looking up instance {instance_name}: {error_output}")
+        return None
+    except json.JSONDecodeError as e:
+        print(f"[*] JSON parsing error when looking up instance {instance_name}: {e}")
+        return None
+    except Exception as e:
+        print(f"[*] Unexpected error getting Linode ID for {instance_name}: {e}")
         return None
 
 def ssh_to_c2(config):
@@ -1915,6 +1958,12 @@ def run_command_with_logging(cmd, config, log_file=None):
             os.makedirs(log_dir, exist_ok=True)
             log_file = os.path.join(log_dir, f"deployment_{timestamp}.log")
         
+        # Append command to log file
+        with open(log_file, 'a') as f:
+            f.write(f"\n\n==== COMMAND EXECUTION: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ====\n")
+            f.write(f"COMMAND: {cmd}\n\n")
+            f.write("OUTPUT:\n")
+        
         # Execute the command and capture output
         process = subprocess.Popen(
             cmd, 
@@ -1928,36 +1977,34 @@ def run_command_with_logging(cmd, config, log_file=None):
         stdout_data = ""
         stderr_data = ""
         
-        # Append command to log file
-        with open(log_file, 'a') as f:
-            f.write(f"\n\n==== COMMAND EXECUTION: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ====\n")
-            f.write(f"COMMAND: {cmd}\n\n")
-            f.write("OUTPUT:\n")
-        
         # Read and process output
         while True:
-            stdout_line = process.stdout.readline()
-            stderr_line = process.stderr.readline()
-            
-            if stdout_line == '' and stderr_line == '' and process.poll() is not None:
-                break
+            # Use communicate with timeout to avoid hanging
+            try:
+                # Small timeout to read incrementally
+                stdout, stderr = process.communicate(timeout=0.5)
+                stdout_data += stdout
+                stderr_data += stderr
                 
-            if stdout_line:
-                print(stdout_line.strip())
-                stdout_data += stdout_line
-                # Write to log file in real-time
+                # Write to log file
                 with open(log_file, 'a') as f:
-                    f.write(f"STDOUT: {stdout_line}")
+                    if stdout:
+                        f.write(f"STDOUT: {stdout}")
+                        print(stdout.strip())
+                    if stderr:
+                        f.write(f"STDERR: {stderr}")
+                        print(stderr.strip(), file=sys.stderr)
+                
+                # If process has completed, break
+                if process.poll() is not None:
+                    break
                     
-            if stderr_line:
-                print(stderr_line.strip(), file=sys.stderr)
-                stderr_data += stderr_line
-                # Write to log file in real-time
-                with open(log_file, 'a') as f:
-                    f.write(f"STDERR: {stderr_line}")
+            except subprocess.TimeoutExpired:
+                # Timeout expired, continue to next iteration
+                continue
         
-        # Wait for command to complete
-        return_code = process.wait()
+        # Get return code
+        return_code = process.poll()
         
         # Log completion status
         with open(log_file, 'a') as f:
