@@ -1,0 +1,110 @@
+---
+# Common task for installing offensive security tools
+# Shared across all providers
+
+- name: Create Tools directory
+  file:
+    path: /home/{{ ansible_user }}/Tools
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+
+- name: Ensure pipx path is configured
+  shell: |
+    pipx ensurepath
+  become: true
+  args:
+    executable: /bin/bash
+
+- name: Install tools via pipx
+  shell: |
+    export PATH=$PATH:/root/.local/bin
+    pipx ensurepath
+    pipx install git+https://github.com/Pennyw0rth/NetExec
+    pipx install git+https://github.com/blacklanternsecurity/TREVORspray
+    pipx install impacket
+  become: true
+  args:
+    executable: /bin/bash
+
+- name: Download Kerbrute
+  shell: |
+    mkdir -p /home/{{ ansible_user }}/Tools/Kerbrute
+    wget https://github.com/ropnop/kerbrute/releases/latest/download/kerbrute_linux_amd64 -O /home/{{ ansible_user }}/Tools/Kerbrute/kerbrute
+    chmod +x /home/{{ ansible_user }}/Tools/Kerbrute/kerbrute
+  become: true
+  args:
+    executable: /bin/bash
+    creates: /home/{{ ansible_user }}/Tools/Kerbrute/kerbrute
+
+- name: Clone SharpCollection nightly builds
+  git:
+    repo: https://github.com/Flangvik/SharpCollection.git
+    dest: /home/{{ ansible_user }}/Tools/SharpCollection
+    version: master
+  ignore_errors: yes
+
+- name: Clone PEASS-ng
+  git:
+    repo: https://github.com/carlospolop/PEASS-ng.git
+    dest: /home/{{ ansible_user }}/Tools/PEASS-ng
+  ignore_errors: yes
+
+- name: Clone MailSniper
+  git:
+    repo: https://github.com/dafthack/MailSniper.git
+    dest: /home/{{ ansible_user }}/Tools/MailSniper
+  ignore_errors: yes
+
+- name: Clone Inveigh
+  git:
+    repo: https://github.com/Kevin-Robertson/Inveigh.git
+    dest: /home/{{ ansible_user }}/Tools/Inveigh
+  ignore_errors: yes
+
+- name: Install Sliver C2 server
+  shell: |
+    curl https://sliver.sh/install | bash
+    systemctl enable sliver
+    systemctl start sliver
+  become: true
+
+- name: Install Metasploit Framework (Nightly Build)
+  shell: |
+    curl https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb > /tmp/msfinstall
+    chmod 755 /tmp/msfinstall
+    /tmp/msfinstall
+    rm -f /tmp/msfinstall
+  become: true
+  args:
+    executable: /bin/bash
+    creates: /usr/bin/msfconsole
+
+- name: Grab GoPhish
+  shell: |
+    curl -L "$(curl -s https://api.github.com/repos/gophish/gophish/releases/latest | jq -r '.assets[] | select(.browser_download_url | contains("linux-64bit.zip")) | .browser_download_url')" -o /home/{{ ansible_user }}/Tools/gophish.zip
+    unzip /home/{{ ansible_user }}/Tools/gophish.zip -d /home/{{ ansible_user }}/Tools/gophish
+    rm -rf /home/{{ ansible_user }}/Tools/gophish.zip
+    chmod +x /home/{{ ansible_user }}/Tools/gophish/gophish
+  args:
+    creates: /home/{{ ansible_user }}/Tools/gophish/gophish
+
+- name: Deploy Gophish config.json with custom admin port
+  template:
+    src: gophish-config.j2
+    dest: /home/{{ ansible_user }}/Tools/gophish/config.json
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0644'
+  vars:
+    gophish_admin_port: "{{ gophish_admin_port }}"
+    domain: "{{ domain }}"
+
+- name: Set proper ownership for Tools directory
+  file:
+    path: /home/{{ ansible_user }}/Tools
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    recurse: true
+    mode: '0755'

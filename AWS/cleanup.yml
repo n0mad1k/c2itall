@@ -1,0 +1,160 @@
+---
+# AWS Cleanup Playbook
+# Used to tear down AWS infrastructure
+
+- name: Clean up AWS infrastructure
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - vars.yaml
+  vars:
+    aws_region: "{{ aws_region | default(aws_region_choices | random) }}"
+    cleanup_redirector: "{{ (redirector_name is defined and redirector_name != '') | ternary(true, false) }}"
+    cleanup_c2: "{{ (c2_name is defined and c2_name != '') | ternary(true, false) }}"
+    confirm_cleanup: "{{ confirm_cleanup | default(true) }}"
+
+  tasks:
+    - name: Validate required AWS credentials
+      assert:
+        that:
+          - aws_access_key is defined and aws_access_key != ""
+          - aws_secret_key is defined and aws_secret_key != ""
+        fail_msg: "AWS credentials are required. Set aws_access_key and aws_secret_key."
+
+    - name: Confirm cleanup if required
+      pause:
+        prompt: "WARNING: This will permanently delete all infrastructure. Type 'yes' to continue"
+      register: confirmation
+      when: confirm_cleanup
+      
+    - name: Exit if not confirmed
+      meta: end_play
+      when: confirm_cleanup and confirmation.user_input != 'yes'
+
+    - name: Find redirector instance ID
+      command: >
+        aws ec2 describe-instances
+        --filters "Name=tag:Name,Values={{ redirector_name }}"
+        --query "Reservations[*].Instances[*].InstanceId"
+        --output text
+        --region {{ aws_region }}
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
+        AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
+      register: redirector_id_result
+      failed_when: false
+      changed_when: false
+      when: cleanup_redirector
+
+    - name: Find C2 instance ID
+      command: >
+        aws ec2 describe-instances
+        --filters "Name=tag:Name,Values={{ c2_name }}"
+        --query "Reservations[*].Instances[*].InstanceId"
+        --output text
+        --region {{ aws_region }}
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
+        AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
+      register: c2_id_result
+      failed_when: false
+      changed_when: false
+      when: cleanup_c2
+
+    - name: Set instance IDs as facts
+      set_fact:
+        redirector_instance_id: "{{ redirector_id_result.stdout | trim }}"
+      when: cleanup_redirector and redirector_id_result.stdout is defined and redirector_id_result.stdout | trim != ""
+
+    - name: Set C2 instance ID as fact
+      set_fact:
+        c2_instance_id: "{{ c2_id_result.stdout | trim }}"
+      when: cleanup_c2 and c2_id_result.stdout is defined and c2_id_result.stdout | trim != ""
+
+    - name: Terminate redirector instance
+      amazon.aws.ec2_instance:
+        state: absent
+        instance_ids:
+          - "{{ redirector_instance_id }}"
+        region: "{{ aws_region }}"
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+      when: cleanup_redirector and redirector_instance_id is defined and redirector_instance_id != ""
+      register: redirector_termination
+
+    - name: Terminate C2 instance
+      amazon.aws.ec2_instance:
+        state: absent
+        instance_ids:
+          - "{{ c2_instance_id }}"
+        region: "{{ aws_region }}"
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+      when: cleanup_c2 and c2_instance_id is defined and c2_instance_id != ""
+      register: c2_termination
+
+    - name: Wait for instances to be fully terminated
+      pause:
+        seconds: 30
+      when: 
+        - (redirector_termination is defined and redirector_termination.changed) or 
+          (c2_termination is defined and c2_termination.changed)
+
+    - name: Delete redirector security group
+      amazon.aws.ec2_group:
+        name: "{{ redirector_name }}-sg"
+        state: absent
+        region: "{{ aws_region }}"
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+      ignore_errors: yes
+      when: cleanup_redirector and redirector_name is defined and redirector_name != ""
+
+    - name: Delete C2 security group
+      amazon.aws.ec2_group:
+        name: "{{ c2_name }}-sg"
+        state: absent
+        region: "{{ aws_region }}"
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+      ignore_errors: yes
+      when: cleanup_c2 and c2_name is defined and c2_name != ""
+
+    - name: Delete redirector key pair
+      amazon.aws.ec2_key:
+        name: "{{ redirector_name }}"
+        state: absent
+        region: "{{ aws_region }}"
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+      when: cleanup_redirector and redirector_name is defined and redirector_name != ""
+
+    - name: Delete C2 key pair
+      amazon.aws.ec2_key:
+        name: "{{ c2_name }}"
+        state: absent
+        region: "{{ aws_region }}"
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+      when: cleanup_c2 and c2_name is defined and c2_name != ""
+
+    - name: Remove redirector SSH key file
+      file:
+        path: "~/.ssh/{{ redirector_name }}.pem"
+        state: absent
+      when: cleanup_redirector and redirector_name is defined and redirector_name != ""
+
+    - name: Remove C2 SSH key file
+      file:
+        path: "~/.ssh/{{ c2_name }}.pem"
+        state: absent
+      when: cleanup_c2 and c2_name is defined and c2_name != ""
+
+    - name: Cleanup complete message
+      debug:
+        msg:
+          - "AWS infrastructure cleanup complete!"
+          - "Resources that were cleaned up:"
+          - "{{ cleanup_redirector | ternary('- Redirector instance: ' + redirector_name, '') }}"
+          - "{{ cleanup_c2 | ternary('- C2 instance: ' + c2_name, '') }}"

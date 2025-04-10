@@ -1,410 +1,101 @@
 ---
-- name: Configure FlokiNET C2 server
-  hosts: c2
+# FlokiNET C2-only Configuration Playbook
+# Note: FlokiNET requires pre-provisioned servers
+
+- name: Prepare FlokiNET C2 configuration
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars_files:
+    - vars.yaml
+  vars:
+    c2_subdomain: "{{ c2_subdomain | default('mail') }}"
+
+  tasks:
+    - name: Validate required FlokiNET configuration
+      assert:
+        that:
+          - c2_ip is defined and c2_ip != ""
+        fail_msg: "FlokiNET requires C2 IP address. Set c2_ip in vars.yaml or via --flokinet-c2-ip."
+    
+    - name: Add C2 to inventory
+      add_host:
+        name: "c2"
+        groups: "c2servers"
+        ansible_host: "{{ c2_ip }}"
+        ansible_user: "{{ ssh_user | default('root') }}"
+        ansible_ssh_private_key_file: "{{ ssh_key_path | replace('.pub', '') }}"
+        ansible_ssh_port: "{{ ssh_port | default(22) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+    - name: Verify SSH connection to C2
+      wait_for:
+        host: "{{ c2_ip }}"
+        port: "{{ ssh_port | default(22) }}"
+        delay: 10
+        timeout: 60
+        state: started
+      ignore_errors: true
+
+- name: Provision FlokiNET C2 server
+  hosts: c2servers
+  become: true
   gather_facts: true
   vars_files:
     - vars.yaml
   tasks:
-    - name: Install C2 framework and required packages
-      ansible.builtin.apt:
+    - name: Wait for apt to be available
+      apt:
+        update_cache: yes
+      register: apt_result
+      until: apt_result is success
+      retries: 5
+      delay: 10
+
+    - name: Set hostname
+      hostname:
+        name: "c2"
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist
+
+    - name: Install base security packages
+      apt:
         name:
+          - apt-transport-https
+          - ca-certificates
           - curl
-          - wget
-          - git
-          - python3-pip
-          - python3-virtualenv
-          - tmux
-          - nmap
-          - tcpdump
-          - hydra
-          - john
-          - hashcat
-          - sqlmap
-          - gobuster
-          - dirb
-          - enum4linux
-          - dnsenum
-          - seclists
-          - responder
-          - golang
-          - proxychains
-          - tor
-          - jq
-          - unzip
-          - postfix
-          - certbot
-          - opendkim
-          - opendkim-tools
-          - dovecot-core
-          - dovecot-imapd
-          - dovecot-pop3d
-          - dovecot-sieve
-          - dovecot-managesieved
-          - yq
+          - gnupg
+          - lsb-release
+          - unattended-upgrades
+          - ufw
+          - fail2ban
+          - secure-delete
         state: present
-      become: true
 
-    - name: Add UFW rules for C2 server (internal only)
-      ansible.builtin.ufw:
-        rule: allow
-        port: "{{ item.port }}"
-        proto: "{{ item.proto }}"
-        from_ip: "{{ redirector_ip }}"
-      with_items:
-        - { port: 8888, proto: tcp }  # C2 HTTP listener
-        - { port: 50051, proto: tcp } # Sliver gRPC
-        - { port: 31337, proto: tcp } # Sliver console
-        - { port: 8443, proto: tcp }  # Beacon server
-      become: true
+    - name: Include common security hardening tasks
+      include_tasks: "../tasks/security_hardening.yml"
 
-    - name: Create directories for C2 operation
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: directory
-        mode: '0700'
-        owner: root
-        group: root
-      with_items:
-        - /opt/c2
-        - /opt/beacons
-        - /opt/payloads
-        - /root/Tools
-      become: true
-
-    - name: Copy operational scripts for C2
-      ansible.builtin.copy:
-        src: "../files/{{ item }}"
-        dest: "/opt/c2/{{ item }}"
-        mode: '0700'
-        owner: root
-        group: root
-      with_items:
-        - clean-logs.sh
-        - secure-exit.sh
-        - serve-beacons.sh
-      become: true
-
-    # Tool Installation
-    - name: Ensure pipx path is configured
-      ansible.builtin.shell: |
-        pipx ensurepath
-      become: true
-      args:
-        executable: /bin/bash
-
-    - name: Install tools via pipx
-      ansible.builtin.shell: |
-        export PATH=$PATH:/root/.local/bin
-        pipx ensurepath
-        pipx install git+https://github.com/Pennyw0rth/NetExec
-        pipx install git+https://github.com/blacklanternsecurity/TREVORspray
-        pipx install impacket
-      become: true
-      args:
-        executable: /bin/bash
-
-    - name: Download Kerbrute
-      ansible.builtin.shell: |
-        mkdir -p /root/Tools/Kerbrute
-        wget https://github.com/ropnop/kerbrute/releases/latest/download/kerbrute_linux_amd64 -O /root/Tools/Kerbrute/kerbrute
-        chmod +x /root/Tools/Kerbrute/kerbrute
-      become: true
-      args:
-        executable: /bin/bash
-
-    - name: Clone SharpCollection nightly builds
-      ansible.builtin.git:
-        repo: https://github.com/Flangvik/SharpCollection.git
-        dest: /root/Tools/SharpCollection
-        version: master
-      become: true
-
-    - name: Clone PEASS-ng
-      ansible.builtin.git:
-        repo: https://github.com/carlospolop/PEASS-ng.git
-        dest: /root/Tools/PEASS-ng
-      become: true
-
-    - name: Clone MailSniper
-      ansible.builtin.git:
-        repo: https://github.com/dafthack/MailSniper.git
-        dest: /root/Tools/MailSniper
-      become: true
-
-    - name: Clone Inveigh
-      ansible.builtin.git:
-        repo: https://github.com/Kevin-Robertson/Inveigh.git
-        dest: /root/Tools/Inveigh
-      become: true
-
-    # C2 Framework Installation
-    - name: Install Sliver C2 framework
-      ansible.builtin.shell: |
-        curl https://sliver.sh/install | bash
-      args:
-        creates: /usr/local/bin/sliver-server
-      become: true
-
-    - name: Configure Sliver service
-      ansible.builtin.template:
-        src: templates/sliver-server.service.j2
-        dest: /etc/systemd/system/sliver.service
-        owner: root
-        group: root
-        mode: '0644'
-      become: true
-
-    - name: Start and enable Sliver service
-      ansible.builtin.systemd:
-        name: sliver
-        state: started
-        enabled: yes
-        daemon_reload: yes
-      become: true
-
-    - name: Install Metasploit Framework
-      ansible.builtin.shell: |
-        curl https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb > /tmp/msfinstall
-        chmod 755 /tmp/msfinstall
-        /tmp/msfinstall
-        rm /tmp/msfinstall
-      args:
-        creates: /opt/metasploit-framework/bin/msfconsole
-      become: true
-
-    # GoPhish Installation
-    - name: Grab GoPhish
-      ansible.builtin.shell: |
-        curl -L "$(curl -s https://api.github.com/repos/gophish/gophish/releases/latest | jq -r '.assets[] | select(.browser_download_url | contains("linux-64bit.zip")) | .browser_download_url')" -O /root/Tools/gophish.zip
-        unzip /root/Tools/gophish.zip -d /root/Tools/gophish
-        rm -rf /root/Tools/gophish.zip
-        chmod +x /root/Tools/gophish/gophish
-      become: true
-      args:
-        executable: /bin/bash
-        creates: /root/Tools/gophish/gophish
-
-    - name: Deploy Gophish config.json with custom admin port
-      ansible.builtin.template:
-        src: templates/gophish-config.j2
-        dest: /root/Tools/gophish/config.json
-        owner: root
-        group: root
-        mode: '0644'
-      become: true
-      vars:
-        gophish_admin_port: "{{ gophish_admin_port }}"
-        domain: "{{ domain }}"
-
-    # Mail Server Configuration
-    - name: Configure Postfix main.cf
-      ansible.builtin.lineinfile:
-        path: /etc/postfix/main.cf
-        regexp: "{{ item.regexp }}"
-        line: "{{ item.line }}"
-      with_items:
-        - { regexp: '^myhostname', line: "myhostname = mail.{{ domain }}" }
-        - { regexp: '^mydomain', line: "mydomain = {{ domain }}" }
-        - { regexp: '^myorigin', line: "myorigin = $mydomain" }
-        - { regexp: '^inet_interfaces', line: "inet_interfaces = all" }
-        - { regexp: '^inet_protocols', line: "inet_protocols = ipv4" }
-        - { regexp: '^smtpd_banner', line: "smtpd_banner = $myhostname ESMTP $mail_name" }
-        - { regexp: '^mynetworks', line: "mynetworks = 127.0.0.0/8 [::1]/128" }
-        - { regexp: '^relay_domains', line: "relay_domains = $mydestination" }
-        - { regexp: '^smtpd_tls_cert_file', line: "smtpd_tls_cert_file = /etc/letsencrypt/live/{{ domain }}/fullchain.pem" }
-        - { regexp: '^smtpd_tls_key_file', line: "smtpd_tls_key_file = /etc/letsencrypt/live/{{ domain }}/privkey.pem" }
-        - { regexp: '^smtpd_tls_security_level', line: "smtpd_tls_security_level = encrypt" }
-        - { regexp: '^smtpd_tls_session_cache_database', line: "smtpd_tls_session_cache_database = btree:${data_directory}/smtpd_scache" }
-        - { regexp: '^smtp_tls_session_cache_database', line: "smtp_tls_session_cache_database = btree:${data_directory}/smtp_scache" }
-        - { regexp: '^smtpd_use_tls', line: "smtpd_use_tls = yes" }
-        - { regexp: '^smtpd_tls_auth_only', line: "smtpd_tls_auth_only = yes" }
-        - { regexp: '^milter_default_action', line: "milter_default_action = accept" }
-        - { regexp: '^milter_protocol', line: "milter_protocol = 6" }
-        - { regexp: '^smtpd_milters', line: "smtpd_milters = unix:/var/spool/postfix/opendkim/opendkim.sock" }
-        - { regexp: '^non_smtpd_milters', line: "non_smtpd_milters = unix:/var/spool/postfix/opendkim/opendkim.sock" }
-      become: true
-
-    - name: Configure OpenDKIM
-      ansible.builtin.lineinfile:
-        path: /etc/opendkim.conf
-        regexp: "{{ item.regexp }}"
-        line: "{{ item.line }}"
-      with_items:
-        - { regexp: '^Domain', line: "Domain   {{ domain }}" }
-        - { regexp: '^KeyFile', line: "KeyFile /etc/opendkim/keys/{{ domain }}/mail.private" }
-        - { regexp: '^Selector', line: "Selector mail" }
-        - { regexp: '^Socket', line: "Socket   local:/var/spool/postfix/opendkim/opendkim.sock" }
-        - { regexp: '^Syslog', line: "Syslog   yes" }
-        - { regexp: '^UMask', line: "UMask    002" }
-        - { regexp: '^Mode', line: "Mode     sv" }
-      become: true
-
-    - name: Create DKIM directory
-      ansible.builtin.file:
-        path: /etc/opendkim/keys/{{ domain }}
-        state: directory
-        owner: opendkim
-        group: opendkim
-        mode: 0700
-      become: true
-
-    - name: Generate DKIM keys
-      ansible.builtin.command: >
-        opendkim-genkey -D /etc/opendkim/keys/{{ domain }} -d {{ domain }} -s mail
-      args:
-        creates: /etc/opendkim/keys/{{ domain }}/mail.private
-      become: true
-
-    - name: Set permissions for DKIM keys
-      ansible.builtin.file:
-        path: /etc/opendkim/keys/{{ domain }}/mail.private
-        owner: opendkim
-        group: opendkim
-        mode: 0600
-      become: true
-
-    - name: Configure OpenDKIM TrustedHosts
-      ansible.builtin.copy:
-        content: |
-          127.0.0.1
-          ::1
-          localhost
-          {{ domain }}
-        dest: /etc/opendkim/TrustedHosts
-        owner: opendkim
-        group: opendkim
-        mode: 0644
-      become: true
-
-    - name: Enable submission port (587) in master.cf
-      ansible.builtin.blockinfile:
-        path: /etc/postfix/master.cf
-        insertafter: '^#submission'
-        block: |
-          submission     inet  n       -       y       -       -       smtpd
-            -o syslog_name=postfix/submission
-            -o smtpd_tls_security_level=encrypt
-            -o smtpd_sasl_auth_enable=yes
-            -o smtpd_recipient_restrictions=permit_sasl_authenticated,reject
-            -o smtpd_relay_restrictions=permit_sasl_authenticated,reject
-      become: true
-
-    - name: Configure Dovecot for Postfix SASL
-      ansible.builtin.blockinfile:
-        path: /etc/dovecot/conf.d/10-master.conf
-        insertafter: '^service auth {'
-        block: |
-          # Postfix smtp-auth
-          unix_listener /var/spool/postfix/private/auth {
-            mode = 0660
-            user = postfix
-            group = postfix
-          }
-      become: true
-
-    - name: Set Dovecot auth_mechanisms
-      ansible.builtin.lineinfile:
-        path: /etc/dovecot/conf.d/10-auth.conf
-        regexp: '^auth_mechanisms'
-        line: 'auth_mechanisms = plain login'
-      become: true
-
-    - name: Create Dovecot password file for SASL authentication
-      ansible.builtin.file:
-        path: /etc/dovecot/passwd
-        state: touch
-        mode: '0600'
-        owner: dovecot
-        group: dovecot
-      become: true
-
-    - name: Add SMTP auth user to Dovecot
-      ansible.builtin.lineinfile:
-        path: /etc/dovecot/passwd
-        line: "{{ smtp_auth_user }}:{{ smtp_auth_pass | password_hash('sha512_crypt') }}"
-      become: true
-
-    - name: Disable system auth and use passwd-file
-      ansible.builtin.lineinfile:
-        path: /etc/dovecot/conf.d/10-auth.conf
-        regexp: '^!include auth-system.conf.ext'
-        line: '#!include auth-system.conf.ext'
-      become: true
-
-    - name: Add auth-passwdfile configuration
-      ansible.builtin.blockinfile:
-        path: /etc/dovecot/conf.d/10-auth.conf
-        insertafter: '^auth_mechanisms ='
-        block: |
-          passdb {
-            driver = passwd-file
-            args = scheme=sha512_crypt /etc/dovecot/passwd
-          }
-          userdb {
-            driver = static
-            args = uid=vmail gid=vmail home=/var/vmail/%u
-          }
-      become: true
-
-    - name: Create vmail group
-      ansible.builtin.group:
-        name: vmail
-        gid: 5000
-        state: present
-      become: true
-
-    - name: Create vmail user
-      ansible.builtin.user:
-        name: vmail
-        uid: 5000
-        group: vmail
-        create_home: no
-      become: true
-
-    - name: Restart Postfix
-      ansible.builtin.service:
-        name: postfix
-        state: restarted
-      become: true
-
-    - name: Restart Dovecot
-      ansible.builtin.service:
-        name: dovecot
-        state: restarted
-      become: true
-
-    # Beacon Server Configuration
-    - name: Configure beacon server
-      ansible.builtin.shell: |
-        sed -i "s/C2_HOST=.*$/C2_HOST=\"{{ c2_ip }}\"/g" /opt/c2/serve-beacons.sh
-        chmod +x /opt/c2/serve-beacons.sh
-        nohup /opt/c2/serve-beacons.sh > /dev/null 2>&1 &
-      become: true
-
-    # Set up cron job for log cleaning
-    - name: Set up cron job for log cleaning
-      ansible.builtin.cron:
-        name: "Clean logs"
-        minute: "0"
-        hour: "*/6"
-        job: "/opt/c2/clean-logs.sh > /dev/null 2>&1"
-      become: true
-      when: zero_logs|bool
-
-    # Install Let's Encrypt certificate if domain specified
-    - name: Install Let's Encrypt certificate
-      ansible.builtin.command: >
-        certbot certonly --standalone -d {{ c2_subdomain }}.{{ domain }} --non-interactive --agree-tos -m {{ letsencrypt_email }}
-      args:
-        creates: /etc/letsencrypt/live/{{ c2_subdomain }}.{{ domain }}/fullchain.pem
-      become: true
-      when: domain != "example.com"
-
-    - name: Display C2 server setup information
-      ansible.builtin.debug:
+    - name: Include common tool installation tasks
+      include_tasks: "../tasks/install_tools.yml"
+      
+    - name: Include common C2 configuration tasks
+      include_tasks: "../tasks/configure_c2.yml"
+      
+    - name: Include common mail server configuration tasks
+      include_tasks: "../tasks/configure_mail.yml"
+      
+    - name: Print deployment summary
+      debug:
         msg:
-          - "C2 server setup completed!"
-          - "IP Address: {{ ansible_host }}"
-          - "Domain: {{ c2_subdomain }}.{{ domain }}"
-          - "Sliver C2 listening on port 8888"
-          - "Beacons server available at http://{{ ansible_host }}:8443/"
+          - "C2 Server Configuration Complete!"
+          - "-------------------------------"
+          - "C2 Server IP: {{ ansible_host }}"
+          - "C2 Server Domain: {{ c2_subdomain }}.{{ domain }} (Update DNS A record)"
+          - "GoPhish Admin Port: {{ gophish_admin_port }}"
+      when: not disable_summary | default(false)

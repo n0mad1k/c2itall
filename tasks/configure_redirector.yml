@@ -1,0 +1,114 @@
+---
+# Common task for configuring redirector
+# Shared across all providers
+
+- name: Install required packages for redirector
+  apt:
+    name:
+      - nginx
+      - certbot
+      - python3-certbot-nginx
+      - socat
+      - netcat-openbsd
+      - secure-delete
+    state: present
+    update_cache: yes
+
+- name: Create directories for operational scripts
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0700'
+    owner: root
+    group: root
+  with_items:
+    - /opt/c2
+    - /opt/shell-handler
+
+- name: Copy clean-logs.sh script
+  copy:
+    src: "clean-logs.sh"
+    dest: /opt/c2/clean-logs.sh
+    mode: '0700'
+    owner: root
+    group: root
+
+- name: Copy shell handler script
+  copy:
+    src: "persistent-listener.sh"
+    dest: /opt/shell-handler/persistent-listener.sh
+    mode: '0700'
+    owner: root
+    group: root
+
+- name: Configure shell handler script with C2 IP
+  replace:
+    path: /opt/shell-handler/persistent-listener.sh
+    regexp: 'C2_HOST="127.0.0.1"'
+    replace: 'C2_HOST="{{ c2_ip }}"'
+
+- name: Configure shell handler script with listening port
+  replace:
+    path: /opt/shell-handler/persistent-listener.sh
+    regexp: 'LISTEN_PORT=4444'
+    replace: 'LISTEN_PORT={{ shell_handler_port }}'
+
+- name: Create shell handler service
+  template:
+    src: "shell-handler.service.j2"
+    dest: /etc/systemd/system/shell-handler.service
+    mode: '0644'
+    owner: root
+    group: root
+
+- name: Configure NGINX for zero-logging if enabled
+  template:
+    src: "nginx.conf.j2"
+    dest: /etc/nginx/nginx.conf
+    mode: '0644'
+    owner: root
+    group: root
+  when: zero_logs | bool
+
+- name: Configure NGINX for C2 redirection
+  template:
+    src: "redirector-site.conf.j2"
+    dest: /etc/nginx/sites-available/default
+    mode: '0644'
+    owner: root
+    group: root
+
+- name: Create legitimate-looking index.html
+  template:
+    src: "redirector-index.html.j2"
+    dest: /var/www/html/index.html
+    mode: '0644'
+    owner: www-data
+    group: www-data
+
+- name: Start and enable shell handler service
+  systemd:
+    name: shell-handler
+    state: started
+    enabled: yes
+    daemon_reload: yes
+
+- name: Set up cron job for log cleaning if zero-logs enabled
+  cron:
+    name: "Clean logs"
+    minute: "0"
+    hour: "*/6"
+    job: "/opt/c2/clean-logs.sh > /dev/null 2>&1"
+  when: zero_logs | bool
+
+- name: Install Let's Encrypt certificate if domain specified
+  shell: |
+    certbot --nginx -d {{ redirector_subdomain }}.{{ domain }} --non-interactive --agree-tos -m {{ letsencrypt_email }}
+  args:
+    creates: /etc/letsencrypt/live/{{ redirector_subdomain }}.{{ domain }}/fullchain.pem
+  when: domain != "example.com"
+
+- name: Restart NGINX
+  systemd:
+    name: nginx
+    state: restarted
