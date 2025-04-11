@@ -9,10 +9,9 @@
     - vars.yaml
   vars:
     # Default values for required variables
-    ssh_user: "{{ ssh_user | default('root') }}"
     linode_region: "{{ linode_region | default(region_choices | random) }}"
-    plan: "{{ plan | default('g6-standard-1') }}"
-    image: "{{ image | default('linode/debian11') }}"
+    plan: "{{ plan | default('g6-nanode-1') }}"
+    image: "{{ image | default('linode/kali') }}"
     
     # Generate random instance name if not provided
     redirector_name: "{{ redirector_name | default('srv-' + 9999999999 | random | to_uuid | hash('md5') | truncate(8, True, '')) }}"
@@ -34,7 +33,7 @@
         type: "{{ plan }}"
         region: "{{ linode_region }}"
         image: "{{ image }}"
-        root_pass: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
+        root_pass: "{{ lookup('password', '/dev/null length=16') }}"
         authorized_keys:
           - "{{ lookup('file', ssh_key_path) }}"
         state: present
@@ -45,7 +44,7 @@
         redirector_ip: "{{ redirector_instance.instance.ipv4[0] }}"
         redirector_instance_id: "{{ redirector_instance.instance.id }}"
 
-    # Enhanced SSH wait task for Linode/redirector.yml
+    # Enhanced SSH wait task with better retry mechanism
     - name: Wait for redirector SSH to be available
       block:
         - name: Initial wait for port to be open
@@ -75,12 +74,15 @@
             msg: "Could not connect to redirector via SSH after multiple attempts"
           when: ssh_test.rc != 0
 
+    # Fix: Use hardcoded "redirector" for the name and "root" for the user
     - name: Add redirector to inventory
       add_host:
-        name: "{{ redirector_name }}"
+        name: "redirector"
+        groups: "redirectors"
         ansible_host: "{{ redirector_ip }}"
-        ansible_user: "root"  # Or directly use the user you need
+        ansible_user: "root"
         ansible_ssh_private_key_file: "{{ ssh_key_path | replace('.pub', '') }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
 - name: Configure redirector server
   hosts: redirectors
@@ -89,7 +91,7 @@
   vars_files:
     - vars.yaml
   vars:
-    c2_ip: "{{ c2_ip | default('127.0.0.1') }}"
+    c2_ip: "{{ hostvars['localhost']['c2_ip'] | default('127.0.0.1') }}"
     redirector_subdomain: "{{ redirector_subdomain | default('cdn') }}"
   tasks:
     - name: Wait for apt to be available
@@ -115,9 +117,6 @@
     - name: Include common redirector configuration tasks
       include_tasks: "../tasks/configure_redirector.yml"
       
-    - name: Include common security hardening tasks
-      include_tasks: "../tasks/security_hardening.yml"
-
     - name: Print deployment summary
       debug:
         msg:

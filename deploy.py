@@ -436,10 +436,23 @@ def select_random_region(config):
     if provider == "aws":
         region_choices = config.get("aws_region_choices", [])
     elif provider == "linode":
-        # Look for multiple possible key names in the Linode config
+        # Look for both variations of the key name
         region_choices = config.get("region_choices", [])
+        
+        # Debug the vars_data content
+        logging.debug(f"Linode config keys: {config.keys()}")
+        
         if not region_choices:
-            region_choices = config.get("linode_region_choices", [])
+            # Load directly from vars.yaml as fallback
+            try:
+                vars_file = "Linode/vars.yaml"
+                if os.path.exists(vars_file):
+                    with open(vars_file, 'r') as f:
+                        vars_data = yaml.safe_load(f)
+                        region_choices = vars_data.get('region_choices', [])
+                        logging.debug(f"Loaded region_choices directly from {vars_file}: {region_choices}")
+            except Exception as e:
+                logging.warning(f"Failed to load regions from vars file: {e}")
     elif provider == "flokinet":
         region_choices = config.get("flokinet_region_choices", [])
     
@@ -505,6 +518,15 @@ def run_ansible_playbook(playbook, inventory, config, debug=False):
     # Convert config dict to JSON for extra-vars
     # Filter out None values and complex objects
     extra_vars = {k: v for k, v in config.items() if v is not None and not isinstance(v, (dict, list, tuple))}
+    
+    # Explicitly set hard-coded user values rather than using templated defaults
+    if 'ssh_user' in extra_vars:
+        extra_vars.pop('ssh_user')
+        if config['provider'] == 'linode':
+            extra_vars['ssh_user'] = 'root'
+        else:
+            extra_vars['ssh_user'] = 'kali'
+    
     extra_vars_json = json.dumps(extra_vars)
     
     # Build command
@@ -560,6 +582,12 @@ def deploy_infrastructure(config):
     elif provider == "linode":
         if config.get('linode_token'):
             os.environ['LINODE_TOKEN'] = config['linode_token']
+    
+    # IMPORTANT: Ensure ssh_user is explicitly set to avoid template recursion
+    if provider == "linode":
+        config['ssh_user'] = "root"
+    elif provider == "aws":
+        config['ssh_user'] = "kali"
     
     # Select random region if not specified
     if not config.get('region'):
@@ -1097,6 +1125,10 @@ C2itAll - Red Team Infrastructure Setup
         # Provider settings
         config['provider'] = args.provider
         
+        # Copy all values from vars_data to config first
+        for key, value in vars_data.items():
+            config[key] = value
+        
         # AWS settings
         if args.provider == "aws":
             config['aws_access_key'] = args.aws_key or vars_data.get('aws_access_key')
@@ -1110,6 +1142,7 @@ C2itAll - Red Team Infrastructure Setup
         elif args.provider == "linode":
             config['linode_token'] = args.linode_token or vars_data.get('linode_token')
             config['linode_region'] = args.linode_region or args.region or vars_data.get('linode_region')
+            # Ensure region_choices are correctly set
             config['region_choices'] = vars_data.get('region_choices', [])
             config['plan'] = args.size or vars_data.get('plan', 'g6-standard-2')
             config['image'] = vars_data.get('image', 'linode/kali')
@@ -1121,8 +1154,14 @@ C2itAll - Red Team Infrastructure Setup
             config['flokinet_region_choices'] = vars_data.get('flokinet_region_choices', [])
             config['ssh_port'] = vars_data.get('ssh_port', 22)
         
-        # SSH settings
-        config['ssh_user'] = args.ssh_user or vars_data.get('ssh_user') or (DEFAULT_SSH_USER.get(args.provider) if args.provider else None)
+        # SSH settings - explicitly set SSH user to avoid template recursion
+        if args.provider == "linode":
+            config['ssh_user'] = "root"
+        elif args.provider == "aws":
+            config['ssh_user'] = "kali"
+        else:
+            config['ssh_user'] = args.ssh_user or vars_data.get('ssh_user') or (DEFAULT_SSH_USER.get(args.provider) if args.provider else None)
+            
         if args.ssh_key:
             config['ssh_key'] = os.path.expanduser(args.ssh_key)
         else:
