@@ -565,63 +565,114 @@ def deploy_infrastructure(config):
     if not config.get('region'):
         config['region'] = select_random_region(config)
     
-    # Determine which components to deploy
-    success = True
-    
-    # Use the correct case for provider directory
-    provider_dir = provider.capitalize() if provider != "aws" else provider.upper()
-    
-    # Redirector deployment
-    if not config.get('c2_only'):
-        playbook = f"{provider_dir}/redirector.yml"
-        inventory_path = create_inventory_file(config, "local")
+    # Set different instance sizes for redirector vs. C2
+    if provider == "linode":
+        # Store the original plan
+        original_plan = config.get('plan', 'g6-standard-2')
         
-        logging.info(f"Deploying redirector using {playbook}")
-        redirector_success, stdout, stderr = run_ansible_playbook(
-            playbook, inventory_path, config, config.get('debug', False)
-        )
-        
-        # Log Ansible output
-        if config.get('debug', False):
-            logging.debug(f"Ansible stdout: {stdout}")
-            if stderr:
-                logging.debug(f"Ansible stderr: {stderr}")
-        else:
-            # Always log at least a summary even without debug mode
-            logging.info(f"Redirector deployment {'succeeded' if redirector_success else 'failed'}")
-        
-        if os.path.exists(inventory_path):
-            os.unlink(inventory_path)
+        # For redirector, use smaller instance size regardless of what was specified
+        if not config.get('c2_only'):
+            redirector_config = config.copy()
+            redirector_config['plan'] = 'g6-nanode-1'  # Smallest viable Linode plan
             
-        if not redirector_success:
-            logging.error("Redirector deployment failed")
-            return False
-    
-    # C2 deployment
-    if not config.get('redirector_only'):
-        playbook = f"{provider_dir}/c2.yml"
-        inventory_path = create_inventory_file(config, "local")
-        
-        logging.info(f"Deploying C2 server using {playbook}")
-        c2_success, stdout, stderr = run_ansible_playbook(
-            playbook, inventory_path, config, config.get('debug', False)
-        )
-        
-        # Log Ansible output
-        if config.get('debug', False):
-            logging.debug(f"Ansible stdout: {stdout}")
-            if stderr:
-                logging.debug(f"Ansible stderr: {stderr}")
-        else:
-            # Always log at least a summary even without debug mode
-            logging.info(f"C2 server deployment {'succeeded' if c2_success else 'failed'}")
-        
-        if os.path.exists(inventory_path):
-            os.unlink(inventory_path)
+            # Use the correct case for provider directory
+            provider_dir = "Linode"
+            playbook = f"{provider_dir}/redirector.yml"
+            inventory_path = create_inventory_file(redirector_config, "local")
             
-        if not c2_success:
-            logging.error("C2 server deployment failed")
-            return False
+            logging.info(f"Deploying redirector using {playbook} with plan: g6-nanode-1")
+            redirector_success, stdout, stderr = run_ansible_playbook(
+                playbook, inventory_path, redirector_config, redirector_config.get('debug', False)
+            )
+            
+            # Log Ansible output
+            if redirector_config.get('debug', False):
+                logging.debug(f"Ansible stdout: {stdout}")
+                if stderr:
+                    logging.debug(f"Ansible stderr: {stderr}")
+            
+            if os.path.exists(inventory_path):
+                os.unlink(inventory_path)
+                
+            if not redirector_success:
+                logging.error("Redirector deployment failed")
+                return False
+        
+        # For C2, use the original plan
+        if not config.get('redirector_only'):
+            # Restore original plan for C2
+            config['plan'] = original_plan
+            
+            provider_dir = "Linode"
+            playbook = f"{provider_dir}/c2.yml"
+            inventory_path = create_inventory_file(config, "local")
+            
+            logging.info(f"Deploying C2 server using {playbook} with plan: {config['plan']}")
+            c2_success, stdout, stderr = run_ansible_playbook(
+                playbook, inventory_path, config, config.get('debug', False)
+            )
+            
+            # Log Ansible output
+            if config.get('debug', False):
+                logging.debug(f"Ansible stdout: {stdout}")
+                if stderr:
+                    logging.debug(f"Ansible stderr: {stderr}")
+            
+            if os.path.exists(inventory_path):
+                os.unlink(inventory_path)
+                
+            if not c2_success:
+                logging.error("C2 server deployment failed")
+                return False
+    else:
+        # For AWS and other providers, follow the same pattern but with their directory names
+        provider_dir = "AWS" if provider == "aws" else provider.capitalize()
+        
+        # Redirector deployment
+        if not config.get('c2_only'):
+            playbook = f"{provider_dir}/redirector.yml"
+            inventory_path = create_inventory_file(config, "local")
+            
+            logging.info(f"Deploying redirector using {playbook}")
+            redirector_success, stdout, stderr = run_ansible_playbook(
+                playbook, inventory_path, config, config.get('debug', False)
+            )
+            
+            # Log Ansible output
+            if config.get('debug', False):
+                logging.debug(f"Ansible stdout: {stdout}")
+                if stderr:
+                    logging.debug(f"Ansible stderr: {stderr}")
+            
+            if os.path.exists(inventory_path):
+                os.unlink(inventory_path)
+                
+            if not redirector_success:
+                logging.error("Redirector deployment failed")
+                return False
+        
+        # C2 deployment
+        if not config.get('redirector_only'):
+            playbook = f"{provider_dir}/c2.yml"
+            inventory_path = create_inventory_file(config, "local")
+            
+            logging.info(f"Deploying C2 server using {playbook}")
+            c2_success, stdout, stderr = run_ansible_playbook(
+                playbook, inventory_path, config, config.get('debug', False)
+            )
+            
+            # Log Ansible output
+            if config.get('debug', False):
+                logging.debug(f"Ansible stdout: {stdout}")
+                if stderr:
+                    logging.debug(f"Ansible stderr: {stderr}")
+            
+            if os.path.exists(inventory_path):
+                os.unlink(inventory_path)
+                
+            if not c2_success:
+                logging.error("C2 server deployment failed")
+                return False
     
     return True
 
@@ -815,15 +866,39 @@ def cleanup_resources(config):
     logging.info(f"Cleaning up {provider} resources...")
     
     # Use the correct case for provider directory
-    provider_dir = provider.capitalize() if provider != "aws" else provider.upper()
+    provider_dir = "AWS" if provider == "aws" else provider.capitalize()
     
-    # Use Ansible for cleanup
+    # Use Ansible for cleanup with confirmation set to false
+    extra_vars = {
+        "confirm_cleanup": False,  # Skip confirmation prompt
+        "redirector_name": config.get('redirector_name'),
+        "c2_name": config.get('c2_name'),
+        "cleanup_redirector": True,
+        "cleanup_c2": True
+    }
+    
     playbook = f"{provider_dir}/cleanup.yml"
     if os.path.exists(playbook):
         logging.info(f"Running cleanup playbook: {playbook}")
         inventory_path = create_inventory_file(config, "local")
+        
+        # Add extra vars to config for cleanup
+        cleanup_config = config.copy()
+        cleanup_config.update(extra_vars)
+        
         try:
-            run_ansible_playbook(playbook, inventory_path, config)
+            success, stdout, stderr = run_ansible_playbook(
+                playbook, inventory_path, cleanup_config, 
+                cleanup_config.get('debug', False)
+            )
+            
+            if not success:
+                logging.error(f"Cleanup playbook failed: {stderr}")
+                
+                # Log what we attempted to clean up
+                logging.error(f"Failed to clean up resources: redirector={config.get('redirector_name')}, c2={config.get('c2_name')}")
+            else:
+                logging.info("Cleanup completed successfully")
         except Exception as e:
             logging.error(f"Cleanup playbook failed: {e}")
         finally:

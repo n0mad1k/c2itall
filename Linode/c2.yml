@@ -77,7 +77,7 @@
         name: "c2"
         groups: "c2servers"
         ansible_host: "{{ c2_ip }}"
-        ansible_user: "{{ ssh_user }}"
+        ansible_user: "root"  # Hard-coded instead of using ssh_user
         ansible_ssh_private_key_file: "{{ ssh_key_path | replace('.pub', '') }}"
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
