@@ -8,16 +8,9 @@
   vars_files:
     - vars.yaml
   vars:
-    # Default values for required variables
-    linode_region: "{{ linode_region | default(region_choices | random) }}"
-    plan: "{{ plan | default('g6-nanode-1') }}"
-    image: "{{ image | default('linode/kali') }}"
-    
-    # Generate random instance name if not provided
-    redirector_name: "{{ redirector_name | default('srv-' + 9999999999 | random | to_uuid | hash('md5') | truncate(8, True, '')) }}"
-    
-    # Generate random shell handler port if not provided
-    shell_handler_port: "{{ shell_handler_port | default(4000 + 60000 | random) }}"
+    # Handle both region and selected_region for backward compatibility
+    selected_region: "{{ selected_region | default(region) | default(linode_region) | default(region_choices | random) }}"
+    redirector_image: "{{ redirector_image | default('linode/debian12') }}"
 
   tasks:
     - name: Validate required Linode token
@@ -31,13 +24,13 @@
         access_token: "{{ linode_token }}"
         label: "{{ redirector_name }}"
         type: "{{ plan }}"
-        region: "{{ linode_region }}"
-        image: "{{ image }}"
+        region: "{{ selected_region }}"
+        image: "{{ redirector_image }}"
         root_pass: "{{ lookup('password', '/dev/null length=16') }}"
         authorized_keys:
           - "{{ lookup('file', ssh_key_path) }}"
         state: present
-      register: redirector_instance
+      register: linode_instance
 
     - name: Set redirector_ip for later use
       set_fact:

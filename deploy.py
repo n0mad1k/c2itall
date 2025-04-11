@@ -485,9 +485,11 @@ def create_inventory_file(config, deployment_type):
     if config.get('ssh_port'):
         inventory_content.append(f"ansible_port={config['ssh_port']}")
     
-    # Use the Python from the virtual environment
-    venv_python = sys.executable
-    inventory_content.append(f"ansible_python_interpreter={venv_python}")
+    # Make sure we DON'T use the local Python interpreter path for remote hosts
+    if deployment_type == "local":
+        # Only set Python interpreter for localhost
+        venv_python = sys.executable
+        inventory_content.append(f"ansible_python_interpreter={venv_python}")
     
     # Add specific host sections based on deployment type
     if deployment_type == "local":
@@ -519,6 +521,14 @@ def run_ansible_playbook(playbook, inventory, config, debug=False):
     # Filter out None values and complex objects
     extra_vars = {k: v for k, v in config.items() if v is not None and not isinstance(v, (dict, list, tuple))}
     
+    # Handle the region parameter correctly
+    if 'region' in extra_vars:
+        # Set selected_region to match what the playbook expects
+        extra_vars['selected_region'] = extra_vars['region']
+    elif 'linode_region' in extra_vars:
+        # Map linode_region to selected_region for compatibility
+        extra_vars['selected_region'] = extra_vars['linode_region']
+    
     # Explicitly set hard-coded user values rather than using templated defaults
     if 'ssh_user' in extra_vars:
         extra_vars.pop('ssh_user')
@@ -526,6 +536,9 @@ def run_ansible_playbook(playbook, inventory, config, debug=False):
             extra_vars['ssh_user'] = 'root'
         else:
             extra_vars['ssh_user'] = 'kali'
+    
+    # Add ansible_python_interpreter for remote hosts correctly
+    extra_vars['ansible_python_interpreter'] = '/usr/bin/python3'
     
     extra_vars_json = json.dumps(extra_vars)
     
@@ -604,7 +617,7 @@ def deploy_infrastructure(config):
             redirector_config['plan'] = 'g6-nanode-1'  # Smallest viable Linode plan
             
             # Use the correct case for provider directory
-            provider_dir = "Linode"
+            provider_dir = PROVIDER_DIRS[provider]
             playbook = f"{provider_dir}/redirector.yml"
             inventory_path = create_inventory_file(redirector_config, "local")
             
@@ -631,7 +644,7 @@ def deploy_infrastructure(config):
             # Restore original plan for C2
             config['plan'] = original_plan
             
-            provider_dir = "Linode"
+            provider_dir = PROVIDER_DIRS[provider]
             playbook = f"{provider_dir}/c2.yml"
             inventory_path = create_inventory_file(config, "local")
             
@@ -654,7 +667,7 @@ def deploy_infrastructure(config):
                 return False
     else:
         # For AWS and other providers, follow the same pattern but with their directory names
-        provider_dir = "AWS" if provider == "aws" else provider.capitalize()
+        provider_dir = PROVIDER_DIRS[provider]
         
         # Redirector deployment
         if not config.get('c2_only'):
@@ -888,13 +901,36 @@ def ssh_to_instance(config):
         logging.info("SSH connection interrupted by user")
         return True
 
-def cleanup_resources(config):
+def cleanup_resources(config, interactive=True):
     """Clean up resources if deployment fails"""
     provider = config.get('provider')
     logging.info(f"Cleaning up {provider} resources...")
     
     # Use the correct case for provider directory
-    provider_dir = "AWS" if provider == "aws" else provider.capitalize()
+    provider_dir = PROVIDER_DIRS.get(provider, provider.upper())
+    
+    # If interactive, ask for confirmation before cleaning up
+    if interactive:
+        print("\n============================================================")
+        print("Deployment failed or was interrupted. Resources to clean up:")
+        redirector_name = config.get('redirector_name', 'None')
+        c2_name = config.get('c2_name', 'None')
+        print(f" - Redirector: {redirector_name}")
+        print(f" - C2 Server: {c2_name}")
+        print("============================================================")
+        
+        try:
+            user_choice = input("\nDo you want to clean up these resources? (y/n): ").lower()
+            if user_choice != 'y':
+                logging.info("Cleanup cancelled by user")
+                print("\nCleanup cancelled. Resources remain active.")
+                print("You can clean them up later by running with --teardown")
+                return False
+        except KeyboardInterrupt:
+            # Handle if the user presses Ctrl+C during input
+            print("\nCleanup cancelled. Resources remain active.")
+            print("You can clean them up later by running with --teardown")
+            return False
     
     # Use Ansible for cleanup with confirmation set to false
     extra_vars = {
@@ -945,6 +981,8 @@ def cleanup_resources(config):
                 os.remove(f"{ssh_key}.pub")
         except Exception as e:
             logging.error(f"Failed to remove SSH key: {e}")
+            
+    return True
 
 def check_dependencies():
     """Check if required dependencies are installed"""
@@ -1146,6 +1184,7 @@ C2itAll - Red Team Infrastructure Setup
             config['region_choices'] = vars_data.get('region_choices', [])
             config['plan'] = args.size or vars_data.get('plan', 'g6-standard-2')
             config['image'] = vars_data.get('image', 'linode/kali')
+            config['redirector_image'] = vars_data.get('redirector_image', 'linode/debian11')
         
         # FlokiNET settings
         elif args.provider == "flokinet":
@@ -1256,7 +1295,7 @@ C2itAll - Red Team Infrastructure Setup
             success = deploy_tracker(config)
             if not success:
                 logging.error("Tracker deployment failed!")
-                cleanup_resources(config)
+                cleanup_resources(config, interactive=True)
                 return
             
             logging.info("Tracker deployment completed successfully!")
@@ -1278,16 +1317,26 @@ C2itAll - Red Team Infrastructure Setup
                 ssh_to_instance(config)
         else:
             logging.error("Deployment failed!")
-            cleanup_resources(config)
+            cleanup_resources(config, interactive=True)
     except KeyboardInterrupt:
+        print("\n\nDeployment interrupted by user")
         logging.info("Deployment interrupted by user")
-        cleanup_resources(config)
+        try:
+            cleanup_resources(config, interactive=True)
+        except KeyboardInterrupt:
+            print("\nCleanup interrupted. Resources may still exist.")
+            logging.warning("Cleanup interrupted by user. Resources may still exist.")
     except Exception as e:
         logging.error(f"Deployment failed with error: {e}")
         if config.get('debug'):
             import traceback
+            traceback.print_exc()
             logging.debug(traceback.format_exc())
-        cleanup_resources(config)
+        try:
+            cleanup_resources(config, interactive=True)
+        except KeyboardInterrupt:
+            print("\nCleanup interrupted. Resources may still exist.")
+            logging.warning("Cleanup interrupted by user. Resources may still exist.")
 
 if __name__ == "__main__":
     main()

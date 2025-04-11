@@ -28,13 +28,14 @@
         access_token: "{{ linode_token }}"
         label: "{{ c2_name }}"
         type: "{{ plan }}"
-        region: "{{ linode_region }}"
-        image: "{{ image }}"
+        region: "{{ selected_region }}"
+        # Use Kali for C2 by default
+        image: "{{ c2_image | default('linode/kali') }}"
         root_pass: "{{ lookup('password', '/dev/null length=16') }}"
         authorized_keys:
           - "{{ lookup('file', ssh_key_path) }}"
         state: present
-      register: c2_instance
+      register: linode_instance
 
     - name: Set c2_ip for later use
       set_fact:
