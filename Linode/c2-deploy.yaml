@@ -60,13 +60,21 @@
             redirector_ip: "{{ redirector_instance.instance.ipv4[0] }}"
             redirector_instance_id: "{{ redirector_instance.instance.id }}"
 
-        - name: Wait for redirector SSH to be available
-          wait_for:
-            host: "{{ redirector_ip }}"
-            port: 22
-            delay: 30
-            timeout: 300
-            state: started
+        - name: Enhanced wait for SSH with retry mechanism
+          block:
+            - name: Initial wait for instance to become reachable
+              wait_for:
+                host: "{{ linode_instance.instance.ipv4[0] }}"
+                port: 22
+                delay: 60  # Increased initial delay
+                timeout: 180
+                state: started
+              register: initial_wait
+            
+            - name: Additional pause to ensure SSH is fully initialized
+              pause: 
+                seconds: 120
+              when: initial_wait is succeeded
 
         - name: Add redirector to inventory
           add_host:

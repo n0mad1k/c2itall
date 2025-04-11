@@ -1,0 +1,486 @@
+---
+# Linode/configure-c2.yml
+# This playbook handles only the configuration of an already-created C2 server
+
+- name: Configure Linode C2 server
+  hosts: c2
+  gather_facts: false
+  become: true
+  vars_files:
+    - vars.yaml
+  vars:
+    # Default values if not provided
+    domain: "{{ domain | default('example.com') }}"
+    c2_subdomain: "{{ c2_subdomain | default('mail') }}"
+    mail_hostname: "{{ mail_hostname | default('mail.' + domain) }}"
+    gophish_admin_port: "{{ gophish_admin_port | default('8090') }}"
+    smtp_auth_user: "{{ smtp_auth_user | default('phishuser') }}"
+    smtp_auth_pass: "{{ smtp_auth_pass | default(lookup('password', '/dev/null length=16 chars=ascii_letters,digits')) }}"
+    
+  tasks:
+    # Retry logic for SSH connection
+    - name: Wait for SSH connection to stabilize
+      wait_for_connection:
+        delay: 10
+        timeout: 300
+      register: wait_result
+      ignore_errors: true
+      retries: 5
+      delay: 30
+      until: wait_result is success
+      
+    - name: Gather facts after ensuring SSH connection
+      setup:
+      register: setup_result
+      ignore_errors: true
+      retries: 5
+      delay: 30
+      until: setup_result is success
+      
+    - name: Wait for apt lock to be released
+      shell: |
+        while lsof /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+          echo "waiting for apt lock to be released..."
+          sleep 5
+        done
+      changed_when: false
+      
+    - name: Disable root password authentication for SSH immediately
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PasswordAuthentication'
+        line: 'PasswordAuthentication no'
+        state: present
+      register: ssh_config_result
+      ignore_errors: true
+      retries: 3
+      delay: 10
+      until: ssh_config_result is success
+      
+    - name: Restart SSH service to apply changes
+      service:
+        name: ssh
+        state: restarted
+      register: ssh_restart_result
+      ignore_errors: true
+      retries: 3
+      delay: 10
+      until: ssh_restart_result is success
+      
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+      register: apt_update_result
+      ignore_errors: true
+      retries: 5
+      delay: 10
+      until: apt_update_result is success
+        
+    - name: Set a custom MOTD
+      template:
+        src: "templates/motd-linode.j2"
+        dest: /etc/motd
+        owner: root
+        group: root
+        mode: '0644'
+      vars:
+        letsencrypt_email: "{{ letsencrypt_email | default('admin@' + domain) }}"
+        mail_hostname: "{{ mail_hostname }}"
+        domain: "{{ domain }}"
+        gophish_admin_port: "{{ gophish_admin_port }}"
+        
+    - name: Hush Default Login Message
+      shell: |
+        rm -rf '/usr/bin/kali-motd'
+      changed_when: false
+      ignore_errors: true
+        
+    - name: Install base utilities and tools via apt
+      apt:
+        name:
+          - git
+          - wget
+          - curl
+          - unzip
+          - python3-pip
+          - python3-virtualenv
+          - tmux
+          - pipx
+          - nmap
+          - tcpdump
+          - hydra
+          - john
+          - hashcat
+          - sqlmap
+          - gobuster
+          - dirb
+          - enum4linux
+          - dnsenum
+          - seclists
+          - responder
+          - golang
+          - proxychains
+          - tor
+          - crackmapexec
+          - jq
+          - unzip
+          - postfix
+          - certbot
+          - opendkim
+          - opendkim-tools
+          - dovecot-core
+          - dovecot-imapd
+          - dovecot-pop3d
+          - dovecot-sieve
+          - dovecot-managesieved
+          - yq
+        state: present
+      register: apt_install_result
+      ignore_errors: true
+      retries: 3
+      delay: 10
+      until: apt_install_result is success
+    
+    # Create Tools directory and ensure proper ownership 
+    - name: Create Tools directory
+      file:
+        path: ~/Tools
+        state: directory
+        mode: '0755'
+      ignore_errors: true
+        
+    - name: Ensure pipx path is configured
+      shell: |
+        pipx ensurepath
+      args:
+        executable: /bin/bash
+      ignore_errors: true
+        
+    - name: Install tools via pipx
+      shell: |
+        export PATH=$PATH:/root/.local/bin
+        pipx ensurepath
+        pipx install git+https://github.com/Pennyw0rth/NetExec
+        pipx install git+https://github.com/blacklanternsecurity/TREVORspray
+        pipx install impacket
+      args:
+        executable: /bin/bash
+      ignore_errors: true
+        
+    - name: Download Kerbrute
+      shell: |
+        mkdir -p ~/Tools/Kerbrute
+        wget https://github.com/ropnop/kerbrute/releases/latest/download/kerbrute_linux_amd64 -O ~/Tools/Kerbrute/kerbrute
+        chmod +x ~/Tools/Kerbrute/kerbrute
+      args:
+        executable: /bin/bash
+        creates: ~/Tools/Kerbrute/kerbrute
+      ignore_errors: true
+        
+    - name: Clone SharpCollection nightly builds
+      git:
+        repo: https://github.com/Flangvik/SharpCollection.git
+        dest: ~/Tools/SharpCollection
+        version: master
+      ignore_errors: true
+        
+    - name: Clone PEASS-ng
+      git:
+        repo: https://github.com/carlospolop/PEASS-ng.git
+        dest: ~/Tools/PEASS-ng
+      ignore_errors: true
+        
+    - name: Clone MailSniper
+      git:
+        repo: https://github.com/dafthack/MailSniper.git
+        dest: ~/Tools/MailSniper
+      ignore_errors: true
+        
+    - name: Clone Inveigh
+      git:
+        repo: https://github.com/Kevin-Robertson/Inveigh.git
+        dest: ~/Tools/Inveigh
+      ignore_errors: true
+        
+    - name: Install Sliver C2 server
+      shell: |
+        curl https://sliver.sh/install | bash
+        systemctl enable sliver
+        systemctl start sliver
+      ignore_errors: true
+        
+    - name: Install Metasploit Framework (Nightly Build)
+      shell: |
+        curl https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb > ~/Tools/msfinstall
+        chmod 755 ~/Tools/msfinstall
+        ~/Tools/msfinstall
+      args:
+        executable: /bin/bash
+      ignore_errors: true
+        
+    - name: Grab GoPhish
+      shell: |
+        curl -L "$(curl -s https://api.github.com/repos/gophish/gophish/releases/latest | jq -r '.assets[] | select(.browser_download_url | contains("linux-64bit.zip")) | .browser_download_url')" -o ~/Tools/gophish.zip
+        unzip ~/Tools/gophish.zip -d ~/Tools/gophish
+        rm -rf ~/Tools/gophish.zip
+        chmod +x ~/Tools/gophish/gophish
+      args:
+        executable: /bin/bash
+        creates: ~/Tools/gophish/gophish
+      ignore_errors: true
+        
+    - name: Deploy Gophish config.json with custom admin port
+      template:
+        src: "templates/gophish-config.j2"
+        dest: ~/Tools/gophish/config.json
+        owner: root
+        group: root
+        mode: '0644'
+      vars:
+        gophish_admin_port: "{{ gophish_admin_port }}"
+        domain: "{{ domain }}"
+      ignore_errors: true
+        
+    # Mail server configuration
+    - name: Configure Postfix main.cf
+      lineinfile:
+        path: /etc/postfix/main.cf
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      with_items:
+        - { regexp: '^myhostname', line: "myhostname = {{ mail_hostname }}" }
+        - { regexp: '^mydomain', line: "mydomain = {{ domain }}" }
+        - { regexp: '^myorigin', line: "myorigin = $mydomain" }
+        - { regexp: '^inet_interfaces', line: "inet_interfaces = all" }
+        - { regexp: '^inet_protocols', line: "inet_protocols = ipv4" }
+        - { regexp: '^smtpd_banner', line: "smtpd_banner = $myhostname ESMTP $mail_name" }
+        - { regexp: '^mynetworks', line: "mynetworks = 127.0.0.0/8 [::1]/128" }
+        - { regexp: '^relay_domains', line: "relay_domains = $mydestination" }
+        - { regexp: '^smtpd_tls_cert_file', line: "smtpd_tls_cert_file = /etc/letsencrypt/live/{{ domain }}/fullchain.pem" }
+        - { regexp: '^smtpd_tls_key_file', line: "smtpd_tls_key_file = /etc/letsencrypt/live/{{ domain }}/privkey.pem" }
+        - { regexp: '^smtpd_tls_security_level', line: "smtpd_tls_security_level = encrypt" }
+        - { regexp: '^smtpd_tls_session_cache_database', line: "smtpd_tls_session_cache_database = btree:${data_directory}/smtpd_scache" }
+        - { regexp: '^smtp_tls_session_cache_database', line: "smtp_tls_session_cache_database = btree:${data_directory}/smtp_scache" }
+        - { regexp: '^smtpd_use_tls', line: "smtpd_use_tls = yes" }
+        - { regexp: '^smtpd_tls_auth_only', line: "smtpd_tls_auth_only = yes" }
+        - { regexp: '^milter_default_action', line: "milter_default_action = accept" }
+        - { regexp: '^milter_protocol', line: "milter_protocol = 6" }
+        - { regexp: '^smtpd_milters', line: "smtpd_milters = unix:/var/spool/postfix/opendkim/opendkim.sock" }
+        - { regexp: '^non_smtpd_milters', line: "non_smtpd_milters = unix:/var/spool/postfix/opendkim/opendkim.sock" }
+      ignore_errors: true
+        
+    - name: Configure OpenDKIM
+      lineinfile:
+        path: /etc/opendkim.conf
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      with_items:
+        - { regexp: '^Domain', line: "Domain   {{ domain }}" }
+        - { regexp: '^KeyFile', line: "KeyFile /etc/opendkim/keys/{{ domain }}/mail.private" }
+        - { regexp: '^Selector', line: "Selector mail" }
+        - { regexp: '^Socket', line: "Socket   local:/var/spool/postfix/opendkim/opendkim.sock" }
+        - { regexp: '^Syslog', line: "Syslog   yes" }
+        - { regexp: '^UMask', line: "UMask    002" }
+        - { regexp: '^Mode', line: "Mode     sv" }      
+      ignore_errors: true
+        
+    - name: Create DKIM directory
+      file:
+        path: /etc/opendkim/keys/{{ domain }}
+        state: directory
+        owner: opendkim
+        group: opendkim
+        mode: 0700
+      ignore_errors: true
+        
+    - name: Generate DKIM keys
+      command: >
+        opendkim-genkey -D /etc/opendkim/keys/{{ domain }} -d {{ domain }} -s mail
+      args:
+        creates: /etc/opendkim/keys/{{ domain }}/mail.private
+      ignore_errors: true
+        
+    - name: Set permissions for DKIM keys
+      file:
+        path: /etc/opendkim/keys/{{ domain }}/mail.private
+        owner: opendkim
+        group: opendkim
+        mode: 0600
+      ignore_errors: true
+        
+    - name: Configure OpenDKIM TrustedHosts
+      copy:
+        content: |
+          127.0.0.1
+          ::1
+          localhost
+          {{ domain }}
+        dest: /etc/opendkim/TrustedHosts
+        owner: opendkim
+        group: opendkim
+        mode: 0644
+      ignore_errors: true
+        
+    - name: Enable submission port (587) in master.cf
+      blockinfile:
+        path: /etc/postfix/master.cf
+        insertafter: '^#submission'
+        block: |
+          submission     inet  n       -       y       -       -       smtpd
+            -o syslog_name=postfix/submission
+            -o smtpd_tls_security_level=encrypt
+            -o smtpd_sasl_auth_enable=yes
+            -o smtpd_recipient_restrictions=permit_sasl_authenticated,reject
+            -o smtpd_relay_restrictions=permit_sasl_authenticated,reject
+      ignore_errors: true
+
+    # Dovecot and authentication configuration
+    - name: Configure Dovecot for Postfix SASL
+      blockinfile:
+        path: /etc/dovecot/conf.d/10-master.conf
+        insertafter: '^service auth {'
+        block: |
+          # Postfix smtp-auth
+          unix_listener /var/spool/postfix/private/auth {
+            mode = 0660
+            user = postfix
+            group = postfix
+          }
+      ignore_errors: true
+        
+    - name: Set Dovecot auth_mechanisms
+      lineinfile:
+        path: /etc/dovecot/conf.d/10-auth.conf
+        regexp: '^auth_mechanisms'
+        line: 'auth_mechanisms = plain login'
+      ignore_errors: true
+        
+    - name: Create Dovecot password file for SASL authentication
+      file:
+        path: /etc/dovecot/passwd
+        state: touch
+        mode: '0600'
+        owner: dovecot
+        group: dovecot
+      ignore_errors: true
+        
+    - name: Add SMTP auth user to Dovecot
+      lineinfile:
+        path: /etc/dovecot/passwd
+        line: "{{ smtp_auth_user }}:{{ smtp_auth_pass | password_hash('sha512_crypt') }}"
+      ignore_errors: true
+        
+    - name: Disable system auth and use passwd-file
+      lineinfile:
+        path: /etc/dovecot/conf.d/10-auth.conf
+        regexp: '^!include auth-system.conf.ext'
+        line: '#!include auth-system.conf.ext'
+      ignore_errors: true
+        
+    - name: Add auth-passwdfile configuration
+      blockinfile:
+        path: /etc/dovecot/conf.d/10-auth.conf
+        insertafter: '^auth_mechanisms ='
+        block: |
+          passdb {
+            driver = passwd-file
+            args = scheme=sha512_crypt /etc/dovecot/passwd
+          }
+          userdb {
+            driver = static
+            args = uid=vmail gid=vmail home=/var/vmail/%u
+          }
+      ignore_errors: true
+        
+    - name: Create vmail user/group
+      group:
+        name: vmail
+        gid: 5000
+        state: present
+      ignore_errors: true
+        
+    - name: Create vmail user
+      user:
+        name: vmail
+        uid: 5000
+        group: vmail
+        create_home: no
+      ignore_errors: true
+        
+    - name: Create vmail directory
+      file:
+        path: /var/vmail
+        state: directory
+        owner: vmail
+        group: vmail
+        mode: 0700
+      ignore_errors: true
+        
+    - name: Install Let's Encrypt certificate if domain specified
+      shell: |
+        certbot certonly --standalone -d {{ c2_subdomain }}.{{ domain }} --non-interactive --agree-tos -m {{ letsencrypt_email | default('admin@' + domain) }}
+        certbot certonly --standalone -d {{ mail_hostname }} --non-interactive --agree-tos -m {{ letsencrypt_email | default('admin@' + domain) }}
+      args:
+        creates: /etc/letsencrypt/live/{{ domain }}/fullchain.pem
+      when: domain != "example.com"
+      ignore_errors: true
+        
+    - name: Restart Postfix
+      service:
+        name: postfix
+        state: restarted
+      ignore_errors: true
+        
+    - name: Restart Dovecot
+      service:
+        name: dovecot
+        state: restarted
+      ignore_errors: true
+        
+    - name: Create operational scripts directory
+      file:
+        path: /opt/c2
+        state: directory
+        mode: '0700'
+        owner: root
+        group: root
+      ignore_errors: true
+        
+    - name: Copy clean-logs.sh script
+      copy:
+        src: "../files/clean-logs.sh"
+        dest: /opt/c2/clean-logs.sh
+        mode: '0700'
+        owner: root
+        group: root
+      ignore_errors: true
+        
+    - name: Copy secure-exit.sh script
+      copy:
+        src: "../files/secure-exit.sh"
+        dest: /opt/c2/secure-exit.sh
+        mode: '0700'
+        owner: root
+        group: root
+      ignore_errors: true
+        
+    - name: Set up cron job for log cleaning if zero-logs enabled
+      cron:
+        name: "Clean logs"
+        minute: "0"
+        hour: "*/6"
+        job: "/opt/c2/clean-logs.sh > /dev/null 2>&1"
+      when: zero_logs | default(true) | bool
+      ignore_errors: true
+        
+    - name: Print deployment summary
+      debug:
+        msg:
+          - "C2 Server Configuration Complete!"
+          - "-----------------------------"
+          - "C2 Server IP: {{ ansible_host }}"
+          - "C2 Server Domain: {{ c2_subdomain }}.{{ domain }} (Update DNS A record)"
+          - "Mail Server Domain: {{ mail_hostname }} (Update DNS A record)"
+          - "GoPhish Admin Port: {{ gophish_admin_port }}"
+          - "SMTP Auth User: {{ smtp_auth_user }}"
+          - "SMTP Auth Password: {{ smtp_auth_pass }}"

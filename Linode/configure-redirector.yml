@@ -1,0 +1,218 @@
+---
+# Linode/configure-redirector.yml
+# This playbook handles only the configuration of an already-created redirector
+
+- name: Configure Linode redirector
+  hosts: redirector
+  gather_facts: false
+  become: true
+  vars_files:
+    - vars.yaml
+  vars:
+    # Default values if not provided
+    shell_handler_port: "{{ shell_handler_port | default(4000 + 60000 | random) }}"
+    domain: "{{ domain | default('example.com') }}"
+    redirector_subdomain: "{{ redirector_subdomain | default('cdn') }}"
+    
+  tasks:
+    # Retry logic for SSH connection
+    - name: Wait for SSH connection to stabilize
+      wait_for_connection:
+        delay: 10
+        timeout: 300
+      register: wait_result
+      ignore_errors: true
+      retries: 5
+      delay: 30
+      until: wait_result is success
+      
+    - name: Gather facts after ensuring SSH connection
+      setup:
+      register: setup_result
+      ignore_errors: true
+      retries: 5
+      delay: 30
+      until: setup_result is success
+      
+    - name: Wait for apt lock to be released
+      shell: |
+        while lsof /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+          echo "waiting for apt lock to be released..."
+          sleep 5
+        done
+      changed_when: false
+      
+    - name: Disable root password authentication for SSH immediately
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PasswordAuthentication'
+        line: 'PasswordAuthentication no'
+        state: present
+      register: ssh_config_result
+      ignore_errors: true
+      retries: 3
+      delay: 10
+      until: ssh_config_result is success
+      
+    - name: Restart SSH service to apply changes
+      service:
+        name: ssh
+        state: restarted
+      register: ssh_restart_result
+      ignore_errors: true
+      retries: 3
+      delay: 10
+      until: ssh_restart_result is success
+      
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+      register: apt_update_result
+      ignore_errors: true
+      retries: 5
+      delay: 10
+      until: apt_update_result is success
+        
+    - name: Install nginx and other required packages
+      apt:
+        name:
+          - nginx
+          - certbot
+          - python3-certbot-nginx
+          - socat
+          - netcat-openbsd
+          - secure-delete
+        state: present
+      register: apt_install_result
+      ignore_errors: true
+      retries: 3
+      delay: 10
+      until: apt_install_result is success
+        
+    - name: Create directories for operational scripts
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0700'
+        owner: root
+        group: root
+      with_items:
+        - /opt/c2
+        - /opt/shell-handler
+        
+    - name: Copy clean-logs.sh script
+      copy:
+        src: "../files/clean-logs.sh"
+        dest: /opt/c2/clean-logs.sh
+        mode: '0700'
+        owner: root
+        group: root
+        
+    - name: Copy shell handler script
+      copy:
+        src: "../files/persistent-listener.sh"
+        dest: /opt/shell-handler/persistent-listener.sh
+        mode: '0700'
+        owner: root
+        group: root
+        
+    - name: Configure shell handler script with C2 IP
+      replace:
+        path: /opt/shell-handler/persistent-listener.sh
+        regexp: 'C2_HOST="127.0.0.1"'
+        replace: 'C2_HOST="{{ c2_ip | default("127.0.0.1") }}"'
+        
+    - name: Configure shell handler script with listening port
+      replace:
+        path: /opt/shell-handler/persistent-listener.sh
+        regexp: 'LISTEN_PORT=4444'
+        replace: 'LISTEN_PORT={{ shell_handler_port }}'
+        
+    - name: Create shell handler service
+      template:
+        src: "../FlokiNET/templates/shell-handler.service.j2"
+        dest: /etc/systemd/system/shell-handler.service
+        mode: '0644'
+        owner: root
+        group: root
+      vars:
+        c2_ip: "{{ c2_ip | default('127.0.0.1') }}"
+        shell_handler_port: "{{ shell_handler_port }}"
+        
+    - name: Configure NGINX for zero-logging
+      template:
+        src: "../FlokiNET/templates/nginx.conf.j2"
+        dest: /etc/nginx/nginx.conf
+        mode: '0644'
+        owner: root
+        group: root
+      when: zero_logs | default(true) | bool
+        
+    - name: Configure NGINX for C2 redirection
+      template:
+        src: "../FlokiNET/templates/default-site.j2"
+        dest: /etc/nginx/sites-available/default
+        mode: '0644'
+        owner: root
+        group: root
+      vars:
+        domain: "{{ domain }}"
+        c2_host: "{{ c2_ip | default('127.0.0.1') }}"
+        
+    - name: Create legitimate-looking index.html
+      template:
+        src: "../FlokiNET/templates/index.html.j2"
+        dest: /var/www/html/index.html
+        mode: '0644'
+        owner: www-data
+        group: www-data
+      vars:
+        domain: "{{ domain }}"
+        redirector_subdomain: "{{ redirector_subdomain }}"
+        
+    - name: Start and enable shell handler service
+      systemd:
+        name: shell-handler
+        state: started
+        enabled: yes
+        daemon_reload: yes
+      register: shell_handler_result
+      ignore_errors: true
+      retries: 3
+      delay: 10
+      until: shell_handler_result is success
+        
+    - name: Set up cron job for log cleaning if zero-logs enabled
+      cron:
+        name: "Clean logs"
+        minute: "0"
+        hour: "*/6"
+        job: "/opt/c2/clean-logs.sh > /dev/null 2>&1"
+      when: zero_logs | default(true) | bool
+        
+    - name: Install Let's Encrypt certificate if domain specified
+      shell: |
+        certbot --nginx -d {{ redirector_subdomain }}.{{ domain }} --non-interactive --agree-tos -m {{ letsencrypt_email | default('admin@' + domain) }}
+      args:
+        creates: /etc/letsencrypt/live/{{ redirector_subdomain }}.{{ domain }}/fullchain.pem
+      when: domain != "example.com"
+      ignore_errors: true
+        
+    - name: Restart NGINX
+      systemd:
+        name: nginx
+        state: restarted
+      register: nginx_restart_result
+      ignore_errors: true
+      retries: 3
+      delay: 10
+      until: nginx_restart_result is success
+      
+    - name: Print deployment summary
+      debug:
+        msg:
+          - "Redirector Configuration Complete!"
+          - "-------------------------------"
+          - "Redirector IP: {{ ansible_host }}"
+          - "Redirector Domain: {{ redirector_subdomain }}.{{ domain }} (Update DNS A record)"
+          - "Shell Handler Port: {{ shell_handler_port }}"

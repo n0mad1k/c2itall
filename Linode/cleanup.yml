@@ -1,7 +1,5 @@
+# Linode/cleanup.yml
 ---
-# Linode Cleanup Playbook
-# Used to tear down Linode infrastructure
-
 - name: Clean up Linode infrastructure
   hosts: localhost
   connection: local
@@ -20,94 +18,27 @@
           - linode_token is defined and linode_token != ""
         fail_msg: "Linode API token is required. Set linode_token in vars.yaml or via --linode-token."
 
-    - name: Confirm cleanup if required
+    - name: Cleanup resources notice
+      debug:
+        msg: |
+          ===============================================
+          CLEANUP CONFIRMATION REQUIRED
+          ===============================================
+          The following resources will be PERMANENTLY DELETED:
+          {% if cleanup_redirector %}
+          - Redirector instance: {{ redirector_name }}
+          {% endif %}
+          {% if cleanup_c2 %}
+          - C2 instance: {{ c2_name }}
+          {% endif %}
+      when: confirm_cleanup | bool
+
+    - name: Confirm cleanup
       pause:
-        prompt: "WARNING: This will permanently delete all infrastructure. Type 'yes' to continue"
+        prompt: "Type 'yes' to confirm deletion or 'no' to abort"
       register: confirmation
-      when: confirm_cleanup
+      when: confirm_cleanup | bool
       
     - name: Exit if not confirmed
       meta: end_play
-      when: confirm_cleanup and confirmation.user_input != 'yes'
-
-    - name: Get redirector instance info
-      community.general.linode_v4:
-        access_token: "{{ linode_token }}"
-        command: list
-        label: "{{ redirector_name }}"
-      register: redirector_info
-      failed_when: false
-      when: cleanup_redirector
-
-    - name: Get C2 instance info
-      community.general.linode_v4:
-        access_token: "{{ linode_token }}"
-        command: list
-        label: "{{ c2_name }}"
-      register: c2_info
-      failed_when: false
-      when: cleanup_c2
-
-    - name: Set redirector ID as fact
-      set_fact:
-        redirector_instance_id: "{{ redirector_info.instances[0].id }}"
-      when: 
-        - cleanup_redirector 
-        - redirector_info.instances is defined 
-        - redirector_info.instances | length > 0
-
-    - name: Set C2 ID as fact
-      set_fact:
-        c2_instance_id: "{{ c2_info.instances[0].id }}"
-      when: 
-        - cleanup_c2 
-        - c2_info.instances is defined 
-        - c2_info.instances | length > 0
-
-    - name: Delete redirector instance
-      community.general.linode_v4:
-        access_token: "{{ linode_token }}"
-        command: delete
-        label: "{{ redirector_name }}"
-        state: absent
-      when: 
-        - cleanup_redirector 
-        - redirector_instance_id is defined
-      register: redirector_deletion
-
-    - name: Delete C2 instance
-      community.general.linode_v4:
-        access_token: "{{ linode_token }}"
-        command: delete
-        label: "{{ c2_name }}"
-        state: absent
-      when: 
-        - cleanup_c2 
-        - c2_instance_id is defined
-      register: c2_deletion
-
-    - name: Remove SSH key file if it's not a shared key
-      file:
-        path: "{{ ssh_key_path | replace('.pub', '') }}"
-        state: absent
-      when: 
-        - ssh_key_path is defined
-        - ssh_key_path is search('c2deploy_')
-      ignore_errors: true
-
-    - name: Remove SSH public key file if it's not a shared key
-      file:
-        path: "{{ ssh_key_path }}"
-        state: absent
-      when: 
-        - ssh_key_path is defined
-        - ssh_key_path is search('c2deploy_')
-      ignore_errors: true
-
-    - name: Cleanup complete message
-      debug:
-        msg:
-          - "Linode infrastructure cleanup complete!"
-          - "Resources that were cleaned up:"
-          - "{{ cleanup_redirector | ternary('- Redirector instance: ' + redirector_name, '') }}"
-          - "{{ cleanup_c2 | ternary('- C2 instance: ' + c2_name, '') }}"
+      when: confirm_cleanup | bool and confirmation.user_input != 'yes'

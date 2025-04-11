@@ -45,13 +45,35 @@
         redirector_ip: "{{ redirector_instance.instance.ipv4[0] }}"
         redirector_instance_id: "{{ redirector_instance.instance.id }}"
 
+    # Enhanced SSH wait task for Linode/redirector.yml
     - name: Wait for redirector SSH to be available
-      wait_for:
-        host: "{{ redirector_ip }}"
-        port: 22
-        delay: 30
-        timeout: 300
-        state: started
+      block:
+        - name: Initial wait for port to be open
+          wait_for:
+            host: "{{ redirector_instance.instance.ipv4[0] }}"
+            port: 22
+            delay: 60
+            timeout: 180
+            state: started
+
+        - name: Additional pause for SSH initialization
+          pause:
+            seconds: 60
+          
+        - name: Test SSH connection
+          command: >
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10
+            -i {{ ssh_key_path | replace('.pub', '') }} root@{{ redirector_instance.instance.ipv4[0] }} echo "SSH Ready"
+          register: ssh_test
+          retries: 5
+          delay: 20
+          until: ssh_test.rc == 0
+          ignore_errors: yes
+          
+        - name: Fail if SSH test unsuccessful
+          fail:
+            msg: "Could not connect to redirector via SSH after multiple attempts"
+          when: ssh_test.rc != 0
 
     - name: Add redirector to inventory
       add_host:

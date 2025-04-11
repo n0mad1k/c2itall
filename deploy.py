@@ -436,12 +436,22 @@ def select_random_region(config):
     if provider == "aws":
         region_choices = config.get("aws_region_choices", [])
     elif provider == "linode":
+        # Look for multiple possible key names in the Linode config
         region_choices = config.get("region_choices", [])
+        if not region_choices:
+            region_choices = config.get("linode_region_choices", [])
     elif provider == "flokinet":
         region_choices = config.get("flokinet_region_choices", [])
     
     if not region_choices:
         logging.warning(f"No region choices found for {provider}")
+        
+        # Fallback regions by provider if none found in config
+        if provider == "linode":
+            region_choices = ["us-east", "us-central", "eu-west", "ap-south"]
+            logging.info(f"Using fallback regions for Linode: {region_choices}")
+    
+    if not region_choices:
         return None
     
     # Select random region
@@ -492,24 +502,9 @@ def create_inventory_file(config, deployment_type):
 
 def run_ansible_playbook(playbook, inventory, config, debug=False):
     """Run an Ansible playbook with the given inventory and config"""
-    # Check if playbook exists
-    if not os.path.exists(playbook):
-        logging.error(f"Playbook {playbook} not found")
-        return False, "", f"ERROR! the playbook: {playbook} could not be found"
-    
     # Convert config dict to JSON for extra-vars
     # Filter out None values and complex objects
     extra_vars = {k: v for k, v in config.items() if v is not None and not isinstance(v, (dict, list, tuple))}
-    
-    # Ensure ssh_user is defined to avoid template recursion
-    if 'ssh_user' not in extra_vars:
-        provider = config.get('provider')
-        if provider and provider in DEFAULT_SSH_USER:
-            extra_vars['ssh_user'] = DEFAULT_SSH_USER[provider]
-        else:
-            extra_vars['ssh_user'] = "root"
-    
-    # Convert to JSON
     extra_vars_json = json.dumps(extra_vars)
     
     # Build command
@@ -522,18 +517,16 @@ def run_ansible_playbook(playbook, inventory, config, debug=False):
     
     # Add verbosity if debug mode is enabled
     if debug:
-        cmd.append("-vvvv")
+        cmd.append("-vvv")
     else:
-        # Add some verbosity even in non-debug mode to capture errors
+        # Always add some verbosity for basic output
         cmd.append("-v")
     
-    # Add environment variables to avoid hangs on confirmations
-    cmd_env = os.environ.copy()
-    cmd_env["ANSIBLE_HOST_KEY_CHECKING"] = "False"
-    cmd_env["ANSIBLE_NOCOLOR"] = "True"
-    
     # Log the command
-    logging.debug(f"Running Ansible command: {' '.join(cmd)}")
+    if debug:
+        logging.debug(f"Running Ansible command: {' '.join(cmd)}")
+    else:
+        logging.info(f"Running Ansible playbook: {playbook}")
     
     # Run the command
     try:
@@ -542,28 +535,20 @@ def run_ansible_playbook(playbook, inventory, config, debug=False):
             check=True, 
             stdout=subprocess.PIPE, 
             stderr=subprocess.PIPE, 
-            text=True,
-            env=cmd_env
+            text=True
         )
         logging.info(f"Playbook {playbook} executed successfully")
-        # Log the stdout/stderr, but truncate if too long
-        if len(result.stdout) > 0:
-            logging.debug(f"Command stdout: {result.stdout}")
-        if len(result.stderr) > 0:
-            logging.debug(f"Command stderr: {result.stderr}")
         return True, result.stdout, result.stderr
     except subprocess.CalledProcessError as e:
-        # More detailed error logging
         logging.error(f"Playbook {playbook} failed with exit code {e.returncode}")
-        logging.error(f"Command stdout: {e.stdout}")
-        logging.error(f"Command stderr: {e.stderr}")
+        if debug:
+            logging.error(f"Command stdout: {e.stdout}")
+            logging.error(f"Command stderr: {e.stderr}")
         return False, e.stdout, e.stderr
 
 def deploy_infrastructure(config):
     """Deploy infrastructure based on provider and configuration"""
     provider = config['provider']
-    provider_dir = PROVIDER_DIRS.get(provider, provider.upper())
-    
     logging.info(f"Deploying {provider} infrastructure...")
     
     # Set provider-specific environment variables
@@ -577,58 +562,68 @@ def deploy_infrastructure(config):
             os.environ['LINODE_TOKEN'] = config['linode_token']
     
     # Select random region if not specified
-    if provider == "aws" and not config.get('aws_region'):
-        config['aws_region'] = select_random_region(config)
-    elif provider == "linode" and not config.get('linode_region'):
-        config['linode_region'] = select_random_region(config)
+    if not config.get('region'):
+        config['region'] = select_random_region(config)
     
-    # Determine playbook path based on deployment mode
-    if config.get('deploy_tracker'):
-        playbook = f"{provider_dir}/tracker.yml"
-        deployment_type = "tracker"
-    elif config.get('redirector_only'):
+    # Determine which components to deploy
+    success = True
+    
+    # Use the correct case for provider directory
+    provider_dir = provider.capitalize() if provider != "aws" else provider.upper()
+    
+    # Redirector deployment
+    if not config.get('c2_only'):
         playbook = f"{provider_dir}/redirector.yml"
-        deployment_type = "redirector"
-    elif config.get('c2_only'):
-        playbook = f"{provider_dir}/c2.yml"
-        deployment_type = "c2"
-    else:
-        # Full deployment
-        if provider == "flokinet":
-            # FlokiNET requires separate deployments for redirector and C2
-            redirector_success = deploy_flokinet_redirector(config)
-            if not redirector_success:
-                return False
-            
-            # If redirector deployed successfully, deploy C2
-            return deploy_flokinet_c2(config)
-        else:
-            # AWS and Linode use a single playbook for full deployment
-            playbook = f"{provider_dir}/c2-deploy.yaml"
-            deployment_type = "local"
-    
-    # Create inventory file
-    inventory_path = create_inventory_file(config, deployment_type)
-    
-    # Run the playbook
-    try:
-        success, stdout, stderr = run_ansible_playbook(
+        inventory_path = create_inventory_file(config, "local")
+        
+        logging.info(f"Deploying redirector using {playbook}")
+        redirector_success, stdout, stderr = run_ansible_playbook(
             playbook, inventory_path, config, config.get('debug', False)
         )
         
-        # Clean up inventory file
+        # Log Ansible output
+        if config.get('debug', False):
+            logging.debug(f"Ansible stdout: {stdout}")
+            if stderr:
+                logging.debug(f"Ansible stderr: {stderr}")
+        else:
+            # Always log at least a summary even without debug mode
+            logging.info(f"Redirector deployment {'succeeded' if redirector_success else 'failed'}")
+        
         if os.path.exists(inventory_path):
             os.unlink(inventory_path)
+            
+        if not redirector_success:
+            logging.error("Redirector deployment failed")
+            return False
+    
+    # C2 deployment
+    if not config.get('redirector_only'):
+        playbook = f"{provider_dir}/c2.yml"
+        inventory_path = create_inventory_file(config, "local")
         
-        return success
-    except Exception as e:
-        logging.error(f"Deployment failed: {e}")
+        logging.info(f"Deploying C2 server using {playbook}")
+        c2_success, stdout, stderr = run_ansible_playbook(
+            playbook, inventory_path, config, config.get('debug', False)
+        )
         
-        # Clean up inventory file
+        # Log Ansible output
+        if config.get('debug', False):
+            logging.debug(f"Ansible stdout: {stdout}")
+            if stderr:
+                logging.debug(f"Ansible stderr: {stderr}")
+        else:
+            # Always log at least a summary even without debug mode
+            logging.info(f"C2 server deployment {'succeeded' if c2_success else 'failed'}")
+        
         if os.path.exists(inventory_path):
             os.unlink(inventory_path)
-        
-        return False
+            
+        if not c2_success:
+            logging.error("C2 server deployment failed")
+            return False
+    
+    return True
 
 def deploy_flokinet_redirector(config):
     """Deploy FlokiNET redirector separately"""
@@ -744,6 +739,8 @@ def run_tests(config):
     else:
         logging.warning(f"No tests playbook found at {playbook}")
 
+
+
 def ssh_to_instance(config):
     """SSH into the deployed instance"""
     logging.info("Connecting to instance via SSH...")
@@ -815,62 +812,18 @@ def ssh_to_instance(config):
 def cleanup_resources(config):
     """Clean up resources if deployment fails"""
     provider = config.get('provider')
-    if not provider:
-        logging.warning("No provider specified for cleanup")
-        return
-    
-    provider_dir = PROVIDER_DIRS.get(provider, provider.upper())
     logging.info(f"Cleaning up {provider} resources...")
+    
+    # Use the correct case for provider directory
+    provider_dir = provider.capitalize() if provider != "aws" else provider.upper()
     
     # Use Ansible for cleanup
     playbook = f"{provider_dir}/cleanup.yml"
     if os.path.exists(playbook):
         logging.info(f"Running cleanup playbook: {playbook}")
-        
-        # Create a new config with string values to avoid template recursion issues
-        safe_config = config.copy()
-        # Set confirm_cleanup to "false" as a string value
-        safe_config['confirm_cleanup'] = "false"
-        # Set ssh_user explicitly if it's missing to avoid template recursion
-        if 'ssh_user' not in safe_config:
-            if provider in DEFAULT_SSH_USER:
-                safe_config['ssh_user'] = DEFAULT_SSH_USER[provider]
-            else:
-                safe_config['ssh_user'] = "root"
-        
-        inventory_path = create_inventory_file(safe_config, "local")
+        inventory_path = create_inventory_file(config, "local")
         try:
-            # Run with non-interactive mode to bypass confirmation prompts
-            cmd_env = os.environ.copy()
-            cmd_env["ANSIBLE_HOST_KEY_CHECKING"] = "False"
-            cmd_env["ANSIBLE_NOCOLOR"] = "True"
-            
-            # Build custom command with additional environment variables
-            playbook_cmd = [
-                "ansible-playbook",
-                "-i", inventory_path,
-                playbook,
-                "-e", json.dumps(safe_config),
-                "--extra-vars", "confirm_cleanup=false", 
-                "-v"
-            ]
-            
-            # Run command with environment variables
-            result = subprocess.run(
-                playbook_cmd,
-                env=cmd_env,
-                check=False,  # Don't check return code to allow for partial cleanup
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            
-            # Log output regardless of success/failure
-            if result.stdout:
-                logging.info(f"Cleanup playbook output: {result.stdout}")
-            if result.stderr:
-                logging.warning(f"Cleanup playbook errors: {result.stderr}")
-            
+            run_ansible_playbook(playbook, inventory_path, config)
         except Exception as e:
             logging.error(f"Cleanup playbook failed: {e}")
         finally:
