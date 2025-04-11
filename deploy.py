@@ -485,11 +485,9 @@ def create_inventory_file(config, deployment_type):
     if config.get('ssh_port'):
         inventory_content.append(f"ansible_port={config['ssh_port']}")
     
-    # Make sure we DON'T use the local Python interpreter path for remote hosts
-    if deployment_type == "local":
-        # Only set Python interpreter for localhost
-        venv_python = sys.executable
-        inventory_content.append(f"ansible_python_interpreter={venv_python}")
+    # Always use the current Python interpreter
+    # This ensures any modules needed are available
+    inventory_content.append(f"ansible_python_interpreter={sys.executable}")
     
     # Add specific host sections based on deployment type
     if deployment_type == "local":
@@ -537,10 +535,20 @@ def run_ansible_playbook(playbook, inventory, config, debug=False):
         else:
             extra_vars['ssh_user'] = 'kali'
     
-    # Add ansible_python_interpreter for remote hosts correctly
-    extra_vars['ansible_python_interpreter'] = '/usr/bin/python3'
+    # Use the current Python interpreter for all Ansible operations
+    # This ensures any modules needed are available
+    current_python = sys.executable
+    extra_vars['ansible_python_interpreter'] = current_python
     
     extra_vars_json = json.dumps(extra_vars)
+    
+    # Set PYTHONPATH to include site-packages
+    env = os.environ.copy()
+    python_path = subprocess.check_output(
+        [current_python, "-c", "import sys; import site; print(':'.join(sys.path + site.getsitepackages()))"],
+        text=True
+    ).strip()
+    env["PYTHONPATH"] = python_path
     
     # Build command
     cmd = [
@@ -570,7 +578,8 @@ def run_ansible_playbook(playbook, inventory, config, debug=False):
             check=True, 
             stdout=subprocess.PIPE, 
             stderr=subprocess.PIPE, 
-            text=True
+            text=True,
+            env=env  # Use the modified environment
         )
         logging.info(f"Playbook {playbook} executed successfully")
         return True, result.stdout, result.stderr

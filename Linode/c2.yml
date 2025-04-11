@@ -11,7 +11,8 @@
     # Default values for required variables
     linode_region: "{{ linode_region | default(region_choices | random) }}"
     plan: "{{ plan | default('g6-standard-2') }}"
-    image: "{{ image | default('linode/kali') }}"
+    # Use static value to avoid recursive templating
+    c2_image_static: "linode/kali"
     
     # Generate random instance name if not provided
     c2_name: "{{ c2_name | default('node-' + 9999999999 | random | to_uuid | hash('md5') | truncate(8, True, '')) }}"
@@ -29,13 +30,13 @@
         label: "{{ c2_name }}"
         type: "{{ plan }}"
         region: "{{ selected_region }}"
-        # Use Kali for C2 by default
-        image: "{{ c2_image | default('linode/kali') }}"
+        # Use static value to avoid recursive templating
+        image: "{{ c2_image_static }}"
         root_pass: "{{ lookup('password', '/dev/null length=16') }}"
         authorized_keys:
           - "{{ lookup('file', ssh_key_path) }}"
         state: present
-      register: linode_instance
+      register: c2_instance
 
     - name: Set c2_ip for later use
       set_fact:
@@ -72,7 +73,6 @@
             msg: "Could not connect to C2 server via SSH after multiple attempts"
           when: ssh_test.rc != 0
 
-    # Fix: use hardcoded "root" instead of a nested templating expression
     - name: Add C2 to inventory
       add_host:
         name: "c2"

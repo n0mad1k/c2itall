@@ -10,7 +10,8 @@
   vars:
     # Handle both region and selected_region for backward compatibility
     selected_region: "{{ selected_region | default(region) | default(linode_region) | default(region_choices | random) }}"
-    redirector_image: "{{ redirector_image | default('linode/debian12') }}"
+    # Use constant values directly to avoid recursive template resolution
+    redirector_image_static: "linode/debian12"
 
   tasks:
     - name: Validate required Linode token
@@ -25,12 +26,12 @@
         label: "{{ redirector_name }}"
         type: "{{ plan }}"
         region: "{{ selected_region }}"
-        image: "{{ redirector_image }}"
+        image: "{{ redirector_image_static }}"
         root_pass: "{{ lookup('password', '/dev/null length=16') }}"
         authorized_keys:
           - "{{ lookup('file', ssh_key_path) }}"
         state: present
-      register: linode_instance
+      register: redirector_instance
 
     - name: Set redirector_ip for later use
       set_fact:
@@ -67,7 +68,6 @@
             msg: "Could not connect to redirector via SSH after multiple attempts"
           when: ssh_test.rc != 0
 
-    # Fix: Use hardcoded "redirector" for the name and "root" for the user
     - name: Add redirector to inventory
       add_host:
         name: "redirector"
