@@ -55,12 +55,10 @@
 
     - name: Add redirector to inventory
       add_host:
-        name: "redirector"
-        groups: "redirectors"
+        name: "{{ redirector_name }}"
         ansible_host: "{{ redirector_ip }}"
-        ansible_user: "{{ ssh_user }}"
+        ansible_user: "root"  # Or directly use the user you need
         ansible_ssh_private_key_file: "{{ ssh_key_path | replace('.pub', '') }}"
-        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
 - name: Configure redirector server
   hosts: redirectors

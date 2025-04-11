@@ -1,5 +1,5 @@
 ansible
-linode_api4
+linode-api4
 boto3
 botocore
 awscli

@@ -1,0 +1,167 @@
+---
+# FlokiNET-specific security tasks
+# Enhanced security features for FlokiNET servers
+
+- name: Configure FlokiNET networking for maximum anonymity
+  lineinfile:
+    path: /etc/sysctl.conf
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    state: present
+  with_items:
+    - { regexp: '^net.ipv4.tcp_timestamps', line: 'net.ipv4.tcp_timestamps = 0' }
+    - { regexp: '^net.ipv4.tcp_syncookies', line: 'net.ipv4.tcp_syncookies = 1' }
+    - { regexp: '^net.ipv4.conf.all.accept_redirects', line: 'net.ipv4.conf.all.accept_redirects = 0' }
+    - { regexp: '^net.ipv6.conf.all.accept_redirects', line: 'net.ipv6.conf.all.accept_redirects = 0' }
+    - { regexp: '^net.ipv4.conf.all.send_redirects', line: 'net.ipv4.conf.all.send_redirects = 0' }
+    - { regexp: '^net.ipv4.conf.all.accept_source_route', line: 'net.ipv4.conf.all.accept_source_route = 0' }
+    - { regexp: '^net.ipv6.conf.all.accept_source_route', line: 'net.ipv6.conf.all.accept_source_route = 0' }
+    - { regexp: '^net.ipv4.conf.all.log_martians', line: 'net.ipv4.conf.all.log_martians = 1' }
+  notify: Apply sysctl settings
+
+- name: Install Tor for anonymous outbound connections
+  apt:
+    name:
+      - tor
+      - torsocks
+      - obfs4proxy
+    state: present
+    update_cache: yes
+  register: tor_installed
+  when: use_tor_proxy | default(true)
+
+- name: Create Tor configuration directory
+  file:
+    path: /etc/tor
+    state: directory
+    mode: '0755'
+  when: use_tor_proxy | default(true) and tor_installed is succeeded
+
+- name: Configure Tor for hardened privacy settings
+  template:
+    src: torrc.j2
+    dest: /etc/tor/torrc
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart Tor service
+  when: use_tor_proxy | default(true) and tor_installed is succeeded
+
+- name: Configure ProxyChains for routing through Tor
+  template:
+    src: proxychains.conf.j2
+    dest: /etc/proxychains.conf
+    owner: root
+    group: root
+    mode: '0644'
+  when: use_tor_proxy | default(true) and tor_installed is succeeded
+
+- name: Install iptables-persistent for firewall persistence
+  apt:
+    name: iptables-persistent
+    state: present
+    update_cache: yes
+
+- name: Configure hardened iptables rules for FlokiNET
+  template:
+    src: iptables-rules.j2
+    dest: /etc/iptables/rules.v4
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Apply iptables rules
+
+- name: Create SSH security hardening script
+  template:
+    src: secure-ssh.sh.j2
+    dest: /opt/c2/secure-ssh.sh
+    owner: root
+    group: root
+    mode: '0700'
+  when: use_hardened_ssh | default(true)
+
+- name: Run SSH security hardening script
+  command: /opt/c2/secure-ssh.sh
+  args:
+    creates: /opt/c2/.ssh_hardened
+  when: use_hardened_ssh | default(true)
+
+- name: Install timezone data
+  apt:
+    name: tzdata
+    state: present
+
+- name: Set timezone to UTC
+  timezone:
+    name: UTC
+
+- name: Configure DNS to use secure DNS servers
+  template:
+    src: resolv.conf.j2
+    dest: /etc/resolv.conf
+    owner: root
+    group: root
+    mode: '0644'
+  when: enable_dns_encryption | default(true)
+
+- name: Create directory for DNS cache configuration
+  file:
+    path: /etc/systemd/resolved.conf.d
+    state: directory
+    mode: '0755'
+  when: enable_dns_encryption | default(true)
+
+- name: Configure DNS caching with DNSCrypt
+  template:
+    src: dnscrypt.conf.j2
+    dest: /etc/systemd/resolved.conf.d/dnscrypt.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart systemd-resolved
+  when: enable_dns_encryption | default(true)
+
+# Configure memory security if enabled
+- name: Set memory security measures
+  lineinfile:
+    path: /etc/sysctl.conf
+    line: "{{ item }}"
+    state: present
+  with_items:
+    - "vm.swappiness=0"
+    - "kernel.randomize_va_space=2"
+  when: secure_memory | default(true)
+  notify: Apply sysctl settings
+
+# Configure history settings if disabled
+- name: Disable system history
+  lineinfile:
+    path: "{{ item.file }}"
+    line: "{{ item.line }}"
+    state: present
+    create: yes
+  with_nested:
+    - [{ file: '/etc/profile' }, { file: '/root/.bashrc' }]
+    - [{ line: 'export HISTFILESIZE=0' }, { line: 'export HISTSIZE=0' }, { line: 'unset HISTFILE' }]
+  when: disable_history | default(true)
+
+handlers:
+  - name: Apply sysctl settings
+    command: sysctl -p
+    
+  - name: Restart Tor service
+    service:
+      name: tor
+      state: restarted
+      enabled: yes
+    when: use_tor_proxy | default(true)
+    
+  - name: Apply iptables rules
+    command: iptables-restore < /etc/iptables/rules.v4
+    
+  - name: Restart systemd-resolved
+    service:
+      name: systemd-resolved
+      state: restarted
+      enabled: yes
+    when: enable_dns_encryption | default(true)

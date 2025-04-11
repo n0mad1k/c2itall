@@ -1,0 +1,634 @@
+---
+# FlokiNET full deployment playbook (C2 + Redirector)
+
+- name: Prepare FlokiNET infrastructure deployment
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars_files:
+    - vars.yaml
+  vars:
+    # Generate random shell handler port if not provided
+    shell_handler_port: "{{ shell_handler_port | default(4000 + 60000 | random) }}"
+    redirector_subdomain: "{{ redirector_subdomain | default('cdn') }}"
+    c2_subdomain: "{{ c2_subdomain | default('mail') }}"
+
+  tasks:
+    - name: Validate required FlokiNET configuration
+      assert:
+        that:
+          - redirector_ip is defined and redirector_ip != ""
+          - c2_ip is defined and c2_ip != ""
+        fail_msg: "FlokiNET requires both redirector_ip and c2_ip. Set these values in vars.yaml or via command line arguments."
+    
+    - name: Add redirector to inventory
+      add_host:
+        name: "redirector"
+        groups: "redirectors"
+        ansible_host: "{{ redirector_ip }}"
+        ansible_user: "{{ ssh_user | default('root') }}"
+        ansible_ssh_private_key_file: "{{ ssh_key_path | replace('.pub', '') }}"
+        ansible_ssh_port: "{{ ssh_port | default(22) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+    - name: Add C2 server to inventory
+      add_host:
+        name: "c2"
+        groups: "c2servers"
+        ansible_host: "{{ c2_ip }}"
+        ansible_user: "{{ ssh_user | default('root') }}"
+        ansible_ssh_private_key_file: "{{ ssh_key_path | replace('.pub', '') }}"
+        ansible_ssh_port: "{{ ssh_port | default(22) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+    - name: Verify SSH connection to redirector
+      wait_for:
+        host: "{{ redirector_ip }}"
+        port: "{{ ssh_port | default(22) }}"
+        delay: 10
+        timeout: 60
+        state: started
+      ignore_errors: true
+
+    - name: Verify SSH connection to C2 server
+      wait_for:
+        host: "{{ c2_ip }}"
+        port: "{{ ssh_port | default(22) }}"
+        delay: 10
+        timeout: 60
+        state: started
+      ignore_errors: true
+
+- name: Configure FlokiNET redirector
+  hosts: redirectors
+  become: true
+  gather_facts: true
+  vars_files:
+    - vars.yaml
+  tasks:
+    - name: Wait for apt to be available
+      apt:
+        update_cache: yes
+      register: apt_result
+      until: apt_result is success
+      retries: 5
+      delay: 10
+
+    - name: Set hostname
+      hostname:
+        name: "redirector"
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist
+
+    - name: Install base utilities and tools via apt
+      apt:
+        name:
+          - git
+          - wget
+          - curl
+          - unzip
+          - python3-pip
+          - python3-virtualenv
+          - tmux
+          - pipx
+          - nmap
+          - tcpdump
+          - nginx
+          - certbot
+          - python3-certbot-nginx
+          - socat
+          - netcat-openbsd
+          - secure-delete
+        state: present
+
+    - name: Set a custom MOTD
+      template:
+        src: motd-flokinet.j2
+        dest: /etc/motd
+        owner: root
+        group: root
+        mode: '0644'
+      vars:
+        letsencrypt_email: "{{ letsencrypt_email }}"
+        domain: "{{ domain }}"
+        redirector_subdomain: "{{ redirector_subdomain }}"
+
+    - name: Create directories for operational scripts
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0700'
+        owner: root
+        group: root
+      with_items:
+        - /opt/c2
+        - /opt/shell-handler
+
+    - name: Copy clean-logs.sh script
+      copy:
+        src: "../files/clean-logs.sh"
+        dest: /opt/c2/clean-logs.sh
+        mode: '0700'
+        owner: root
+        group: root
+
+    - name: Copy secure-exit.sh script
+      copy:
+        src: "../files/secure-exit.sh"
+        dest: /opt/c2/secure-exit.sh
+        mode: '0700'
+        owner: root
+        group: root
+
+    - name: Copy shell handler script
+      copy:
+        src: "../files/persistent-listener.sh"
+        dest: /opt/shell-handler/persistent-listener.sh
+        mode: '0700'
+        owner: root
+        group: root
+
+    - name: Configure shell handler script with C2 IP
+      replace:
+        path: /opt/shell-handler/persistent-listener.sh
+        regexp: 'C2_HOST="127.0.0.1"'
+        replace: 'C2_HOST="{{ c2_ip }}"'
+
+    - name: Configure shell handler script with listening port
+      replace:
+        path: /opt/shell-handler/persistent-listener.sh
+        regexp: 'LISTEN_PORT=4444'
+        replace: 'LISTEN_PORT={{ shell_handler_port }}'
+
+    - name: Create shell handler service
+      template:
+        src: shell-handler.service.j2
+        dest: /etc/systemd/system/shell-handler.service
+        mode: '0644'
+        owner: root
+        group: root
+
+    - name: Configure NGINX for zero-logging if enabled
+      template:
+        src: nginx.conf.j2
+        dest: /etc/nginx/nginx.conf
+        mode: '0644'
+        owner: root
+        group: root
+      when: zero_logs | bool
+
+    - name: Configure NGINX for C2 redirection
+      template:
+        src: redirector-site.conf.j2
+        dest: /etc/nginx/sites-available/default
+        mode: '0644'
+        owner: root
+        group: root
+
+    - name: Create legitimate-looking index.html
+      template:
+        src: redirector-index.html.j2
+        dest: /var/www/html/index.html
+        mode: '0644'
+        owner: www-data
+        group: www-data
+
+    - name: Start and enable shell handler service
+      systemd:
+        name: shell-handler
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Set up cron job for log cleaning if zero-logs enabled
+      cron:
+        name: "Clean logs"
+        minute: "0"
+        hour: "*/6"
+        job: "/opt/c2/clean-logs.sh > /dev/null 2>&1"
+      when: zero_logs | bool
+
+    - name: Install Let's Encrypt certificate if domain specified
+      shell: |
+        certbot --nginx -d {{ redirector_subdomain }}.{{ domain }} --non-interactive --agree-tos -m {{ letsencrypt_email }}
+      args:
+        creates: /etc/letsencrypt/live/{{ redirector_subdomain }}.{{ domain }}/fullchain.pem
+      when: domain != "example.com"
+
+    - name: Restart NGINX
+      systemd:
+        name: nginx
+        state: restarted
+
+    - name: FlokiNET-specific security configurations
+      include_tasks: flokinet-security.yml
+      when: enable_hardened_security | default(true)
+
+- name: Configure FlokiNET C2 server
+  hosts: c2servers
+  become: true
+  gather_facts: true
+  vars_files:
+    - vars.yaml
+  tasks:
+    - name: Wait for apt to be available
+      apt:
+        update_cache: yes
+      register: apt_result
+      until: apt_result is success
+      retries: 5
+      delay: 10
+
+    - name: Set hostname
+      hostname:
+        name: "c2"
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist
+
+    - name: Set a custom MOTD
+      template:
+        src: motd-flokinet.j2
+        dest: /etc/motd
+        owner: root
+        group: root
+        mode: '0644'
+      vars:
+        letsencrypt_email: "{{ letsencrypt_email }}"
+        domain: "{{ domain }}"
+        c2_subdomain: "{{ c2_subdomain }}"
+
+    - name: Install base utilities and tools via apt
+      apt:
+        name:
+          - git
+          - wget
+          - curl
+          - unzip
+          - python3-pip
+          - python3-virtualenv
+          - tmux
+          - pipx
+          - nmap
+          - tcpdump
+          - hydra
+          - john
+          - hashcat
+          - sqlmap
+          - gobuster
+          - dirb
+          - enum4linux
+          - dnsenum
+          - seclists
+          - responder
+          - golang
+          - proxychains
+          - tor
+          - crackmapexec
+          - jq
+          - unzip
+          - postfix
+          - certbot
+          - opendkim
+          - opendkim-tools
+          - dovecot-core
+          - dovecot-imapd
+          - dovecot-pop3d
+          - dovecot-sieve
+          - dovecot-managesieved
+          - yq
+        state: present
+
+    - name: Create Tools directory
+      file:
+        path: /root/Tools
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Ensure pipx path is configured
+      shell: |
+        pipx ensurepath
+      args:
+        executable: /bin/bash
+
+    - name: Install tools via pipx
+      shell: |
+        export PATH=$PATH:/root/.local/bin
+        pipx ensurepath
+        pipx install git+https://github.com/Pennyw0rth/NetExec
+        pipx install git+https://github.com/blacklanternsecurity/TREVORspray
+        pipx install impacket
+      args:
+        executable: /bin/bash
+
+    - name: Download Kerbrute
+      shell: |
+        mkdir -p ~/Tools/Kerbrute
+        wget https://github.com/ropnop/kerbrute/releases/latest/download/kerbrute_linux_amd64 -O ~/Tools/Kerbrute/kerbrute
+        chmod +x ~/Tools/Kerbrute/kerbrute
+      args:
+        executable: /bin/bash
+        creates: /root/Tools/Kerbrute/kerbrute
+
+    - name: Clone SharpCollection nightly builds
+      git:
+        repo: https://github.com/Flangvik/SharpCollection.git
+        dest: ~/Tools/SharpCollection
+        version: master
+      ignore_errors: yes
+
+    - name: Clone PEASS-ng
+      git:
+        repo: https://github.com/carlospolop/PEASS-ng.git
+        dest: ~/Tools/PEASS-ng
+      ignore_errors: yes
+
+    - name: Clone MailSniper
+      git:
+        repo: https://github.com/dafthack/MailSniper.git
+        dest: ~/Tools/MailSniper
+      ignore_errors: yes
+
+    - name: Clone Inveigh
+      git:
+        repo: https://github.com/Kevin-Robertson/Inveigh.git
+        dest: ~/Tools/Inveigh
+      ignore_errors: yes
+
+    - name: Install Sliver C2 server
+      shell: |
+        curl https://sliver.sh/install | bash
+        systemctl enable sliver
+        systemctl start sliver
+
+    - name: Install Metasploit Framework (Nightly Build)
+      shell: |
+        curl https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb > ~/Tools/msfinstall
+        chmod 755 ~/Tools/msfinstall
+        ~/Tools/msfinstall
+      args:
+        executable: /bin/bash
+        creates: /usr/bin/msfconsole
+
+    - name: Grab GoPhish
+      shell: |
+        curl -L "$(curl -s https://api.github.com/repos/gophish/gophish/releases/latest | jq -r '.assets[] | select(.browser_download_url | contains("linux-64bit.zip")) | .browser_download_url')" -o ~/Tools/gophish.zip
+        unzip ~/Tools/gophish.zip -d ~/Tools/gophish
+        rm -rf ~/Tools/gophish.zip
+        chmod +x ~/Tools/gophish/gophish
+      args:
+        creates: /root/Tools/gophish/gophish
+
+    - name: Deploy Gophish config.json with custom admin port
+      template:
+        src: gophish-config.j2
+        dest: ~/Tools/gophish/config.json
+        owner: root
+        group: root
+        mode: '0644'
+      vars:
+        gophish_admin_port: "{{ gophish_admin_port }}"
+        domain: "{{ domain }}"
+
+    - name: Configure Postfix main.cf
+      lineinfile:
+        path: /etc/postfix/main.cf
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      with_items:
+        - { regexp: '^myhostname', line: "myhostname = mail.{{ domain }}" }
+        - { regexp: '^mydomain', line: "mydomain = {{ domain }}" }
+        - { regexp: '^myorigin', line: "myorigin = $mydomain" }
+        - { regexp: '^inet_interfaces', line: "inet_interfaces = all" }
+        - { regexp: '^inet_protocols', line: "inet_protocols = ipv4" }
+        - { regexp: '^smtpd_banner', line: "smtpd_banner = $myhostname ESMTP $mail_name" }
+        - { regexp: '^mynetworks', line: "mynetworks = 127.0.0.0/8 [::1]/128" }
+        - { regexp: '^relay_domains', line: "relay_domains = $mydestination" }
+        - { regexp: '^smtpd_tls_cert_file', line: "smtpd_tls_cert_file = /etc/letsencrypt/live/{{ domain }}/fullchain.pem" }
+        - { regexp: '^smtpd_tls_key_file', line: "smtpd_tls_key_file = /etc/letsencrypt/live/{{ domain }}/privkey.pem" }
+        - { regexp: '^smtpd_tls_security_level', line: "smtpd_tls_security_level = encrypt" }
+        - { regexp: '^smtpd_tls_session_cache_database', line: "smtpd_tls_session_cache_database = btree:${data_directory}/smtpd_scache" }
+        - { regexp: '^smtp_tls_session_cache_database', line: "smtp_tls_session_cache_database = btree:${data_directory}/smtp_scache" }
+        - { regexp: '^smtpd_use_tls', line: "smtpd_use_tls = yes" }
+        - { regexp: '^smtpd_tls_auth_only', line: "smtpd_tls_auth_only = yes" }
+        - { regexp: '^milter_default_action', line: "milter_default_action = accept" }
+        - { regexp: '^milter_protocol', line: "milter_protocol = 6" }
+        - { regexp: '^smtpd_milters', line: "smtpd_milters = unix:/var/spool/postfix/opendkim/opendkim.sock" }
+        - { regexp: '^non_smtpd_milters', line: "non_smtpd_milters = unix:/var/spool/postfix/opendkim/opendkim.sock" }  
+
+    - name: Configure OpenDKIM
+      lineinfile:
+        path: /etc/opendkim.conf
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      with_items:
+        - { regexp: '^Domain', line: "Domain   {{ domain }}" }
+        - { regexp: '^KeyFile', line: "KeyFile /etc/opendkim/keys/{{ domain }}/mail.private" }
+        - { regexp: '^Selector', line: "Selector mail" }
+        - { regexp: '^Socket', line: "Socket   local:/var/spool/postfix/opendkim/opendkim.sock" }
+        - { regexp: '^Syslog', line: "Syslog   yes" }
+        - { regexp: '^UMask', line: "UMask    002" }
+        - { regexp: '^Mode', line: "Mode     sv" }      
+
+    - name: Create DKIM directory
+      file:
+        path: /etc/opendkim/keys/{{ domain }}
+        state: directory
+        owner: opendkim
+        group: opendkim
+        mode: 0700      
+
+    - name: Generate DKIM keys
+      command: >
+        opendkim-genkey -D /etc/opendkim/keys/{{ domain }} -d {{ domain }} -s mail
+      args:
+        creates: /etc/opendkim/keys/{{ domain }}/mail.private      
+
+    - name: Set permissions for DKIM keys
+      file:
+        path: /etc/opendkim/keys/{{ domain }}/mail.private
+        owner: opendkim
+        group: opendkim
+        mode: 0600      
+
+    - name: Configure OpenDKIM TrustedHosts
+      copy:
+        content: |
+          127.0.0.1
+          ::1
+          localhost
+          {{ domain }}
+        dest: /etc/opendkim/TrustedHosts
+        owner: opendkim
+        group: opendkim
+        mode: 0644      
+
+    - name: Enable submission port (587) in master.cf
+      blockinfile:
+        path: /etc/postfix/master.cf
+        insertafter: '^#submission'
+        block: |
+          submission     inet  n       -       y       -       -       smtpd
+            -o syslog_name=postfix/submission
+            -o smtpd_tls_security_level=encrypt
+            -o smtpd_sasl_auth_enable=yes
+            -o smtpd_recipient_restrictions=permit_sasl_authenticated,reject
+            -o smtpd_relay_restrictions=permit_sasl_authenticated,reject
+
+    - name: Configure Dovecot for Postfix SASL
+      blockinfile:
+        path: /etc/dovecot/conf.d/10-master.conf
+        insertafter: '^service auth {'
+        block: |
+          # Postfix smtp-auth
+          unix_listener /var/spool/postfix/private/auth {
+            mode = 0660
+            user = postfix
+            group = postfix
+          }
+
+    - name: Set Dovecot auth_mechanisms
+      lineinfile:
+        path: /etc/dovecot/conf.d/10-auth.conf
+        regexp: '^auth_mechanisms'
+        line: 'auth_mechanisms = plain login'
+
+    - name: Create Dovecot password file for SASL authentication
+      file:
+        path: /etc/dovecot/passwd
+        state: touch
+        mode: '0600'
+        owner: dovecot
+        group: dovecot
+
+    - name: Add SMTP auth user to Dovecot
+      lineinfile:
+        path: /etc/dovecot/passwd
+        line: "{{ smtp_auth_user }}:{{ smtp_auth_pass | password_hash('sha512_crypt') }}"
+
+    - name: Disable system auth and use passwd-file
+      lineinfile:
+        path: /etc/dovecot/conf.d/10-auth.conf
+        regexp: '^!include auth-system.conf.ext'
+        line: '#!include auth-system.conf.ext'
+
+    - name: Add auth-passwdfile configuration
+      blockinfile:
+        path: /etc/dovecot/conf.d/10-auth.conf
+        insertafter: '^auth_mechanisms ='
+        block: |
+          passdb {
+            driver = passwd-file
+            args = scheme=sha512_crypt /etc/dovecot/passwd
+          }
+          userdb {
+            driver = static
+            args = uid=vmail gid=vmail home=/var/vmail/%u
+          }
+
+    - name: Create vmail user/group
+      group:
+        name: vmail
+        gid: 5000
+        state: present
+
+    - name: Create vmail user
+      user:
+        name: vmail
+        uid: 5000
+        group: vmail
+        create_home: no
+
+    - name: Create directories for operational scripts
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0700'
+        owner: root
+        group: root
+      with_items:
+        - /opt/c2
+        - /opt/beacons
+
+    - name: Copy clean-logs.sh script
+      copy:
+        src: "../files/clean-logs.sh"
+        dest: /opt/c2/clean-logs.sh
+        mode: '0700'
+        owner: root
+        group: root
+
+    - name: Copy secure-exit.sh script
+      copy:
+        src: "../files/secure-exit.sh"
+        dest: /opt/c2/secure-exit.sh
+        mode: '0700'
+        owner: root
+        group: root
+
+    - name: Copy serve-beacons.sh script
+      copy:
+        src: "../files/serve-beacons.sh"
+        dest: /opt/c2/serve-beacons.sh
+        mode: '0700'
+        owner: root
+        group: root
+        
+    - name: Configure serve-beacons.sh with C2 IP
+      replace:
+        path: /opt/c2/serve-beacons.sh
+        regexp: 'C2_HOST=.*'
+        replace: 'C2_HOST="{{ c2_ip }}"'
+
+    - name: Set up cron job for log cleaning if zero-logs enabled
+      cron:
+        name: "Clean logs"
+        minute: "0"
+        hour: "*/6"
+        job: "/opt/c2/clean-logs.sh > /dev/null 2>&1"
+      when: zero_logs | bool
+
+    - name: Install Let's Encrypt certificate if domain specified
+      shell: |
+        certbot certonly --standalone -d {{ c2_subdomain }}.{{ domain }} --non-interactive --agree-tos -m {{ letsencrypt_email }}
+      args:
+        creates: /etc/letsencrypt/live/{{ c2_subdomain }}.{{ domain }}/fullchain.pem
+      when: domain != "example.com"
+
+    - name: Restart Postfix
+      service:
+        name: postfix
+        state: restarted
+
+    - name: Restart Dovecot
+      service:
+        name: dovecot
+        state: restarted
+
+    - name: FlokiNET-specific security configurations
+      include_tasks: flokinet-security.yml
+      when: enable_hardened_security | default(true)
+
+    - name: Print deployment summary
+      debug:
+        msg:
+          - "FlokiNET Deployment Complete!"
+          - "-------------------------------"
+          - "C2 Server Domain: {{ c2_subdomain }}.{{ domain }} (Update DNS A record)"
+          - "Redirector Domain: {{ redirector_subdomain }}.{{ domain }} (Update DNS A record)"
+          - "Shell Handler Port: {{ shell_handler_port }}"
+          - "GoPhish Admin Port: {{ gophish_admin_port }}"
+      when: not disable_summary | default(false)
