@@ -55,7 +55,7 @@
 
 - name: Create shell handler service
   template:
-    src: "shell-handler.service.j2"
+    src: "../templates/shell-handler.service.j2"
     dest: /etc/systemd/system/shell-handler.service
     mode: '0644'
     owner: root
@@ -63,7 +63,7 @@
 
 - name: Configure NGINX for zero-logging if enabled
   template:
-    src: "nginx.conf.j2"
+    src: "../templates/nginx.conf.j2"
     dest: /etc/nginx/nginx.conf
     mode: '0644'
     owner: root
@@ -72,7 +72,7 @@
 
 - name: Configure NGINX for C2 redirection
   template:
-    src: "redirector-site.conf.j2"
+    src: "../templates/redirector-site.conf.j2"
     dest: /etc/nginx/sites-available/default
     mode: '0644'
     owner: root
@@ -80,7 +80,7 @@
 
 - name: Create legitimate-looking index.html
   template:
-    src: "redirector-index.html.j2"
+    src: "../templates/redirector-index.html.j2"
     dest: /var/www/html/index.html
     mode: '0644'
     owner: www-data

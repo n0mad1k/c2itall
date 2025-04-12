@@ -37,7 +37,6 @@ http {
     
     # Headers to confuse fingerprinting
     # Microsoft-IIS/8.5 server header to throw off analysis
-    #more_set_headers 'Server: Microsoft-IIS/8.5';
     add_header Server "Microsoft-IIS/8.5";
     server_name_in_redirect off;
 
