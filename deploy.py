@@ -617,15 +617,16 @@ def run_ansible_playbook(playbook, inventory, config, debug=False):
         else:
             extra_vars['ssh_user'] = 'kali'
     
-    # Use the current Python interpreter for all Ansible operations
-    # This ensures any modules needed are available
-    current_python = sys.executable
-    extra_vars['ansible_python_interpreter'] = current_python
+    # CRITICAL FIX: Remove the ansible_python_interpreter from extra_vars
+    # This allows the inventory file setting to take precedence
+    if 'ansible_python_interpreter' in extra_vars:
+        extra_vars.pop('ansible_python_interpreter')
     
     extra_vars_json = json.dumps(extra_vars)
     
     # Set PYTHONPATH to include site-packages
     env = os.environ.copy()
+    current_python = sys.executable
     python_path = subprocess.check_output(
         [current_python, "-c", "import sys; import site; print(':'.join(sys.path + site.getsitepackages()))"],
         text=True
