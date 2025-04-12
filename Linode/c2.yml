@@ -81,6 +81,7 @@
         ansible_user: "root"
         ansible_ssh_private_key_file: "{{ ssh_key_path | replace('.pub', '') }}"
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+        ansible_python_interpreter: "/usr/bin/python3"  # Use remote system's Python
 
 - name: Configure C2 server
   hosts: c2servers

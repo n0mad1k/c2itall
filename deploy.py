@@ -490,8 +490,8 @@ def create_inventory_file(config, deployment_type):
         # For local execution, use the current Python interpreter
         inventory_content.append(f"ansible_python_interpreter={sys.executable}")
     else:
-        # For remote hosts, explicitly set to auto-detect or python3
-        inventory_content.append("ansible_python_interpreter=auto")
+        # For remote hosts, use the system Python interpreter
+        inventory_content.append("ansible_python_interpreter=/usr/bin/python3")
     
     # Add specific host sections based on deployment type
     if deployment_type == "local":
