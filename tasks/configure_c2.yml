@@ -1,5 +1,5 @@
 ---
-# Common task for configuring C2 server
+# Common tasks for configuring C2 server
 # Shared across all providers
 
 - name: Update apt cache
@@ -8,7 +8,7 @@
 
 - name: Set a custom MOTD
   template:
-    src: "../templates/motd.j2" 
+    src: "../templates/motd-linode.j2"
     dest: /etc/motd
     owner: root
     group: root
@@ -55,6 +55,18 @@
       - yq
     state: present
 
+- name: Create directories for operational scripts
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0700'
+    owner: root
+    group: root
+  with_items:
+    - /opt/c2
+    - /opt/beacons
+    - /opt/payloads
+
 - name: Copy operational scripts
   copy:
     src: "{{ item }}"
@@ -67,45 +79,9 @@
     - secure-exit.sh
     - serve-beacons.sh
 
-- name: Create operational directories
-  file:
-    path: "{{ item }}"
-    state: directory
-    mode: '0700'
-    owner: root
-    group: root
-  with_items:
-    - /opt/c2
-    - /opt/beacons
-    - /opt/payloads
-
 - name: Create Sliver service file
-  copy:
-    content: |
-      [Unit]
-      Description=Sliver C2 Server
-      After=network.target
-      
-      [Service]
-      Type=simple
-      User=root
-      Group=root
-      WorkingDirectory=/root/.sliver
-      ExecStart=/usr/local/bin/sliver-server daemon
-      Restart=always
-      RestartSec=10
-      
-      # Security measures
-      PrivateTmp=true
-      ProtectHome=false
-      NoNewPrivileges=true
-      
-      # Hide process information
-      StandardOutput=null
-      StandardError=null
-      
-      [Install]
-      WantedBy=multi-user.target
+  template:
+    src: "../templates/sliver-server.service.j2"
     dest: /etc/systemd/system/sliver.service
     mode: '0644'
     owner: root

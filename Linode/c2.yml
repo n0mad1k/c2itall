@@ -131,6 +131,6 @@
           - "C2 Server Deployment Complete!"
           - "-----------------------------"
           - "C2 Server IP: {{ ansible_host }}"
-          - "C2 Server Domain: {{ c2_subdomain }}.{{ domain }} (Update DNS A record)"
+          - "C2 Server Domain: {{ domain }}"
           - "GoPhish Admin Port: {{ gophish_admin_port }}"
       when: not disable_summary | default(false)

@@ -164,7 +164,7 @@
 
 - name: Deploy Gophish config.json with custom admin port
   template:
-    src: gophish-config.j2
+    src: "../templates/gophish-config.j2"
     dest: "{{ tools_dir }}/gophish/config.json"
     owner: "{{ ansible_user }}"
     group: "{{ ansible_user }}"
