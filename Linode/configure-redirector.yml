@@ -102,7 +102,7 @@
         
     - name: Copy clean-logs.sh script
       copy:
-        src: "../files/clean-logs.sh"
+        src: "../files/clean-logs.sh"  # Fix the path to point to root files directory
         dest: /opt/c2/clean-logs.sh
         mode: '0700'
         owner: root
@@ -110,7 +110,7 @@
         
     - name: Copy shell handler script
       copy:
-        src: "../files/persistent-listener.sh"
+        src: "../files/persistent-listener.sh"  # Use relative path with ../ prefix
         dest: /opt/shell-handler/persistent-listener.sh
         mode: '0700'
         owner: root

@@ -446,23 +446,17 @@
         group: root
       ignore_errors: true
         
-    - name: Copy clean-logs.sh script
+    - name: Copy operational scripts
       copy:
-        src: "../files/clean-logs.sh"
-        dest: /opt/c2/clean-logs.sh
+        src: "../files/{{ item }}"  # Fix path to use ../files/
+        dest: "/opt/c2/{{ item }}"
         mode: '0700'
         owner: root
         group: root
-      ignore_errors: true
-        
-    - name: Copy secure-exit.sh script
-      copy:
-        src: "../files/secure-exit.sh"
-        dest: /opt/c2/secure-exit.sh
-        mode: '0700'
-        owner: root
-        group: root
-      ignore_errors: true
+      with_items:
+        - clean-logs.sh
+        - secure-exit.sh
+        - serve-beacons.sh
         
     - name: Set up cron job for log cleaning if zero-logs enabled
       cron:

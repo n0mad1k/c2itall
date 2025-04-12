@@ -490,7 +490,7 @@ def create_inventory_file(config, deployment_type):
         # For local execution, use the current Python interpreter
         inventory_content.append(f"ansible_python_interpreter={sys.executable}")
     else:
-        # For remote hosts, let Ansible auto-detect the Python interpreter
+        # For remote hosts, explicitly set to auto-detect or python3
         inventory_content.append("ansible_python_interpreter=auto")
     
     # Add specific host sections based on deployment type
@@ -531,94 +531,8 @@ def run_ansible_playbook(playbook, inventory, config, debug=False):
         # Map linode_region to selected_region for compatibility
         extra_vars['selected_region'] = extra_vars['linode_region']
     
-    # Explicitly set hard-coded user values rather than using templated defaults
-    if 'ssh_user' in extra_vars:
-        extra_vars.pop('ssh_user')
-        if config['provider'] == 'linode':
-            extra_vars['ssh_user'] = 'root'
-        else:
-            extra_vars['ssh_user'] = 'kali'
-    
-    # Remove the Python interpreter setting from extra_vars 
-    # It should be set properly in the inventory file instead
-    if 'ansible_python_interpreter' in extra_vars:
-        extra_vars.pop('ansible_python_interpreter')
-    
-    extra_vars_json = json.dumps(extra_vars)
-    
-    # Set PYTHONPATH to include site-packages
-    env = os.environ.copy()
-    current_python = sys.executable
-    python_path = subprocess.check_output(
-        [current_python, "-c", "import sys; import site; print(':'.join(sys.path + site.getsitepackages()))"],
-        text=True
-    ).strip()
-    env["PYTHONPATH"] = python_path
-    
-    # Build command
-    cmd = [
-        "ansible-playbook",
-        "-i", inventory,
-        playbook,
-        "-e", extra_vars_json
-    ]
-    
-    # Add verbosity if debug mode is enabled
-    if debug:
-        cmd.append("-vvv")
-    else:
-        # Always add some verbosity for basic output
-        cmd.append("-v")
-    
-    # Log the command
-    if debug:
-        logging.debug(f"Running Ansible command: {' '.join(cmd)}")
-    else:
-        logging.info(f"Running Ansible playbook: {playbook}")
-    
-    # Run the command
-    try:
-        result = subprocess.run(
-            cmd, 
-            check=True, 
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE, 
-            text=True,
-            env=env  # Use the modified environment
-        )
-        logging.info(f"Playbook {playbook} executed successfully")
-        return True, result.stdout, result.stderr
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Playbook {playbook} failed with exit code {e.returncode}")
-        if debug:
-            logging.error(f"Command stdout: {e.stdout}")
-            logging.error(f"Command stderr: {e.stderr}")
-        return False, e.stdout, e.stderr
-
-def run_ansible_playbook(playbook, inventory, config, debug=False):
-    """Run an Ansible playbook with the given inventory and config"""
-    # Convert config dict to JSON for extra-vars
-    # Filter out None values and complex objects
-    extra_vars = {k: v for k, v in config.items() if v is not None and not isinstance(v, (dict, list, tuple))}
-    
-    # Handle the region parameter correctly
-    if 'region' in extra_vars:
-        # Set selected_region to match what the playbook expects
-        extra_vars['selected_region'] = extra_vars['region']
-    elif 'linode_region' in extra_vars:
-        # Map linode_region to selected_region for compatibility
-        extra_vars['selected_region'] = extra_vars['linode_region']
-    
-    # Explicitly set hard-coded user values rather than using templated defaults
-    if 'ssh_user' in extra_vars:
-        extra_vars.pop('ssh_user')
-        if config['provider'] == 'linode':
-            extra_vars['ssh_user'] = 'root'
-        else:
-            extra_vars['ssh_user'] = 'kali'
-    
-    # CRITICAL FIX: Remove the ansible_python_interpreter from extra_vars
-    # This allows the inventory file setting to take precedence
+    # CRITICAL FIX: Remove ansible_python_interpreter from extra_vars
+    # This prevents local interpreter path from being used on remote hosts
     if 'ansible_python_interpreter' in extra_vars:
         extra_vars.pop('ansible_python_interpreter')
     
