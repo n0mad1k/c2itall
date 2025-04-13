@@ -1,0 +1,132 @@
+---
+# Linode Tracker Deployment Playbook
+
+- name: Deploy Linode email tracking server
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars_files:
+    - vars.yaml
+  vars:
+    # Default values
+    linode_region: "{{ linode_region | default(region_choices | random) }}"
+    plan: "{{ plan | default('g6-nanode-1') }}"  # Use smallest plan for tracker
+    tracker_image: "linode/debian12"
+    
+    # Generate random instance name if not provided
+    tracker_name: "{{ tracker_name | default('t-' + 9999999999 | random | to_uuid | hash('md5') | truncate(8, True, '')) }}"
+
+  tasks:
+    - name: Validate required Linode token
+      assert:
+        that:
+          - linode_token is defined and linode_token != ""
+        fail_msg: "Linode API token is required. Set linode_token in vars.yaml."
+
+    - name: Create tracker Linode instance
+      community.general.linode_v4:
+        access_token: "{{ linode_token }}"
+        label: "{{ tracker_name }}"
+        type: "{{ plan }}"
+        region: "{{ linode_region }}"
+        image: "{{ tracker_image }}"
+        root_pass: "{{ lookup('password', '/dev/null length=16') }}"
+        authorized_keys:
+          - "{{ lookup('file', ssh_key_path) }}"
+        state: present
+      register: tracker_instance
+
+    - name: Set tracker_ip for later use
+      set_fact:
+        tracker_ip: "{{ tracker_instance.instance.ipv4[0] }}"
+        tracker_instance_id: "{{ tracker_instance.instance.id }}"
+
+    - name: Wait for tracker SSH to be available
+      wait_for:
+        host: "{{ tracker_ip }}"
+        port: 22
+        delay: 60
+        timeout: 300
+        state: started
+
+    - name: Add tracker to inventory
+      add_host:
+        name: "tracker"
+        groups: "trackers"
+        ansible_host: "{{ tracker_ip }}"
+        ansible_user: "root"
+        ansible_ssh_private_key_file: "{{ ssh_key_path | replace('.pub', '') }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+- name: Configure tracker server
+  hosts: trackers
+  become: true
+  gather_facts: true
+  vars_files:
+    - vars.yaml
+  vars:
+    tracker_domain: "{{ tracker_domain | default('track.' + domain) }}"
+  tasks:
+    - name: Update and install required packages
+      apt:
+        name:
+          - nginx
+          - certbot
+          - python3-certbot-nginx
+          - git
+          - curl
+          - python3-pip
+        update_cache: yes
+        state: present
+
+    - name: Clone email tracker repository
+      git:
+        repo: https://github.com/Datalux/Osint-Tracker.git
+        dest: /opt/tracker
+        version: master
+      ignore_errors: yes
+
+    - name: Install tracker dependencies
+      pip:
+        requirements: /opt/tracker/requirements.txt
+      ignore_errors: yes
+
+    - name: Configure tracker settings
+      template:
+        src: "../templates/tracker-config.j2"
+        dest: /opt/tracker/config.py
+        mode: '0644'
+      ignore_errors: yes
+      
+    - name: Set up SSL if requested
+      block:
+        - name: Install Let's Encrypt certificate
+          shell: |
+            certbot --nginx -d {{ tracker_domain }} --non-interactive --agree-tos -m {{ tracker_email }}
+          args:
+            creates: /etc/letsencrypt/live/{{ tracker_domain }}/fullchain.pem
+      when: tracker_setup_ssl | default(true) | bool
+      ignore_errors: yes
+
+    - name: Create systemd service for tracker
+      template:
+        src: "../templates/tracker.service.j2"
+        dest: /etc/systemd/system/tracker.service
+        mode: '0644'
+      ignore_errors: yes
+
+    - name: Start and enable tracker service
+      systemd:
+        name: tracker
+        state: started
+        enabled: yes
+        daemon_reload: yes
+      ignore_errors: yes
+
+    - name: Print deployment summary
+      debug:
+        msg:
+          - "Email Tracker Deployment Complete!"
+          - "------------------------------"
+          - "Tracker IP: {{ ansible_host }}"
+          - "Tracker Domain: {{ tracker_domain }} (Update DNS A record)"

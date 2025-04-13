@@ -1,0 +1,33 @@
+# templates/tracker-config.j2
+"""
+Email Tracker Configuration
+"""
+
+# Basic Configuration
+SECRET_KEY = '{{ lookup("password", "/dev/null chars=ascii_letters,digits length=32") }}'
+DEBUG = False
+
+# Database settings
+DB_NAME = 'tracker.db'
+
+# Domain configuration
+DOMAIN = '{{ tracker_domain }}'
+USE_HTTPS = {{ tracker_setup_ssl | default(true) | lower }}
+
+# Tracking pixel path
+TRACKING_PATH = 'pixel.png'
+
+# API Keys
+{% if tracker_ipinfo_token is defined and tracker_ipinfo_token != "" %}
+IPINFO_TOKEN = '{{ tracker_ipinfo_token }}'
+{% else %}
+IPINFO_TOKEN = None
+{% endif %}
+
+# Notification settings
+ENABLE_NOTIFICATIONS = False
+NOTIFICATION_EMAIL = '{{ tracker_email | default("admin@" + domain) }}'
+
+# Logger configuration
+LOG_LEVEL = 'INFO'
+LOG_FILE = '/var/log/tracker.log'

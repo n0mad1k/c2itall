@@ -287,8 +287,12 @@ def interactive_setup():
     # Domain configuration
     default_domain = vars_data.get('domain', 'example.com')
     config['domain'] = input(f"\nDomain name [default: {default_domain}]: ") or default_domain
-    
-    default_email = vars_data.get('letsencrypt_email', f"admin@{config['domain']}")
+
+    # Always use the most up-to-date domain for the email default
+    default_email = vars_data.get('letsencrypt_email')
+    if not default_email or "example.com" in default_email:
+        default_email = f"admin@{config['domain']}"
+        
     config['letsencrypt_email'] = input(f"Email for Let's Encrypt [default: {default_email}]: ") or default_email
     
     # Security options
