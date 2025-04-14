@@ -95,13 +95,6 @@
     job: "/opt/c2/clean-logs.sh > /dev/null 2>&1"
   when: zero_logs | bool
 
-- name: Install Let's Encrypt certificate if domain specified
-  shell: |
-    certbot certonly --standalone -d {{ c2_subdomain }}.{{ domain }} --non-interactive --agree-tos -m {{ letsencrypt_email }}
-  args:
-    creates: /etc/letsencrypt/live/{{ c2_subdomain }}.{{ domain }}/fullchain.pem
-  when: domain != "example.com"
-
 - name: Configure and start beacon server
   shell: |
     sed -i "s/C2_HOST=.*/C2_HOST=\"{{ ansible_host }}\"/g" /opt/c2/serve-beacons.sh

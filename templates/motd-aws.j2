@@ -47,9 +47,14 @@ Security Scripts in /opt/c2/:
 
 Also, remember that many reconnaissance and attack tools are now available system-wide due to the apt and pipx installations.
 
-Once your DNS record points to this server's public IP, you can obtain a Let's Encrypt certificate by running:
+Once your DNS record points to this server’s public IP, you can obtain a Let’s Encrypt certificate by running:
 
-    sudo certbot certonly --non-interactive --agree-tos --email {{ letsencrypt_email }} --standalone -d {{ c2_subdomain }}.{{ domain }}
+    sudo certbot certonly --non-interactive --agree-tos --email {{ letsencrypt_email }} --standalone -d {{ domain }}
+    sudo certbot certonly --non-interactive --agree-tos --email {{ letsencrypt_email }} --standalone -d mail.{{ domain }}
+    sudo certbot certonly --non-interactive --agree-tos --email {{ letsencrypt_email }} --standalone -d tracker.{{ domain }}
+    systemctl start nginx.service
+
+Remember to ensure your DNS is set correctly before running the above command.
 
 **IMPORTANT:**  
 

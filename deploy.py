@@ -87,6 +87,8 @@ def parse_arguments():
     parser.add_argument('--region', help='Generic region parameter')
     parser.add_argument('--redirector-name', help='Name for the redirector instance (default: random)')
     parser.add_argument('--c2-name', help='Name for the C2 instance (default: random)')
+    parser.add_argument('--redirector-subdomain', default='cdn', help='Subdomain for the redirector (default: cdn)')
+    parser.add_argument('--c2-subdomain', default='mail', help='Subdomain for the C2 server (default: mail)')
     
     # Common arguments
     parser.add_argument('--teardown', action='store_true', help='Tear down existing infrastructure')
@@ -300,6 +302,13 @@ def interactive_setup():
     # Domain configuration
     default_domain = vars_data.get('domain', 'example.com')
     config['domain'] = input(f"\nDomain name [default: {default_domain}]: ") or default_domain
+
+    # Subdomain configuration - new feature
+    default_redirector_subdomain = vars_data.get('redirector_subdomain', 'cdn')
+    config['redirector_subdomain'] = input(f"Redirector subdomain [default: {default_redirector_subdomain}]: ") or default_redirector_subdomain
+    
+    default_c2_subdomain = vars_data.get('c2_subdomain', 'mail')
+    config['c2_subdomain'] = input(f"C2 server subdomain [default: {default_c2_subdomain}]: ") or default_c2_subdomain
 
     # Always use the most up-to-date domain for the email default
     default_email = vars_data.get('letsencrypt_email')
@@ -1226,6 +1235,10 @@ C2itAll - Red Team Infrastructure Setup
         # Copy all values from vars_data to config first
         for key, value in vars_data.items():
             config[key] = value
+        
+        # Subdomain settings - ensure these are explicitly set
+        config['redirector_subdomain'] = args.redirector_subdomain or 'cdn'
+        config['c2_subdomain'] = args.c2_subdomain or 'mail'
         
         # AWS settings
         if args.provider == "aws":
