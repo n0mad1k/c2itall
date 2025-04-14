@@ -8,10 +8,10 @@
   vars_files:
     - vars.yaml
   vars:
-    # Default values
+    # Default values - using minimalist settings
     linode_region: "{{ linode_region | default(region_choices | random) }}"
     plan: "{{ plan | default('g6-nanode-1') }}"  # Use smallest plan for tracker
-    tracker_image: "linode/debian12"
+    tracker_image: "{{ image | default('linode/debian12') }}"  # Use Debian instead of Kali
     
     # Generate random instance name if not provided
     tracker_name: "{{ tracker_name | default('t-' + 9999999999 | random | to_uuid | hash('md5') | truncate(8, True, '')) }}"
@@ -67,15 +67,15 @@
   vars:
     tracker_domain: "{{ tracker_domain | default('track.' + domain) }}"
   tasks:
-    - name: Update and install required packages
+    - name: Update and install minimal required packages
       apt:
         name:
           - nginx
           - certbot
           - python3-certbot-nginx
           - git
-          - curl
           - python3-pip
+          - python3-venv
         update_cache: yes
         state: present
 
@@ -89,6 +89,8 @@
     - name: Install tracker dependencies
       pip:
         requirements: /opt/tracker/requirements.txt
+        virtualenv: /opt/tracker/venv
+        virtualenv_command: python3 -m venv
       ignore_errors: yes
 
     - name: Configure tracker settings
@@ -114,6 +116,14 @@
         dest: /etc/systemd/system/tracker.service
         mode: '0644'
       ignore_errors: yes
+
+    - name: Update tracker service to use virtualenv
+      blockinfile:
+        path: /etc/systemd/system/tracker.service
+        insertafter: "^\\[Service\\]"
+        block: |
+          Environment="PATH=/opt/tracker/venv/bin:$PATH"
+          ExecStart=/opt/tracker/venv/bin/python /opt/tracker/app.py
 
     - name: Start and enable tracker service
       systemd:

@@ -110,6 +110,7 @@ def parse_arguments():
     
     # Tracker deployment options
     parser.add_argument('--deploy-tracker', action='store_true', help='Deploy phishing email tracking server')
+    parser.add_argument('--integrated-tracker', action='store_true', help='Deploy tracker on C2 server instead of separate instance')
     parser.add_argument('--tracker-domain', help='Domain name for the tracker server')
     parser.add_argument('--tracker-email', help='Email for Let\'s Encrypt certificate for tracker')
     parser.add_argument('--tracker-name', help='Name for tracker instance (default: random)')
@@ -258,31 +259,43 @@ def interactive_setup():
         else:
             config['ssh_key'] = None  # Will generate a new key
     
-    # Deployment type
+    # Deployment type with integrated tracker option
     print("\nDeployment type:")
-    print("  1. Full deployment (Redirector + C2)")
-    print("  2. Redirector only")
-    print("  3. C2 server only")
+    print("  1. Full deployment (Redirector + C2) [default]")
+    print("  2. Full deployment with integrated tracker (Redirector + C2 + Tracker)")
+    print("  3. Redirector only")
+    print("  4. C2 server only")
+    print("  5. Standalone tracker only")
     
-    while True:
-        try:
-            deploy_choice = int(input("\nSelect deployment type (1-3): "))
-            if deploy_choice == 1:
-                config['redirector_only'] = False
-                config['c2_only'] = False
-                break
-            elif deploy_choice == 2:
-                config['redirector_only'] = True
-                config['c2_only'] = False
-                break
-            elif deploy_choice == 3:
-                config['redirector_only'] = False
-                config['c2_only'] = True
-                break
-            else:
-                print("Please enter a number between 1 and 3")
-        except ValueError:
-            print("Please enter a valid number")
+    deploy_choice = input("\nSelect deployment type (1-5) [default: 1]: ")
+    if not deploy_choice or deploy_choice == "1":
+        config['redirector_only'] = False
+        config['c2_only'] = False
+        config['deploy_tracker'] = False
+        config['integrated_tracker'] = False
+    elif deploy_choice == "2":
+        config['redirector_only'] = False
+        config['c2_only'] = False
+        config['deploy_tracker'] = True
+        config['integrated_tracker'] = True
+    elif deploy_choice == "3":
+        config['redirector_only'] = True
+        config['c2_only'] = False
+        config['deploy_tracker'] = False
+    elif deploy_choice == "4":
+        config['redirector_only'] = False
+        config['c2_only'] = True
+        config['deploy_tracker'] = False
+    elif deploy_choice == "5":
+        config['redirector_only'] = False
+        config['c2_only'] = False
+        config['deploy_tracker'] = True
+        config['integrated_tracker'] = False
+    else:
+        print("Invalid choice, using default (Full deployment)")
+        config['redirector_only'] = False
+        config['c2_only'] = False
+        config['deploy_tracker'] = False
     
     # Domain configuration
     default_domain = vars_data.get('domain', 'example.com')
@@ -309,19 +322,10 @@ def interactive_setup():
     config['secure_memory'] = True if (secure_memory == 'y' or (default_secure_memory and secure_memory != 'n')) else False
     config['zero_logs'] = True if (zero_logs == 'y' or (default_zero_logs and zero_logs != 'n')) else False
     
-    # Post-deployment options
-    config['ssh_after_deploy'] = input("\nSSH into instance after deployment? (y/n) [default: n]: ").lower() == 'y'
-    
-    # Debug mode
-    config['debug'] = input("Enable debug mode? (y/n) [default: n]: ").lower() == 'y'
-    
-    # Additional options
-    deploy_tracker = input("\nDeploy email tracking server? (y/n) [default: n]: ").lower()
-    config['deploy_tracker'] = deploy_tracker == 'y'
-    
+    # Tracker configuration if enabled
     if config['deploy_tracker']:
         default_tracker_domain = f"track.{config['domain']}"
-        config['tracker_domain'] = input(f"Tracker domain [default: {default_tracker_domain}]: ") or default_tracker_domain
+        config['tracker_domain'] = input(f"\nTracker domain [default: {default_tracker_domain}]: ") or default_tracker_domain
         
         default_tracker_email = config['letsencrypt_email']
         config['tracker_email'] = input(f"Tracker Let's Encrypt email [default: {default_tracker_email}]: ") or default_tracker_email
@@ -334,6 +338,12 @@ def interactive_setup():
         rand_suffix = generate_random_string()
         timestamp = int(time.time()) % 10000
         config['tracker_name'] = f"t-{rand_suffix}-{timestamp}"  # Changed from track- to t-
+    
+    # Post-deployment options
+    config['ssh_after_deploy'] = input("\nSSH into instance after deployment? (y/n) [default: n]: ").lower() == 'y'
+    
+    # Debug mode
+    config['debug'] = input("Enable debug mode? (y/n) [default: n]: ").lower() == 'y'
     
     # SSH key if not already set
     if 'ssh_key' not in config or not config['ssh_key']:
@@ -356,6 +366,10 @@ def interactive_setup():
     config['smtp_auth_pass'] = vars_data.get('smtp_auth_pass', ''.join(random.choices(string.ascii_letters + string.digits, k=20)))
     config['shell_handler_port'] = vars_data.get('shell_handler_port', str(random.randint(4000, 65000)))
     
+    # Set up integrated tracker flag for deployment
+    if config.get('deploy_tracker') and config.get('integrated_tracker'):
+        config['setup_integrated_tracker'] = True
+        
     # Set SSH key path for proper reference
     if config['ssh_key'].startswith(os.path.expanduser("~/.ssh/c2deploy_")):
         config['ssh_key_path'] = f"{config['ssh_key']}.pub"
@@ -611,6 +625,11 @@ def deploy_infrastructure(config):
         config['ssh_user'] = "root"
     elif provider == "aws":
         config['ssh_user'] = "kali"
+    
+    # Set tracker deployment flag for C2 configuration
+    if config.get('deploy_tracker') and config.get('integrated_tracker'):
+        config['setup_integrated_tracker'] = True
+        logging.info("Integrated tracker will be deployed on C2 server")
     
     # Select random region if not specified
     if not config.get('region'):
@@ -933,8 +952,11 @@ def cleanup_resources(config, interactive=True):
         print("Deployment failed or was interrupted. Resources to clean up:")
         redirector_name = config.get('redirector_name', 'None')
         c2_name = config.get('c2_name', 'None')
+        tracker_name = config.get('tracker_name', 'None')
         print(f" - Redirector: {redirector_name}")
         print(f" - C2 Server: {c2_name}")
+        if config.get('deploy_tracker') and not config.get('integrated_tracker'):
+            print(f" - Tracker: {tracker_name}")
         print("============================================================")
         
         try:
@@ -955,8 +977,10 @@ def cleanup_resources(config, interactive=True):
         "confirm_cleanup": False,  # Skip confirmation prompt
         "redirector_name": config.get('redirector_name'),
         "c2_name": config.get('c2_name'),
+        "tracker_name": config.get('tracker_name'),
         "cleanup_redirector": True,
-        "cleanup_c2": True
+        "cleanup_c2": True,
+        "cleanup_tracker": config.get('deploy_tracker', False) and not config.get('integrated_tracker', False)
     }
     
     playbook = f"{provider_dir}/cleanup.yml"
@@ -978,7 +1002,7 @@ def cleanup_resources(config, interactive=True):
                 logging.error(f"Cleanup playbook failed: {stderr}")
                 
                 # Log what we attempted to clean up
-                logging.error(f"Failed to clean up resources: redirector={config.get('redirector_name')}, c2={config.get('c2_name')}")
+                logging.error(f"Failed to clean up resources: redirector={config.get('redirector_name')}, c2={config.get('c2_name')}, tracker={config.get('tracker_name')}")
             else:
                 logging.info("Cleanup completed successfully")
         except Exception as e:
@@ -1091,7 +1115,7 @@ def teardown_infrastructure(config):
         return False
 
 def deploy_tracker(config):
-    """Deploy email tracking server"""
+    """Deploy email tracking server with minimal resources"""
     provider = config['provider']
     provider_dir = PROVIDER_DIRS.get(provider, provider.upper())
     
@@ -1107,6 +1131,24 @@ def deploy_tracker(config):
         if config.get('linode_token'):
             os.environ['LINODE_TOKEN'] = config['linode_token']
     
+    # Override configuration for minimal tracker deployment
+    tracker_config = config.copy()
+    
+    # Use smaller instance sizes for tracker
+    if provider == "linode":
+        tracker_config['plan'] = 'g6-nanode-1'  # Smallest viable Linode plan
+        tracker_config['image'] = 'linode/debian12'  # Use Debian instead of Kali
+    elif provider == "aws":
+        tracker_config['instance_type'] = 't2.micro'  # Smallest viable AWS instance
+        # For AWS, specify a Debian/Ubuntu AMI instead of Kali
+        if 'ami_map' in tracker_config:
+            # Try to find a Debian/Ubuntu AMI for the region
+            region = tracker_config.get('aws_region', tracker_config.get('region'))
+            for ami_id, ami_info in tracker_config.get('ami_map', {}).items():
+                if 'ubuntu' in ami_id.lower() or 'debian' in ami_id.lower():
+                    tracker_config['ami_id'] = ami_id
+                    break
+    
     # Determine playbook path
     playbook = f"{provider_dir}/tracker.yml"
     if not os.path.exists(playbook):
@@ -1114,12 +1156,12 @@ def deploy_tracker(config):
         return False
     
     # Create inventory file
-    inventory_path = create_inventory_file(config, "tracker")
+    inventory_path = create_inventory_file(tracker_config, "local")
     
     # Run the playbook
     try:
         success, stdout, stderr = run_ansible_playbook(
-            playbook, inventory_path, config, config.get('debug', False)
+            playbook, inventory_path, tracker_config, tracker_config.get('debug', False)
         )
         
         # Clean up inventory file
@@ -1253,12 +1295,17 @@ C2itAll - Red Team Infrastructure Setup
         
         # Tracker options
         config['deploy_tracker'] = args.deploy_tracker
+        config['integrated_tracker'] = args.integrated_tracker
         if args.deploy_tracker:
             config['tracker_domain'] = args.tracker_domain or f"track.{config['domain']}"
             config['tracker_email'] = args.tracker_email or config['letsencrypt_email']
             config['tracker_ipinfo_token'] = args.tracker_ipinfo_token
             config['tracker_setup_ssl'] = args.tracker_setup_ssl
             config['tracker_create_pixel'] = args.tracker_create_pixel
+            
+            # Set the integrated tracker flag for deployment
+            if args.integrated_tracker:
+                config['setup_integrated_tracker'] = True
         
         # SSH after deploy
         config['ssh_after_deploy'] = args.ssh_after_deploy
@@ -1308,34 +1355,32 @@ C2itAll - Red Team Infrastructure Setup
     
     # Run deployment
     try:
-        # Deploy tracker if requested
-        if config.get('deploy_tracker'):
+        # Deploy the standard infrastructure first (redirector + C2)
+        if not config.get('deploy_tracker') or config.get('integrated_tracker'):
+            success = deploy_infrastructure(config)
+            if not success:
+                logging.error("Deployment failed!")
+                cleanup_resources(config, interactive=True)
+                return
+            logging.info("Deployment completed successfully!")
+            
+            # SSH into instance if requested
+            if config.get('ssh_after_deploy'):
+                ssh_to_instance(config)
+        
+        # Deploy standalone tracker if requested and not integrated
+        elif config.get('deploy_tracker') and not config.get('integrated_tracker'):
             success = deploy_tracker(config)
             if not success:
                 logging.error("Tracker deployment failed!")
                 cleanup_resources(config, interactive=True)
                 return
-            
             logging.info("Tracker deployment completed successfully!")
             
             # SSH into tracker if requested
             if config.get('ssh_after_deploy'):
                 ssh_to_instance(config)
                 
-            return
-        
-        # Deploy main infrastructure
-        success = deploy_infrastructure(config)
-        
-        if success:
-            logging.info("Deployment completed successfully!")
-            
-            # SSH into instance if requested
-            if config.get('ssh_after_deploy'):
-                ssh_to_instance(config)
-        else:
-            logging.error("Deployment failed!")
-            cleanup_resources(config, interactive=True)
     except KeyboardInterrupt:
         print("\n\nDeployment interrupted by user")
         logging.info("Deployment interrupted by user")

