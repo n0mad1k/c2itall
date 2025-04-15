@@ -66,15 +66,29 @@ grep -l "LinkerStrip" --include="*.go" -r . | while read file; do
 done
 
 # Build the modified client without compiling the server
-log "Building Sliver client only..."
-make client-only
+log "Building Sliver client..."
+# Check available targets first
+log "Available make targets:"
+make help | grep client || make -h | grep client || log "Make help not available"
 
-# Skip server build if client fails
-if [ $? -ne 0 ]; then
-    log "Client build failed, creating only the profiles"
+# Try to build the client with the correct target
+if make -n client 2>/dev/null; then
+    log "Using 'client' target"
+    make client
+elif make -n sliver-client 2>/dev/null; then
+    log "Using 'sliver-client' target"
+    make sliver-client
 else
+    log "Falling back to default build"
+    make
+fi
+
+# Check if client was built
+if [ -f "./sliver-client" ]; then
     log "Client build successful"
     cp -f ./sliver-client /usr/local/bin/
+else
+    log "Client build failed, creating only the profiles"
 fi
 
 # Create custom profiles directory regardless of build success
@@ -143,4 +157,4 @@ chmod +x /opt/c2/generate_evasive_beacons.sh
 log "Cleaning up..."
 rm -rf $TEMP_DIR
 
-log "Customization complete."
+log "Customization complete."exit

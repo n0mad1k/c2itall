@@ -142,13 +142,6 @@
       nohup /opt/c2/serve-beacons.sh > /dev/null 2>&1 &
     fi
 
-- name: Install Let's Encrypt certificate if domain specified
-  shell: |
-    certbot certonly --standalone -d {{ c2_subdomain }}.{{ domain }} --non-interactive --agree-tos -m {{ letsencrypt_email }}
-  args:
-    creates: /etc/letsencrypt/live/{{ c2_subdomain }}.{{ domain }}/fullchain.pem
-  when: domain != "example.com"
-
 # Include integrated tracker tasks if requested
 - name: Include integrated tracker setup
   include_tasks: "configure_integrated_tracker.yml"
