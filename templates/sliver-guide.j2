@@ -1,0 +1,73 @@
+# File: templates/sliver-guide.j2
+# Sliver C2 Framework Usage Guide
+
+SLIVER C2 OPERATIONS GUIDE
+==========================
+
+This guide provides information on using the randomized Sliver C2 server deployed on
+your infrastructure.
+
+SERVER INFORMATION
+-----------------
+C2 Server IP: {{ c2_ip }}
+Redirector Domain: {{ redirector_domain }}
+Operator Config: /root/admin.cfg
+
+CONNECTING TO THE SERVER
+-----------------------
+1. From your operator system, import the operator config:
+   $ sliver import /path/to/admin.cfg
+
+2. Connect to the server:
+   $ sliver
+   [*] Loaded 1 operator profiles
+   sliver > use admin
+   [*] Set active profile admin ({{ c2_ip }}:31337)
+   sliver > connect
+   [*] Connected to {{ c2_ip }}:31337 (admin)
+
+USING THE SERVER
+---------------
+Once connected to the server, you can:
+
+1. List generated implants:
+   sliver > implants
+
+2. Start a listener for HTTP connections:
+   sliver > http -d {{ redirector_domain }} -L 0.0.0.0 -p 8888
+
+3. Start a multiplayer session:
+   sliver > mtls -L 0.0.0.0 -p 31337
+
+IMPLANT RESOURCES
+----------------
+Pre-generated implants are available in:
+- /opt/beacons/
+
+These implants are already configured to connect through the redirector at
+{{ redirector_domain }}.
+
+To serve these implants for download:
+- A Python HTTP server is running on {{ c2_ip }}:8443
+- Implants can be delivered through the redirector at {{ redirector_domain }}/downloads/
+
+TIPS FOR OPSEC
+-------------
+- All connections go through the redirector
+- Beacon intervals are randomized (30-150 seconds)
+- Traffic is disguised as legitimate web requests using common paths
+- Use HTTPS for all communications
+
+To regenerate beacons with different properties:
+$ /opt/c2/generate_evasive_beacons.sh
+
+TROUBLESHOOTING
+--------------
+1. If implants can't connect:
+   - Verify DNS for {{ redirector_domain }} points to your redirector
+   - Check NGINX configuration on the redirector
+   - Ensure ports 8888 and 443 are open on respective servers
+
+2. If Sliver server isn't responding:
+   - Check service status: systemctl status sliver
+   - View logs: journalctl -u sliver

@@ -42,6 +42,8 @@
       - tor
       - crackmapexec
       - jq
+      - build-essential
+      - zip
       - unzip
       - postfix
       - certbot
@@ -78,9 +80,31 @@
   with_items:
     - ../files/clean-logs.sh
     - ../files/secure-exit.sh
-    - ../files/serve-beacons.sh
     - ../files/sliver_randomizer.sh
-    - ../files/generate_evasive_beacons.sh
+
+- name: Create beacon generation script from template
+  template:
+    src: "../templates/generate_evasive_beacons.sh.j2"
+    dest: "/opt/c2/generate_evasive_beacons.sh"
+    mode: '0700'
+    owner: root
+    group: root
+  vars:
+    redirector_subdomain: "{{ redirector_subdomain | default('cdn') }}"
+    domain: "{{ domain }}"
+    redirector_port: "{{ redirector_port | default('443') }}"
+
+- name: Create beacon server script from template
+  template:
+    src: "../templates/serve-beacons.sh.j2"
+    dest: "/opt/c2/serve-beacons.sh"
+    mode: '0700'
+    owner: root
+    group: root
+  vars:
+    redirector_subdomain: "{{ redirector_subdomain | default('cdn') }}"
+    domain: "{{ domain }}"
+    redirector_port: "{{ redirector_port | default('443') }}"
 
 - name: Remove standard Sliver if installed
   apt:
@@ -101,6 +125,11 @@
     creates: /opt/c2/sliver-profiles/evasive-template.json
   register: randomization_result
 
+- name: Display Sliver randomizer output
+  debug:
+    var: sliver_randomizer_result.stdout_lines
+  when: sliver_randomizer_result.stdout_lines is defined
+
 - name: Create custom Sliver service file
   template:
     src: "../templates/sliver-server.service.j2"
@@ -118,12 +147,63 @@
 
 - name: Wait for Sliver to initialize
   pause:
-    seconds: 10
+    seconds: 15
 
-- name: Generate evasive beacons
-  shell: /opt/c2/generate_evasive_beacons.sh {{ ansible_host }}
+- name: Check if Sliver operator config exists
+  stat:
+    path: /root/admin.cfg
+  register: operator_config
+
+- name: Create new operator if needed
+  shell: |
+    /usr/local/bin/sliver-server operator --name admin --lhost {{ ansible_host }} --save /root/admin.cfg
+  args:
+    creates: /root/admin.cfg
+  when: not operator_config.stat.exists
+
+- name: Generate beacons with redirector integration
+  shell: |
+    /opt/c2/generate_evasive_beacons.sh
   args:
     creates: /opt/beacons/reference.txt
+  environment:
+    PATH: "{{ ansible_env.PATH }}:/usr/local/bin"
+  ignore_errors: yes
+  register: beacon_generation_result
+
+- name: Display beacon generation output
+  debug:
+    var: beacon_generation_result.stdout_lines
+  when: beacon_generation_result.stdout_lines is defined
+
+- name: Start beacon server
+  shell: |
+    nohup /opt/c2/serve-beacons.sh > /dev/null 2>&1 &
+  args:
+    executable: /bin/bash
+  register: beacon_server_result
+
+- name: Create NGINX configuration fragment for redirector
+  template:
+    src: "../templates/redirector-sliver-fragment.j2"
+    dest: "/opt/c2/redirector-config.conf"
+    mode: '0644'
+    owner: root
+    group: root
+  vars:
+    c2_ip: "{{ ansible_host }}"
+    redirector_domain: "{{ redirector_subdomain }}.{{ domain }}"
+
+- name: Create Sliver usage guide
+  template:
+    src: "../templates/sliver-guide.j2"
+    dest: "/root/sliver-guide.txt"
+    mode: '0600'
+    owner: root
+    group: root
+  vars:
+    c2_ip: "{{ ansible_host }}"
+    redirector_domain: "{{ redirector_subdomain }}.{{ domain }}"
 
 - name: Set up cron job for log cleaning if zero-logs enabled
   cron:
@@ -132,15 +212,6 @@
     hour: "*/6"
     job: "/opt/c2/clean-logs.sh > /dev/null 2>&1"
   when: zero_logs | bool
-
-- name: Configure and start beacon server
-  shell: |
-    sed -i "s/C2_HOST=.*/C2_HOST=\"{{ ansible_host }}\"/g" /opt/c2/serve-beacons.sh
-    chmod +x /opt/c2/serve-beacons.sh
-    # Check if beacon server is already running
-    if ! pgrep -f "/opt/c2/serve-beacons.sh" > /dev/null; then
-      nohup /opt/c2/serve-beacons.sh > /dev/null 2>&1 &
-    fi
 
 # Include integrated tracker tasks if requested
 - name: Include integrated tracker setup
