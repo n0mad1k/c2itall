@@ -84,6 +84,6 @@
           {% if c2_deletion is defined %}
           - C2 {{ c2_name }}: {{ c2_deletion.changed | ternary('Deleted', 'Not found/Could not delete') }}
           {% endif %}
-          {% if tracker_deletion is defined %}
+          {% if tracker_deletion is defined and tracker_name is defined %}
           - Tracker {{ tracker_name }}: {{ tracker_deletion.changed | ternary('Deleted', 'Not found/Could not delete') }}
           {% endif %}
