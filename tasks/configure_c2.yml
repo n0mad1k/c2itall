@@ -82,17 +82,45 @@
     - ../files/secure-exit.sh
     - ../files/sliver_randomizer.sh
 
-- name: Create beacon generation script from template
+- name: Create main beacon generation script
   template:
     src: "../templates/generate_evasive_beacons.sh.j2"
     dest: "/opt/c2/generate_evasive_beacons.sh"
     mode: '0700'
     owner: root
     group: root
-  vars:
-    redirector_subdomain: "{{ redirector_subdomain | default('cdn') }}"
-    domain: "{{ domain }}"
-    redirector_port: "{{ redirector_port | default('443') }}"
+
+- name: Create Linux loader script template
+  template:
+    src: "../templates/linux_loader.sh.j2" 
+    dest: "/opt/c2/linux_loader.template"
+    mode: '0644'
+    owner: root
+    group: root
+
+- name: Create Windows PowerShell loader template
+  template:
+    src: "../templates/windows_loader.ps1.j2"
+    dest: "/opt/c2/windows_loader.template"
+    mode: '0644'
+    owner: root
+    group: root
+
+- name: Create manifest template
+  template:
+    src: "../templates/manifest.json.j2"
+    dest: "/opt/c2/manifest.template"
+    mode: '0644'
+    owner: root
+    group: root
+
+- name: Create reference file template
+  template:
+    src: "../templates/reference.txt.j2"
+    dest: "/opt/c2/reference.template"
+    mode: '0644'
+    owner: root
+    group: root
 
 - name: Create beacon server script from template
   template:

