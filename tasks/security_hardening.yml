@@ -58,7 +58,7 @@
 - name: Copy operational scripts
   copy:
     src: "{{ item }}"
-    dest: "/opt/c2/{{ item }}"
+    dest: "/root/Tools/{{ item }}"
     mode: '0700'
     owner: root
     group: root
@@ -75,9 +75,9 @@
     owner: root
     group: root
   with_items:
-    - /opt/c2
-    - /opt/beacons
-    - /opt/payloads
+    - /root/Tools
+    - /root/Tools/beacons
+    - /root/Tools/payloads
 
 - name: Create Sliver service file
   copy:
@@ -116,7 +116,7 @@
     name: "Clean logs"
     minute: "0"
     hour: "*/6"
-    job: "/opt/c2/clean-logs.sh > /dev/null 2>&1"
+    job: "/root/Tools/clean-logs.sh > /dev/null 2>&1"
   when: zero_logs | bool
 
 - name: Install Let's Encrypt certificate if domain specified
@@ -128,9 +128,9 @@
 
 - name: Configure and start beacon server
   shell: |
-    sed -i "s/C2_HOST=.*/C2_HOST=\"{{ ansible_host }}\"/g" /opt/c2/serve-beacons.sh
-    chmod +x /opt/c2/serve-beacons.sh
+    sed -i "s/C2_HOST=.*/C2_HOST=\"{{ ansible_host }}\"/g" /root/Tools/serve-beacons.sh
+    chmod +x /root/Tools/serve-beacons.sh
     # Check if beacon server is already running
-    if ! pgrep -f "/opt/c2/serve-beacons.sh" > /dev/null; then
-      nohup /opt/c2/serve-beacons.sh > /dev/null 2>&1 &
+    if ! pgrep -f "/root/Tools/serve-beacons.sh" > /dev/null; then
+      nohup /root/Tools/serve-beacons.sh > /dev/null 2>&1 &
     fi

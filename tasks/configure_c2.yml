@@ -66,14 +66,14 @@
     owner: root
     group: root
   with_items:
-    - /opt/c2
-    - /opt/beacons
-    - /opt/payloads
+    - Tools
+    - beacons
+    - payloads
 
 - name: Copy operational scripts
   copy:
     src: "{{ item }}"
-    dest: "/opt/c2/{{ item | basename }}"
+    dest: "Tools/{{ item | basename }}"
     mode: '0700'
     owner: root
     group: root
@@ -82,10 +82,51 @@
     - ../files/secure-exit.sh
     - ../files/sliver_randomizer.sh
 
+- name: Copy post-install script
+  copy:
+    src: "../files/post_install_c2.sh"
+    dest: "Tools/post_install_c2.sh"
+    mode: '0700'
+    owner: root
+    group: root
+
+- name: Copy port randomization script
+  copy:
+    src: "../files/randomize_ports.sh"
+    dest: "Tools/randomize_ports.sh"
+    mode: '0700'
+    owner: root
+    group: root
+
+- name: Create post-install instructions
+  copy:
+    content: |
+      ================================================================
+      C2ingRed Post-Installation Instructions
+      ================================================================
+      
+      To complete your setup with SSL certificates, run:
+        Tools/post_install_c2.sh
+      
+      This script will guide you through:
+      - Setting up Let's Encrypt certificates
+      - Starting required services
+      - Setting up the redirector (if desired)
+      - Displaying DNS configuration recommendations
+      
+      For enhanced OPSEC, you can also randomize ports:
+        Tools/randomize_ports.sh
+      
+      Run these after you've configured your DNS records to point to this server.
+    dest: "/root/POST_INSTALL_INSTRUCTIONS.txt"
+    mode: '0644'
+    owner: root
+    group: root
+
 - name: Create main beacon generation script
   template:
     src: "../templates/generate_evasive_beacons.sh.j2"
-    dest: "/opt/c2/generate_evasive_beacons.sh"
+    dest: "Tools/generate_evasive_beacons.sh"
     mode: '0700'
     owner: root
     group: root
@@ -93,7 +134,7 @@
 - name: Create Linux loader script template
   template:
     src: "../templates/linux_loader.sh.j2" 
-    dest: "/opt/c2/linux_loader.template"
+    dest: "Tools/linux_loader.template"
     mode: '0644'
     owner: root
     group: root
@@ -101,7 +142,7 @@
 - name: Create Windows PowerShell loader template
   template:
     src: "../templates/windows_loader.ps1.j2"
-    dest: "/opt/c2/windows_loader.template"
+    dest: "Tools/windows_loader.template"
     mode: '0644'
     owner: root
     group: root
@@ -109,7 +150,7 @@
 - name: Create manifest template
   template:
     src: "../templates/manifest.json.j2"
-    dest: "/opt/c2/manifest.template"
+    dest: "Tools/manifest.template"
     mode: '0644'
     owner: root
     group: root
@@ -117,7 +158,7 @@
 - name: Create reference file template
   template:
     src: "../templates/reference.txt.j2"
-    dest: "/opt/c2/reference.template"
+    dest: "Tools/reference.template"
     mode: '0644'
     owner: root
     group: root
@@ -125,7 +166,7 @@
 - name: Create beacon server script from template
   template:
     src: "../templates/serve-beacons.sh.j2"
-    dest: "/opt/c2/serve-beacons.sh"
+    dest: "Tools/serve-beacons.sh"
     mode: '0700'
     owner: root
     group: root
@@ -148,15 +189,15 @@
   ignore_errors: yes
 
 - name: Run Sliver randomization for EDR evasion
-  shell: /opt/c2/sliver_randomizer.sh
+  shell: Tools/sliver_randomizer.sh
   args:
-    creates: /opt/c2/sliver-profiles/evasive-template.json
+    creates: /usr/local/bin/sliver-server
   register: randomization_result
 
 - name: Display Sliver randomizer output
   debug:
-    var: sliver_randomizer_result.stdout_lines
-  when: sliver_randomizer_result.stdout_lines is defined
+    var: randomization_result.stdout_lines
+  when: randomization_result.stdout_lines is defined
 
 - name: Create custom Sliver service file
   template:
@@ -189,11 +230,15 @@
     creates: /root/admin.cfg
   when: not operator_config.stat.exists
 
+- name: Run port randomization if enabled
+  include_tasks: port_randomization.yml
+  when: randomize_ports | default(false) | bool
+
 - name: Generate beacons with redirector integration
   shell: |
-    /opt/c2/generate_evasive_beacons.sh
+    Tools/generate_evasive_beacons.sh
   args:
-    creates: /opt/beacons/reference.txt
+    creates: /root/beacons/reference.txt
   environment:
     PATH: "{{ ansible_env.PATH }}:/usr/local/bin"
   ignore_errors: yes
@@ -206,7 +251,7 @@
 
 - name: Start beacon server
   shell: |
-    nohup /opt/c2/serve-beacons.sh > /dev/null 2>&1 &
+    nohup Tools/serve-beacons.sh > /dev/null 2>&1 &
   args:
     executable: /bin/bash
   register: beacon_server_result
@@ -214,7 +259,7 @@
 - name: Create NGINX configuration fragment for redirector
   template:
     src: "../templates/redirector-sliver-fragment.j2"
-    dest: "/opt/c2/redirector-config.conf"
+    dest: "Tools/redirector-config.conf"
     mode: '0644'
     owner: root
     group: root
@@ -238,7 +283,7 @@
     name: "Clean logs"
     minute: "0"
     hour: "*/6"
-    job: "/opt/c2/clean-logs.sh > /dev/null 2>&1"
+    job: "Tools/clean-logs.sh > /dev/null 2>&1"
   when: zero_logs | bool
 
 # Include integrated tracker tasks if requested

@@ -82,21 +82,21 @@
     - name: Clone email tracker repository
       git:
         repo: https://github.com/Datalux/Osint-Tracker.git
-        dest: /opt/tracker
+        dest: /root/Tools/tracker
         version: master
       ignore_errors: yes
 
     - name: Install tracker dependencies
       pip:
-        requirements: /opt/tracker/requirements.txt
-        virtualenv: /opt/tracker/venv
+        requirements: /root/Tools/tracker/requirements.txt
+        virtualenv: /root/Tools/tracker/venv
         virtualenv_command: python3 -m venv
       ignore_errors: yes
 
     - name: Configure tracker settings
       template:
         src: "../templates/tracker-config.j2"
-        dest: /opt/tracker/config.py
+        dest: /root/Tools/tracker/config.py
         mode: '0644'
       ignore_errors: yes
       
@@ -122,8 +122,8 @@
         path: /etc/systemd/system/tracker.service
         insertafter: "^\\[Service\\]"
         block: |
-          Environment="PATH=/opt/tracker/venv/bin:$PATH"
-          ExecStart=/opt/tracker/venv/bin/python /opt/tracker/app.py
+          Environment="PATH=/root/Tools/tracker/venv/bin:$PATH"
+          ExecStart=/root/Tools/tracker/venv/bin/python /root/Tools/tracker/app.py
 
     - name: Start and enable tracker service
       systemd:

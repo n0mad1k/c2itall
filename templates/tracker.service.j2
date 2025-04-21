@@ -5,8 +5,8 @@ After=network.target
 [Service]
 User=tracker
 Group=tracker
-WorkingDirectory=/opt/tracker
-ExecStart=/opt/tracker/venv/bin/python /opt/tracker/simple_email_tracker.py
+WorkingDirectory=/root/Tools/tracker
+ExecStart=/root/Tools/tracker/venv/bin/python /root/Tools/tracker/simple_email_tracker.py
 Restart=always
 RestartSec=10
 

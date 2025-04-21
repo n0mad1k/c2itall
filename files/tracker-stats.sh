@@ -1,7 +1,7 @@
 #!/bin/bash
 # CLI tool to view email tracking stats
 
-DATA_FILE="/opt/tracker/data/tracking_data.json"
+DATA_FILE="/root/Tools/tracker/data/tracking_data.json"
 
 function show_summary() {
     if [ ! -f "$DATA_FILE" ]; then

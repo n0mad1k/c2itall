@@ -22,7 +22,7 @@
 
 - name: Create tracker directory
   file:
-    path: /opt/tracker
+    path: /root/Tools/tracker
     state: directory
     mode: '0755'
     owner: root
@@ -31,7 +31,7 @@
 
 - name: Create tracker data directory
   file:
-    path: /opt/tracker/data
+    path: /root/Tools/tracker/data
     state: directory
     mode: '0755'
     owner: root
@@ -43,13 +43,13 @@
     name: tracker
     system: yes
     shell: /usr/sbin/nologin
-    home: /opt/tracker
+    home: /root/Tools/tracker
     create_home: no
   when: setup_integrated_tracker | default(false) | bool
 
 - name: Create Python virtual environment for tracker
   pip:
-    virtualenv: /opt/tracker/venv
+    virtualenv: /root/Tools/tracker/venv
     name:
       - flask
       - pillow
@@ -64,7 +64,7 @@
 - name: Copy tracker application code
   copy:
     src: "../files/simple_email_tracker.py"
-    dest: /opt/tracker/simple_email_tracker.py
+    dest: /root/Tools/tracker/simple_email_tracker.py
     mode: '0755'
     owner: root
     group: root
@@ -73,7 +73,7 @@
 - name: Copy tracker statistics CLI tool
   copy:
     src: "../files/tracker-stats.sh"
-    dest: /opt/tracker/tracker-stats.sh
+    dest: /root/Tools/tracker/tracker-stats.sh
     mode: '0755'
     owner: root
     group: root
@@ -96,8 +96,8 @@
     group: tracker
     recurse: yes
   loop:
-    - /opt/tracker
-    - /opt/tracker/data
+    - /root/Tools/tracker
+    - /root/Tools/tracker/data
   when: setup_integrated_tracker | default(false) | bool
 
 - name: Create NGINX site config for tracker
@@ -142,15 +142,9 @@
     daemon_reload: yes
   when: setup_integrated_tracker | default(false) | bool
 
-- name: Restart NGINX to apply tracker configuration
-  systemd:
-    name: nginx
-    state: restarted
-  when: setup_integrated_tracker | default(false) | bool
-
 - name: Add tracker alias to bashrc for easy access
   lineinfile:
     path: /root/.bashrc
-    line: 'alias tracker="/opt/tracker/tracker-stats.sh"'
+    line: 'alias tracker="/root/Tools/tracker/tracker-stats.sh"'
     state: present
   when: setup_integrated_tracker | default(false) | bool

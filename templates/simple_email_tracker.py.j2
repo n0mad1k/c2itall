@@ -18,7 +18,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('/opt/tracker/data/tracker.log'),
+        logging.FileHandler('/root/Tools/tracker/data/tracker.log'),
         logging.StreamHandler()
     ]
 )
@@ -27,7 +27,7 @@ logging.basicConfig(
 app = Flask(__name__)
 
 # Directory to store tracking data
-DATA_DIR = '/opt/tracker/data'
+DATA_DIR = '/root/Tools/tracker/data'
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # Path to 1x1 transparent pixel

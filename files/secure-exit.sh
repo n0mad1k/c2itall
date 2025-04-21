@@ -45,14 +45,14 @@ done
 
 # Clear all logs
 echo "[+] Clearing logs..."
-bash /opt/c2/clean-logs.sh
+bash /root/Tools/clean-logs.sh
 
 # Securely delete operational files
 echo "[+] Removing operational files..."
 operational_dirs=(
-    "/opt/c2"
-    "/opt/beacons"
-    "/opt/payloads"
+    "/root/Tools"
+    "/root/Tools/beacons"
+    "/root/Tools/payloads"
     "/root/.sliver"
     "/root/.msf4"
     "/root/.gophish"

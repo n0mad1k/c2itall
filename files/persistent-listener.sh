@@ -5,9 +5,9 @@
 LISTEN_PORT=4444
 C2_HOST="127.0.0.1"  # This will be replaced by Ansible with actual C2 IP
 C2_PORT=50051        # Sliver default gRPC port
-WINDOWS_BEACON="/opt/beacons/windows.exe"
-LINUX_BEACON="/opt/beacons/linux"
-MACOS_BEACON="/opt/beacons/macos"
+WINDOWS_BEACON="/root/Tools/beacons/windows.exe"
+LINUX_BEACON="/root/Tools/beacons/linux"
+MACOS_BEACON="/root/Tools/beacons/macos"
 
 # Set secure permissions
 umask 077
@@ -16,7 +16,7 @@ umask 077
 log() {
     local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
     local message="$1"
-    echo "$timestamp - $message" | openssl enc -e -aes-256-cbc -pbkdf2 -pass pass:$RANDOM$RANDOM$RANDOM >> /opt/shell-handler/activity.log.enc
+    echo "$timestamp - $message" | openssl enc -e -aes-256-cbc -pbkdf2 -pass pass:$RANDOM$RANDOM$RANDOM >> /root/Tools/shell-handler/activity.log.enc
 }
 
 # Detect OS function

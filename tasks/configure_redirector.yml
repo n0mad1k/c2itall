@@ -11,6 +11,7 @@
       - socat
       - netcat-openbsd
       - secure-delete
+      - jq
     state: present
     update_cache: yes
 
@@ -22,34 +23,74 @@
     owner: root
     group: root
   with_items:
-    - /opt/c2
-    - /opt/shell-handler
+    - /root/Tools
+    - /root/Tools/shell-handler
 
 - name: Copy clean-logs.sh script
   copy:
     src: "../files/clean-logs.sh"
-    dest: /opt/c2/clean-logs.sh
+    dest: /root/Tools/clean-logs.sh
     mode: '0700'
+    owner: root
+    group: root
+
+- name: Copy redirector post-install script
+  copy:
+    src: "../files/post_install_redirector.sh"
+    dest: "/root/Tools/post_install_redirector.sh"
+    mode: '0700'
+    owner: root
+    group: root
+
+- name: Copy port randomization script
+  copy:
+    src: "../files/randomize_ports.sh"
+    dest: "/root/Tools/randomize_ports.sh"
+    mode: '0700'
+    owner: root
+    group: root
+
+- name: Create redirector post-install instructions
+  copy:
+    content: |
+      ================================================================
+      C2ingRed Redirector Post-Installation Instructions
+      ================================================================
+      
+      To complete your setup with SSL certificates, run:
+        /root/Tools/post_install_redirector.sh
+      
+      This script will guide you through:
+      - Setting up Let's Encrypt certificates
+      - Starting required services
+      - Updating NGINX configuration
+      
+      For enhanced OPSEC, you can also randomize ports:
+        /root/Tools/randomize_ports.sh
+      
+      Run these after you've configured your DNS records to point to this server.
+    dest: "/root/POST_INSTALL_INSTRUCTIONS.txt"
+    mode: '0644'
     owner: root
     group: root
 
 - name: Copy shell handler script
   copy:
     src: "../files/persistent-listener.sh"
-    dest: /opt/shell-handler/persistent-listener.sh
+    dest: /root/Tools/shell-handler/persistent-listener.sh
     mode: '0700'
     owner: root
     group: root
 
 - name: Configure shell handler script with C2 IP
   replace:
-    path: /opt/shell-handler/persistent-listener.sh
+    path: /root/Tools/shell-handler/persistent-listener.sh
     regexp: 'C2_HOST="127.0.0.1"'
     replace: 'C2_HOST="{{ c2_ip }}"'
 
 - name: Configure shell handler script with listening port
   replace:
-    path: /opt/shell-handler/persistent-listener.sh
+    path: /root/Tools/shell-handler/persistent-listener.sh
     regexp: 'LISTEN_PORT=4444'
     replace: 'LISTEN_PORT={{ shell_handler_port }}'
 
@@ -69,6 +110,11 @@
     owner: root
     group: root
   when: zero_logs | bool
+
+# Run port randomization if enabled
+- name: Run port randomization if enabled
+  include_tasks: port_randomization.yml
+  when: randomize_ports | default(false) | bool
 
 # Configure nginx for dual HTTP/HTTPS with complete encryption
 - name: Configure NGINX for secure C2 redirection
@@ -110,7 +156,7 @@
           
           # HTTP C2 paths (still over HTTPS)
           location /ajax/ {
-              proxy_pass http://{{ c2_ip }}:8888;
+              proxy_pass http://{{ c2_ip }}:{{ randomized_http_port | default(8888) }};
               proxy_http_version 1.1;
               proxy_set_header Host $host;
               proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -121,7 +167,7 @@
           
           # MTLS/TCP passthrough for direct Sliver communication
           location /mtls/ {
-              proxy_pass https://{{ c2_ip }}:443;
+              proxy_pass https://{{ c2_ip }}:{{ randomized_https_port | default(443) }};
               proxy_http_version 1.1;
               proxy_set_header Host $host;
               proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -133,7 +179,7 @@
           
           # Static resources that redirect to C2
           location ~ ^/static/(css|js|images)/.*\.(css|js|png|jpg|jpeg|gif|ico)$ {
-              proxy_pass http://{{ c2_ip }}:8888;
+              proxy_pass http://{{ c2_ip }}:{{ randomized_http_port | default(8888) }};
               proxy_http_version 1.1;
               proxy_set_header Host $host;
               proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -210,7 +256,7 @@
       echo "certbot --nginx -d ${SUBDOMAIN}.${DOMAIN} --non-interactive --agree-tos -m ${EMAIL}"
       echo
       echo "================================================"
-    dest: /opt/c2/setup-cert.sh
+    dest: /root/Tools/setup-cert.sh
     mode: '0700'
     owner: root
     group: root
@@ -223,14 +269,14 @@
       stream {
           # TCP forwarding for MTLS
           server {
-              listen 31337;
-              proxy_pass {{ c2_ip }}:31337;
+              listen {{ randomized_mtls_port | default(31337) }};
+              proxy_pass {{ c2_ip }}:{{ randomized_mtls_port | default(31337) }};
           }
           
           # Additional C2 ports
           server {
-              listen 50051;
-              proxy_pass {{ c2_ip }}:50051;
+              listen {{ randomized_http_port | default(50051) }};
+              proxy_pass {{ c2_ip }}:{{ randomized_http_port | default(50051) }};
           }
       }
     dest: /etc/nginx/modules-enabled/stream.conf
@@ -252,5 +298,5 @@
     name: "Clean logs"
     minute: "0"
     hour: "*/6"
-    job: "/opt/c2/clean-logs.sh > /dev/null 2>&1"
+    job: "/root/Tools/clean-logs.sh > /dev/null 2>&1"
   when: zero_logs | bool
