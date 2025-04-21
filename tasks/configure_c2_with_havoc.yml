@@ -56,11 +56,11 @@
       - dovecot-managesieved
       - yq
       - build-essential
-      # Additional Havoc C2 dependencies
       - mingw-w64
       - nasm
       - cmake
       - ninja-build
+      - python3-pip
       - libfontconfig1
       - libglu1-mesa-dev
       - libgtest-dev
@@ -102,10 +102,9 @@
     owner: root
     group: root
   with_items:
-    - "../files/clean-logs.sh"
-    - "../files/secure-exit.sh"
-    - "../files/havoc_installer.sh"
-    - "../files/havoc_shell_handler.sh"
+    - ../files/clean-logs.sh
+    - ../files/secure-exit.sh
+    - ../files/havoc_installer.sh
 
 - name: Copy post-install script
   copy:
@@ -148,26 +147,10 @@
     owner: root
     group: root
 
-- name: Remove any existing Sliver or Havoc
-  file:
-    path: "{{ item }}"
-    state: absent
-  with_items:
-    - "/usr/local/bin/sliver"
-    - "/usr/local/bin/sliver-server"
-  ignore_errors: yes
-
-- name: Stop existing Sliver service if running
-  systemd:
-    name: sliver
-    state: stopped
-    enabled: no
-  ignore_errors: yes
-
 - name: Install Havoc C2 Framework
   shell: "/root/Tools/havoc_installer.sh"
   args:
-    creates: "/root/Tools/havoc/Teamserver/teamserver"
+    creates: /opt/havoc/Teamserver/teamserver
   register: havoc_installation_result
 
 - name: Display Havoc installation output
@@ -211,14 +194,10 @@
     domain: "{{ domain }}"
     redirector_port: "{{ redirector_port | default('443') }}"
 
-- name: Run port randomization if enabled
-  include_tasks: port_randomization.yml
-  when: randomize_ports | default(false) | bool
-
 - name: Generate Havoc payloads
   shell: "/root/Tools/generate_havoc_payloads.sh"
   args:
-    creates: "/root/Tools/havoc/payloads/manifest.json"
+    creates: /opt/havoc/payloads/manifest.json
   register: payload_generation_result
   environment:
     PATH: "{{ ansible_env.PATH }}:/usr/local/bin"

