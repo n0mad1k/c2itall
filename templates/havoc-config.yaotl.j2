@@ -1,0 +1,274 @@
+{% set random_hex = lookup('password', '/dev/null chars=hex_lower length=8') %}
+
+Teamserver {
+    Host = "0.0.0.0"
+    Port = {{ havoc_teamserver_port | default(40056) }}
+    
+    Build {
+        Compiler64 = "/usr/bin/x86_64-w64-mingw32-gcc"
+        Compiler86 = "/usr/bin/i686-w64-mingw32-gcc"
+        Nasm = "/usr/bin/nasm"
+        {% if havoc_compiler_flags is defined %}
+        CompilerFlags = "{{ havoc_compiler_flags }}"
+        {% else %}
+        CompilerFlags = "-Os -fno-asynchronous-unwind-tables -fno-ident -fpack-struct=8 -ffunction-sections"
+        {% endif %}
+    }
+}
+
+Operators {
+    {{ havoc_admin_user | default('admin') }} {
+        Password = "{{ havoc_admin_password | default(lookup('password', '/dev/null chars=ascii_letters,digits length=24')) }}"
+        {% if havoc_auth_secret is defined %}
+        Secret = "{{ havoc_auth_secret }}"
+        {% else %}
+        Secret = "{{ lookup('password', '/dev/null chars=hex_lower length=32') }}"
+        {% endif %}
+    }
+    {% if havoc_operators is defined %}
+    {% for operator in havoc_operators %}
+    {{ operator.name }} {
+        Password = "{{ operator.password }}"
+        {% if operator.secret is defined %}
+        Secret = "{{ operator.secret }}"
+        {% else %}
+        Secret = "{{ lookup('password', '/dev/null chars=hex_lower length=32') }}"
+        {% endif %}
+    }
+    {% endfor %}
+    {% endif %}
+}
+
+Listeners {
+    http {
+        Name         = "http"
+        KillDate     = "{{ havoc_killdate | default('2030-01-01') }}"
+        WorkingHours = "{{ havoc_working_hours | default('0:00-23:59') }}"
+        {% if havoc_hosts is defined %}
+        Hosts        = [
+            {% for host in havoc_hosts %}
+            "{{ host }}"{% if not loop.last %},{% endif %}
+            {% endfor %}
+        ]
+        {% else %}
+        Hosts        = ["0.0.0.0"]
+        {% endif %}
+        HostBind     = "0.0.0.0"
+        HostRotation = "{{ havoc_host_rotation | default('round-robin') }}"
+        Port         = {{ havoc_http_port | default(8080) }}
+        PortBind     = {{ havoc_http_port | default(8080) }}
+        {% if havoc_user_agent is defined %}
+        UserAgent    = "{{ havoc_user_agent }}"
+        {% else %}
+        UserAgent    = "Mozilla/5.0 (Windows NT 10.{{ random_hex[0] | int }}.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{{ random_hex[1] | int + 80 }}.0.{{ random_hex[2:4] | int }}.{{ random_hex[4:6] | int }} Safari/537.36"
+        {% endif %}
+        Headers      = [
+            {% if havoc_http_headers is defined %}
+            {% for header in havoc_http_headers %}
+            "{{ header }}"{% if not loop.last %},{% endif %}
+            {% endfor %}
+            {% else %}
+            "Accept: */*",
+            "Accept-Language: en-US,en;q=0.9",
+            "X-Requested-With: XMLHttpRequest"
+            {% endif %}
+        ]
+        Uris         = [
+            {% if havoc_http_uris is defined %}
+            {% for uri in havoc_http_uris %}
+            "{{ uri }}"{% if not loop.last %},{% endif %}
+            {% endfor %}
+            {% else %}
+            "/api/v{{ random_hex[6] | int + 1 }}",
+            "/dashboard",
+            "/content/{{ random_hex[1:4] }}",
+            "/wp-includes/{{ random_hex[1:6] }}.js"
+            {% endif %}
+        ]
+        Secure       = false
+        {% if havoc_proxy_enabled | default(false) %}
+        Proxy = {
+            Host     = "{{ havoc_proxy_host }}"
+            Port     = {{ havoc_proxy_port }}
+            Username = "{{ havoc_proxy_username | default('') }}"
+            Password = "{{ havoc_proxy_password | default('') }}"
+        }
+        {% endif %}
+    }
+    
+    https {
+        Name         = "https"
+        KillDate     = "{{ havoc_killdate | default('2030-01-01') }}"
+        WorkingHours = "{{ havoc_working_hours | default('0:00-23:59') }}"
+        {% if havoc_hosts is defined %}
+        Hosts        = [
+            {% for host in havoc_hosts %}
+            "{{ host }}"{% if not loop.last %},{% endif %}
+            {% endfor %}
+        ]
+        {% else %}
+        Hosts        = ["0.0.0.0"]
+        {% endif %}
+        HostBind     = "0.0.0.0"
+        HostRotation = "{{ havoc_host_rotation | default('round-robin') }}"
+        Port         = {{ havoc_https_port | default(443) }}
+        PortBind     = {{ havoc_https_port | default(443) }}
+        {% if havoc_user_agent is defined %}
+        UserAgent    = "{{ havoc_user_agent }}"
+        {% else %}
+        UserAgent    = "Mozilla/5.0 (Windows NT 10.{{ random_hex[0] | int }}.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{{ random_hex[1] | int + 80 }}.0.{{ random_hex[2:4] | int }}.{{ random_hex[4:6] | int }} Safari/537.36"
+        {% endif %}
+        Headers      = [
+            {% if havoc_https_headers is defined %}
+            {% for header in havoc_https_headers %}
+            "{{ header }}"{% if not loop.last %},{% endif %}
+            {% endfor %}
+            {% else %}
+            "Accept: */*",
+            "Accept-Language: en-US,en;q=0.9",
+            "X-Requested-With: XMLHttpRequest"
+            {% endif %}
+        ]
+        Uris         = [
+            {% if havoc_https_uris is defined %}
+            {% for uri in havoc_https_uris %}
+            "{{ uri }}"{% if not loop.last %},{% endif %}
+            {% endfor %}
+            {% else %}
+            "/api/v{{ random_hex[6] | int + 2 }}",
+            "/content",
+            "/static/{{ random_hex[2:5] }}",
+            "/wp-content/plugins/{{ random_hex[1:6] }}"
+            {% endif %}
+        ]
+        Secure       = true
+        Cert         = "{{ havoc_cert_path | default('/root/Tools/havoc/data/certs/havoc.crt') }}"
+        Key          = "{{ havoc_key_path | default('/root/Tools/havoc/data/certs/havoc.key') }}"
+        {% if havoc_proxy_enabled | default(false) %}
+        Proxy = {
+            Host     = "{{ havoc_proxy_host }}"
+            Port     = {{ havoc_proxy_port }}
+            Username = "{{ havoc_proxy_username | default('') }}"
+            Password = "{{ havoc_proxy_password | default('') }}"
+        }
+        {% endif %}
+    }
+    
+    {% if havoc_smb_enabled | default(false) %}
+    smb {
+        Name         = "smb"
+        PipeName     = "{{ havoc_smb_pipename | default('havoc-' ~ random_hex[0:6]) }}"
+    }
+    {% endif %}
+    
+    {% if havoc_external_enabled | default(false) %}
+    external {
+        Name         = "external"
+        KillDate     = "{{ havoc_external_killdate | default('2030-01-01') }}"
+        WorkingHours = "{{ havoc_external_hours | default('0:00-23:59') }}"
+        Endpoint     = "{{ havoc_external_endpoint }}"
+    }
+    {% endif %}
+    
+    {% if havoc_additional_listeners is defined %}
+    {% for listener in havoc_additional_listeners %}
+    {{ listener.name }} {
+        {% for key, value in listener.config.items() %}
+        {{ key }} = {% if value is string %}"{{ value }}"{% else %}{{ value }}{% endif %}
+        {% endfor %}
+    }
+    {% endfor %}
+    {% endif %}
+}
+
+Demon {
+    Sleep            = {{ havoc_sleep | default(random_hex[0:2] | int % 5 + 2) }}
+    SleepJitter      = {{ havoc_jitter | default(random_hex[2:4] | int % 30 + 20) }}
+    Injection        = {{ havoc_injection_method | default(random_hex[4] | int % 3) }}
+    IndirectSyscalls = {{ havoc_indirect_syscalls | default(true) | lower }}
+    
+    Injection {
+        {% if havoc_spawn64 is defined %}
+        Spawn64 = "{{ havoc_spawn64 }}"
+        {% else %}
+        {% set process_list = [
+            "C:\\Windows\\System32\\notepad.exe",
+            "C:\\Windows\\System32\\RuntimeBroker.exe",
+            "C:\\Windows\\System32\\dllhost.exe",
+            "C:\\Windows\\System32\\smartscreen.exe",
+            "C:\\Windows\\System32\\ctfmon.exe",
+            "C:\\Windows\\System32\\sihost.exe",
+            "C:\\Windows\\System32\\taskhostw.exe"
+        ] %}
+        Spawn64 = "{{ process_list[random_hex[5] | int % process_list|length] }}"
+        {% endif %}
+        
+        {% if havoc_spawn32 is defined %}
+        Spawn32 = "{{ havoc_spawn32 }}"
+        {% else %}
+        {% set process32_list = [
+            "C:\\Windows\\SysWOW64\\notepad.exe",
+            "C:\\Windows\\SysWOW64\\dllhost.exe",
+            "C:\\Windows\\SysWOW64\\ctfmon.exe"
+        ] %}
+        Spawn32 = "{{ process32_list[random_hex[6] | int % process32_list|length] }}"
+        {% endif %}
+        
+        {% if havoc_allocation_method is defined %}
+        AllocationMethod = {{ havoc_allocation_method }}
+        {% else %}
+        AllocationMethod = {{ random_hex[7] | int % 3 }}
+        {% endif %}
+        
+        {% if havoc_execution_method is defined %}
+        ExecutionMethod = {{ havoc_execution_method }}
+        {% else %}
+        ExecutionMethod = {{ random_hex[3] | int % 2 }}
+        {% endif %}
+        
+        {% if havoc_execution_options is defined %}
+        ExecuteOptions = {{ havoc_execution_options }}
+        {% else %}
+        ExecuteOptions = 1
+        {% endif %}
+    }
+
+    {% if havoc_evasion_enabled | default(true) %}
+    Evasion {
+        StackSpoofing   = {{ havoc_stack_spoofing | default(true) | lower }}
+        SleazeUnhook    = {{ havoc_sleaze_unhook | default(true) | lower }}
+        AmsiEtwPatching = {{ havoc_amsi_etw_patching | default(true) | lower }}
+        ApiFiltering    = {{ havoc_api_filtering | default(true) | lower }}
+        
+        {% if havoc_syscall_method is defined %}
+        SyscallMethod = {{ havoc_syscall_method }}
+        {% else %}
+        SyscallMethod = {{ random_hex[4] | int % 3 }}
+        {% endif %}
+    }
+    {% endif %}
+    
+    {% if havoc_masking_enabled | default(true) %}
+    Masking {
+        HeapType = {{ random_hex[1] | int % 2 }}
+        SleepMaskTechnique = {{ random_hex[2] | int % 4 }}
+    }
+    {% endif %}
+    
+    {% if havoc_binary_signing_enabled | default(false) %}
+    Binary {
+        SignTemplate = {
+            Name    = "{{ havoc_sign_template_name | default('MicrosoftLLC') }}"
+            {% if havoc_sign_template_extra_options is defined %}
+            Options = {
+                {% for key, value in havoc_sign_template_extra_options.items() %}
+                {{ key }} = "{{ value }}"
+                {% endfor %}
+            }
+            {% endif %}
+        }
+    }
+    {% endif %}
+    
+    {{ havoc_additional_options | default('') }}
+}
