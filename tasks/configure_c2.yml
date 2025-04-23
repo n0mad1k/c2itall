@@ -122,7 +122,7 @@
     mode: '0700'
     owner: root
     group: root
-    
+
 - name: Create Havoc C2 configuration from template
   template:
     src: "../templates/havoc-config.yaotl.j2"
@@ -163,13 +163,6 @@
   with_items:
     - "/usr/local/bin/sliver"
     - "/usr/local/bin/sliver-server"
-  ignore_errors: yes
-
-- name: Stop existing Sliver service if running
-  systemd:
-    name: sliver
-    state: stopped
-    enabled: no
   ignore_errors: yes
 
 - name: Install Havoc C2 Framework
