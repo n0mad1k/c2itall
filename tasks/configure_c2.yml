@@ -123,14 +123,6 @@
     owner: root
     group: root
 
-- name: Create Havoc C2 configuration from template
-  template:
-    src: "../templates/havoc-config.yaotl.j2"
-    dest: "/root/Tools/havoc/data/havoc.yaotl"
-    mode: '0600'
-    owner: root
-    group: root
-
 - name: Create post-install instructions
   template:
     src: "../templates/POST_INSTALL_INSTRUCTIONS.txt.j2"
@@ -155,6 +147,14 @@
     src: "../templates/generate_havoc_payloads.sh.j2"
     dest: "/root/Tools/generate_havoc_payloads.sh"
     mode: '0700'
+    owner: root
+    group: root
+
+- name: Create Havoc C2 configuration from template
+  template:
+    src: "../templates/havoc-config.yaotl.j2"
+    dest: "/root/Tools/havoc/data/havoc.yaotl"
+    mode: '0600'
     owner: root
     group: root
 
