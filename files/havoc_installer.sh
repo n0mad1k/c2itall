@@ -123,7 +123,7 @@ mkdir -p $HAVOC_DIR/payloads/backup
 
 # Modify Havoc source for signature randomization
 log "Modifying Havoc source with unique signature: $RANDOMIZED_BUILD_ID"
-cd $HAVOC_DIR/Teamserver
+cd $HAVOC_DIR/teamserver
 
 # Randomize version string
 sed -i "s/const Version = \".*\"/const Version = \"${RANDOMIZED_VERSION}\"/" pkg/common/metadata.go
@@ -135,7 +135,7 @@ go build -trimpath -ldflags="-w -s -buildid=$(random_string 16)" -o havoc main.g
 
 # Build Havoc client
 log "Building Havoc client..."
-cd $HAVOC_DIR/Client
+cd $HAVOC_DIR/client
 mkdir -p build
 cd build
 cmake -GNinja ..
@@ -780,8 +780,8 @@ After=network.target
 Type=simple
 User=root
 Group=root
-WorkingDirectory=$HAVOC_DIR/Teamserver
-ExecStart=$HAVOC_DIR/Teamserver/havoc server -d
+WorkingDirectory=$HAVOC_DIR/teamserver
+ExecStart=$HAVOC_DIR/teamserver/havoc server -d
 Restart=always
 RestartSec=10
 
@@ -824,14 +824,14 @@ EOF
 
 # Set proper permissions
 log "Setting proper permissions..."
-chmod 755 $HAVOC_DIR/Teamserver/havoc
-chmod 755 $HAVOC_DIR/Client/havoc
+chmod 755 $HAVOC_DIR/teamserver/havoc
+chmod 755 $HAVOC_DIR/client/havoc
 chmod 600 $HAVOC_CONFIG_FILE
 chmod 600 $HAVOC_DIR/config/profile.json
 
 # Create symlinks to executables in /usr/local/bin
-ln -sf $HAVOC_DIR/Teamserver/havoc /usr/local/bin/havoc-server
-ln -sf $HAVOC_DIR/Client/havoc /usr/local/bin/havoc-client
+ln -sf $HAVOC_DIR/teamserver/havoc /usr/local/bin/havoc-server
+ln -sf $HAVOC_DIR/client/havoc /usr/local/bin/havoc-client
 ln -sf $IMPLANT_MUTATOR_SCRIPT /usr/local/bin/havoc-mutate
 
 # Run the implant mutator as part of installation
@@ -877,7 +877,7 @@ This is an installation of the Havoc C2 Framework using the **dev branch** with 
 The server can be started with:
 
 \`\`\`
-$HAVOC_DIR/Teamserver/havoc server -d
+$HAVOC_DIR/teamserver/havoc server -d
 \`\`\`
 
 ## Implant Mutation
