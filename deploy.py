@@ -34,10 +34,11 @@ PROVIDER_DIRS = {
 
 def setup_logging():
     """Set up logging for the deployment"""
+    rand_suffix = generate_random_string()
     log_dir = "logs"
     os.makedirs(log_dir, exist_ok=True)
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    log_file = os.path.join(log_dir, f"deployment_{timestamp}.log")
+    log_file = os.path.join(log_dir, f"deployment_{rand_suffix}.log")
     
     # Configure file handler to log DEBUG and above
     logging.basicConfig(
@@ -346,7 +347,7 @@ def interactive_setup():
         # Generate random tracker name
         rand_suffix = generate_random_string()
         timestamp = int(time.time()) % 10000
-        config['tracker_name'] = f"t-{rand_suffix}-{timestamp}"  # Changed from track- to t-
+        config['tracker_name'] = f"t-{rand_suffix}"  # Changed from track- to t-
     
     # Post-deployment options
     config['ssh_after_deploy'] = input("\nSSH into instance after deployment? (y/n) [default: n]: ").lower() == 'y'
@@ -366,8 +367,8 @@ def interactive_setup():
     # Generate random instance names with new format
     rand_suffix = generate_random_string()
     timestamp = int(time.time()) % 10000
-    config['redirector_name'] = f"r-{rand_suffix}-{timestamp}"  # Changed from srv- to r-
-    config['c2_name'] = f"s-{rand_suffix}-{timestamp}"  # Changed from node- to s-
+    config['redirector_name'] = f"r-{rand_suffix}"  # Changed from srv- to r-
+    config['c2_name'] = f"s-{rand_suffix}"  # Changed from node- to s-
     
     # Additional settings from vars_data
     config['gophish_admin_port'] = vars_data.get('gophish_admin_port', str(random.randint(2000, 9000)))
@@ -1189,9 +1190,10 @@ def deploy_tracker(config):
 
 def generate_deployment_info(config, success=True):
     """Generate a comprehensive deployment information log file"""
+    rand_suffix = generate_random_string()
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    deployment_name = f"{config.get('provider', 'unknown')}-{timestamp}"
-    log_file = os.path.join("logs", f"deployment_info_{deployment_name}.log")
+    deployment_name = f"{config.get('provider', 'unknown')}"
+    log_file = os.path.join("logs", f"deployment_info_{rand_suffix}.log")
     
     # Ensure log directory exists
     os.makedirs("logs", exist_ok=True)
@@ -1199,7 +1201,7 @@ def generate_deployment_info(config, success=True):
     # Start collecting information
     info = []
     info.append("=" * 80)
-    info.append(f"C2ingRed Deployment Information - {deployment_name}")
+    info.append(f"C2ingRed Deployment Information - {rand_suffix}")
     info.append("=" * 80)
     info.append("")
     
@@ -1442,9 +1444,9 @@ C2itAll - Red Team Infrastructure Setup
         # Generate random instance names with new format
         rand_suffix = generate_random_string()
         timestamp = int(time.time()) % 10000
-        config['redirector_name'] = args.redirector_name or f"r-{rand_suffix}-{timestamp}"  # Changed from srv- to r-
-        config['c2_name'] = args.c2_name or f"s-{rand_suffix}-{timestamp}"  # Changed from node- to s-
-        config['tracker_name'] = args.tracker_name or f"t-{rand_suffix}-{timestamp}"  # Changed from track- to t-
+        config['redirector_name'] = args.redirector_name or f"r-{rand_suffix}"  # Changed from srv- to r-
+        config['c2_name'] = args.c2_name or f"s-{rand_suffix}"  # Changed from node- to s-
+        config['tracker_name'] = args.tracker_name or f"t-{rand_suffix}"  # Changed from track- to t-
         
         # Deployment options
         config['redirector_only'] = args.redirector_only
