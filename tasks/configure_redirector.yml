@@ -119,7 +119,7 @@
 # Configure nginx for dual HTTP/HTTPS with complete encryption
 - name: Configure NGINX for secure C2 redirection
   template:
-    src: "../templates/redirector-site-config.j2"
+    src: "../templates/redirector-site.conf.j2"
     dest: /etc/nginx/sites-available/default
     mode: '0644'
     owner: root
@@ -135,29 +135,7 @@
 
 - name: Create SSL certificate setup instructions
   template:
-    content: |
-      #!/bin/bash
-      # Let's Encrypt Certificate Setup Script
-      # Run this after setting up DNS records pointing to this server
-
-      # Replace these with your actual values if needed
-      DOMAIN="{{ domain }}"
-      SUBDOMAIN="{{ redirector_subdomain }}"
-      EMAIL="admin@${DOMAIN}"
-
-      echo "================================================"
-      echo "Let's Encrypt Certificate Setup"
-      echo "================================================"
-      echo
-      echo "Before running this script, make sure:"
-      echo "1. DNS records are set up correctly"
-      echo "   - ${SUBDOMAIN}.${DOMAIN} points to $(curl -s ifconfig.me)"
-      echo "2. Port 80 is open to the internet"
-      echo
-      echo "Run the following command to get your certificate:"
-      echo "certbot --nginx -d ${SUBDOMAIN}.${DOMAIN} --non-interactive --agree-tos -m ${EMAIL}"
-      echo
-      echo "================================================"
+    src: "../templates/setup-cert.sh.j2"
     dest: /root/Tools/setup-cert.sh
     mode: '0700'
     owner: root
@@ -165,27 +143,7 @@
 
 - name: Configure NGINX stream module for TCP traffic
   template:
-    content: |
-      # TCP stream configuration for Havoc C2
-      stream {
-          # TCP forwarding for Havoc Teamserver
-          server {
-              listen {{ havoc_teamserver_port | default(40056) }};
-              proxy_pass {{ c2_ip }}:{{ havoc_teamserver_port | default(40056) }};
-          }
-          
-          # Additional Havoc ports
-          server {
-              listen {{ havoc_http_port | default(8080) }};
-              proxy_pass {{ c2_ip }}:{{ havoc_http_port | default(8080) }};
-          }
-          
-          # HTTPS for Havoc
-          server {
-              listen {{ havoc_https_port | default(443) }};
-              proxy_pass {{ c2_ip }}:{{ havoc_https_port | default(443) }};
-          }
-      }
+    src: "../templates/stream.conf.j2"
     dest: /etc/nginx/modules-enabled/stream.conf
     mode: '0644'
     owner: root

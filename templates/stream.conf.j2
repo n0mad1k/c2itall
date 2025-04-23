@@ -1,0 +1,20 @@
+# TCP stream configuration for Havoc C2
+stream {
+    # TCP forwarding for Havoc Teamserver
+    server {
+  listen {{ havoc_teamserver_port | default(40056) }};
+  proxy_pass {{ c2_ip }}:{{ havoc_teamserver_port | default(40056) }};
+    }
+    
+    # Additional Havoc ports
+    server {
+  listen {{ havoc_http_port | default(8080) }};
+  proxy_pass {{ c2_ip }}:{{ havoc_http_port | default(8080) }};
+    }
+    
+    # HTTPS for Havoc
+    server {
+  listen {{ havoc_https_port | default(443) }};
+  proxy_pass {{ c2_ip }}:{{ havoc_https_port | default(443) }};
+    }
+}

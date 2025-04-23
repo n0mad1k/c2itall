@@ -19,10 +19,10 @@ NoNewPrivileges=true
 StandardOutput=null
 StandardError=null
 
-# Environment variables
-Environment="C2_HOST={{ c2_ip }}"
-Environment="LISTEN_PORT={{ shell_handler_port }}"
-Environment="HAVOC_PORT={{ havoc_teamserver_port | default(40056) }}"
+# Environment variables (configured via Ansible)
+Environment="C2_HOST={{ c2_ip | default('127.0.0.1') }}"
+Environment="LISTEN_PORT={{ shell_handler_port | default('4444') }}"
+Environment="HAVOC_PORT={{ havoc_teamserver_port | default('40056') }}"
 
 [Install]
 WantedBy=multi-user.target

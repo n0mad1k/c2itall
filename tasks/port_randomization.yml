@@ -1,6 +1,6 @@
 ---
 # tasks/port_randomization.yml
-# Task file to randomize ports for C2 infrastructure
+# Task file to randomize ports for C2 infrastructure with improved host-based service management
 
 - name: Create port randomization script
   copy:
@@ -55,12 +55,38 @@
     insertafter: '^\\[Service\\]'
   when: randomize_ports | default(true) | bool and port_config_result.rc == 0
 
+# Improved service management - checks for service existence before restarting
+- name: Determine services to restart based on host type
+  set_fact:
+    services_to_restart: []
+  when: randomize_ports | default(true) | bool and port_config_result.rc == 0
+
+- name: Check if Havoc service exists
+  stat:
+    path: "/etc/systemd/system/havoc.service"
+  register: havoc_service_stat
+  when: randomize_ports | default(true) | bool and port_config_result.rc == 0
+
+- name: Add Havoc to services list if it exists
+  set_fact:
+    services_to_restart: "{{ services_to_restart + ['havoc'] }}"
+  when: randomize_ports | default(true) | bool and port_config_result.rc == 0 and havoc_service_stat.stat.exists | default(false)
+
+- name: Check if shell-handler service exists
+  stat:
+    path: "/etc/systemd/system/shell-handler.service"
+  register: shell_handler_service_stat
+  when: randomize_ports | default(true) | bool and port_config_result.rc == 0
+
+- name: Add shell-handler to services list if it exists
+  set_fact:
+    services_to_restart: "{{ services_to_restart + ['shell-handler'] }}"
+  when: randomize_ports | default(true) | bool and port_config_result.rc == 0 and shell_handler_service_stat.stat.exists | default(false)
+
 - name: Reload and restart services
   systemd:
     daemon_reload: yes
     name: "{{ item }}"
     state: restarted
-  with_items:
-    - havoc
-    - shell-handler
-  when: randomize_ports | default(true) | bool and port_config_result.rc == 0
+  with_items: "{{ services_to_restart }}"
+  when: randomize_ports | default(true) | bool and port_config_result.rc == 0 and services_to_restart | length > 0
