@@ -32,6 +32,10 @@ PROVIDER_DIRS = {
     "flokinet": "FlokiNET"
 }
 
+def generate_random_string(length=8):
+    """Generate a random string of letters and digits."""
+    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
+
 def generate_deployment_id():
     """Generate a consistent deployment ID for all resources in this deployment"""
     rand_suffix = generate_random_string(6)
@@ -42,9 +46,9 @@ def setup_logging(deployment_id=None):
     log_dir = "logs"
     os.makedirs(log_dir, exist_ok=True)
     
-    # Use deployment_id if provided, otherwise use random string
-    log_suffix = deployment_id if deployment_id else generate_random_string()
-    log_file = os.path.join(log_dir, f"deployment_{log_suffix}.log")
+    # ALWAYS use the provided deployment_id - don't generate a new one
+    # This is the key change to ensure consistency
+    log_file = os.path.join(log_dir, f"deployment_{deployment_id}.log")
     
     # Configure file handler to log DEBUG and above
     logging.basicConfig(
@@ -61,8 +65,7 @@ def setup_logging(deployment_id=None):
     logging.getLogger('').addHandler(console)
     
     logging.info("Deployment started")
-    if deployment_id:
-        logging.info(f"Deployment ID: {deployment_id}")
+    logging.info(f"Deployment ID: {deployment_id}")
     return log_file
 
 def parse_arguments():
@@ -134,13 +137,17 @@ def parse_arguments():
     
     return parser.parse_args()
 
-def interactive_setup():
+def interactive_setup(deployment_id=None):
     """Interactive setup wizard for deployment"""
     config = {}
     
     print("\n========================================")
     print("C2itAll - Interactive Setup Wizard")
     print("========================================\n")
+    
+    # Create a deployment ID for consistent resource naming
+    deployment_id = deployment_id or generate_deployment_id()
+    config['deployment_id'] = deployment_id
     
     # Select provider
     print("Available cloud providers:")
@@ -351,11 +358,6 @@ def interactive_setup():
         config['tracker_ipinfo_token'] = input("IPinfo.io API token [optional]: ")
         config['tracker_setup_ssl'] = input("Set up SSL for tracker? (y/n) [default: y]: ").lower() != 'n'
         config['tracker_create_pixel'] = input("Create tracking pixel? (y/n) [default: y]: ").lower() != 'n'
-        
-        # Generate random tracker name
-        rand_suffix = generate_random_string()
-        timestamp = int(time.time()) % 10000
-        config['tracker_name'] = f"t-{rand_suffix}"  # Changed from track- to t-
     
     # Post-deployment options
     config['ssh_after_deploy'] = input("\nSSH into instance after deployment? (y/n) [default: n]: ").lower() == 'y'
@@ -369,14 +371,15 @@ def interactive_setup():
         if ssh_key:
             config['ssh_key'] = os.path.expanduser(ssh_key)
         else:
-            # Generate SSH key
-            config['ssh_key'] = generate_ssh_key()
+            # Generate SSH key using the deployment ID
+            config['ssh_key'] = generate_ssh_key(deployment_id)
     
-    # Generate random instance names with new format
-    rand_suffix = generate_random_string()
-    timestamp = int(time.time()) % 10000
-    config['redirector_name'] = f"r-{rand_suffix}"  # Changed from srv- to r-
-    config['c2_name'] = f"s-{rand_suffix}"  # Changed from node- to s-
+    # Generate instance names with consistent deployment ID
+    config['redirector_name'] = f"r-{deployment_id}"
+    config['c2_name'] = f"s-{deployment_id}"
+    
+    if config.get('deploy_tracker'):
+        config['tracker_name'] = f"t-{deployment_id}"
     
     # Additional settings from vars_data
     config['gophish_admin_port'] = vars_data.get('gophish_admin_port', str(random.randint(2000, 9000)))
@@ -1391,21 +1394,21 @@ C2ingRed - Red Team Infrastructure Setup
 ========================================
     """)
     
-    # Generate deployment ID first - will be used throughout
-    deployment_id = generate_deployment_id()
-    
-    # Set up logging with deployment ID
-    log_file = setup_logging(deployment_id)
-    
-    # Parse command line arguments
+    # Parse command line arguments first (don't set up logging yet)
     args = parse_arguments()
     
     # Check dependencies
     check_dependencies()
     
+    # Generate a single deployment ID that will be used for EVERYTHING
+    deployment_id = generate_deployment_id()
+    
+    # NOW set up logging with our deployment ID
+    log_file = setup_logging(deployment_id)
+        
     # Use interactive mode if specified
     if args.interactive:
-        config = interactive_setup()
+        config = interactive_setup(deployment_id)
     else:
         # Override provider if --flokinet is specified
         if args.flokinet:
@@ -1433,6 +1436,14 @@ C2ingRed - Red Team Infrastructure Setup
         # Copy all values from vars_data to config first
         for key, value in vars_data.items():
             config[key] = value
+        
+        # Store the deployment ID in the config
+        config['deployment_id'] = deployment_id
+
+        # Use consistent deployment ID for all resource names
+        config['redirector_name'] = args.redirector_name or f"r-{deployment_id}"
+        config['c2_name'] = args.c2_name or f"s-{deployment_id}"
+        config['tracker_name'] = args.tracker_name or f"t-{deployment_id}"
         
         # Subdomain settings - ensure these are explicitly set
         config['redirector_subdomain'] = args.redirector_subdomain or 'cdn'
@@ -1477,16 +1488,8 @@ C2ingRed - Red Team Infrastructure Setup
         else:
             # Generate a key if no key is provided and we're not in teardown mode
             if not args.teardown:
-                config['ssh_key'] = generate_ssh_key()
-        
-        # Store the deployment ID in the config
-        config['deployment_id'] = deployment_id
-
-        # Use consistent deployment ID for all resource names
-        config['redirector_name'] = args.redirector_name or f"r-{deployment_id}"
-        config['c2_name'] = args.c2_name or f"s-{deployment_id}"
-        config['tracker_name'] = args.tracker_name or f"t-{deployment_id}"
-        
+                config['ssh_key'] = generate_ssh_key(deployment_id)
+             
         # Deployment options
         config['redirector_only'] = args.redirector_only
         config['c2_only'] = args.c2_only
