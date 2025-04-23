@@ -156,15 +156,6 @@
     owner: root
     group: root
 
-- name: Remove any existing Sliver or Havoc
-  file:
-    path: "{{ item }}"
-    state: absent
-  with_items:
-    - "/usr/local/bin/sliver"
-    - "/usr/local/bin/sliver-server"
-  ignore_errors: yes
-
 - name: Install Havoc C2 Framework
   shell: "/root/Tools/havoc_installer.sh"
   args:

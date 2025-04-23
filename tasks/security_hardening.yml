@@ -79,19 +79,19 @@
     - /root/Tools/beacons
     - /root/Tools/payloads
 
-- name: Create Sliver service file
+- name: Create Havoc service file
   copy:
     content: |
       [Unit]
-      Description=Sliver C2 Server
+      Description=Havoc C2 Server
       After=network.target
       
       [Service]
       Type=simple
       User=root
       Group=root
-      WorkingDirectory=/root/.sliver
-      ExecStart=/usr/local/bin/sliver-server daemon
+      WorkingDirectory=/root/Tools/havoc/Teamserver
+      ExecStart=/root/Tools/havoc/Teamserver/havoc server -d
       Restart=always
       RestartSec=10
       
@@ -106,7 +106,7 @@
       
       [Install]
       WantedBy=multi-user.target
-    dest: /etc/systemd/system/sliver.service
+    dest: /etc/systemd/system/havoc.service
     mode: '0644'
     owner: root
     group: root
@@ -128,9 +128,9 @@
 
 - name: Configure and start beacon server
   shell: |
-    sed -i "s/C2_HOST=.*/C2_HOST=\"{{ ansible_host }}\"/g" /root/Tools/serve-beacons.sh
-    chmod +x /root/Tools/serve-beacons.sh
+    sed -i "s/C2_HOST=.*/C2_HOST=\"{{ ansible_host }}\"/g" /root/Tools/serve-havoc-payloads.sh
+    chmod +x /root/Tools/serve-havoc-payloads.sh
     # Check if beacon server is already running
-    if ! pgrep -f "/root/Tools/serve-beacons.sh" > /dev/null; then
-      nohup /root/Tools/serve-beacons.sh > /dev/null 2>&1 &
+    if ! pgrep -f "/root/Tools/serve-havoc-payloads.sh" > /dev/null; then
+      nohup /root/Tools/serve-havoc-payloads.sh > /dev/null 2>&1 &
     fi
