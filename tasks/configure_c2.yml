@@ -203,7 +203,7 @@
 - name: Create beacon server script from template
   template:
     src: "../templates/serve-havoc-payloads.sh.j2"
-    dest: "/root/Tools/serve-beacons.sh"
+    dest: "/root/Tools/serve-havoc-payloads.sh"
     mode: '0700'
     owner: root
     group: root
@@ -232,7 +232,7 @@
 
 - name: Start payload server
   shell: |
-    nohup /root/Tools/serve-beacons.sh > /dev/null 2>&1 &
+    nohup /root/Tools/serve-havoc-payloads.sh > /dev/null 2>&1 &
   args:
     executable: /bin/bash
   register: beacon_server_result

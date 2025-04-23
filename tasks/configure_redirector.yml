@@ -114,110 +114,12 @@
 # Run port randomization if enabled
 - name: Run port randomization if enabled
   include_tasks: port_randomization.yml
-  when: randomize_ports | default(false) | bool
+  when: randomize_ports | default(true) | bool
 
 # Configure nginx for dual HTTP/HTTPS with complete encryption
 - name: Configure NGINX for secure C2 redirection
   template:
-    content: |
-      # HTTP server - redirects all to HTTPS
-      server {
-          listen 80;
-          listen [::]:80;
-          server_name {{ redirector_subdomain }}.{{ domain }};
-          
-          # Force redirect to HTTPS for all traffic
-          return 301 https://$host$request_uri;
-      }
-
-      # HTTPS server - handles both HTTP and MTLS C2 traffic
-      server {
-          listen 443 ssl;
-          listen [::]:443 ssl;
-          server_name {{ redirector_subdomain }}.{{ domain }};
-          
-          # SSL Configuration
-          ssl_certificate /etc/letsencrypt/live/{{ redirector_subdomain }}.{{ domain }}/fullchain.pem;
-          ssl_certificate_key /etc/letsencrypt/live/{{ redirector_subdomain }}.{{ domain }}/privkey.pem;
-          ssl_protocols TLSv1.2 TLSv1.3;
-          ssl_prefer_server_ciphers on;
-          ssl_ciphers 'ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305';
-          ssl_session_timeout 1d;
-          ssl_session_cache shared:SSL:10m;
-          
-          # Root directory
-          root /var/www/html;
-          index index.html;
-          
-          # Primary location for legitimate website traffic
-          location / {
-              try_files $uri $uri/ =404;
-          }
-          
-          # HTTP C2 paths (still over HTTPS)
-          location /ajax/ {
-              proxy_pass http://{{ c2_ip }}:{{ randomized_http_port | default(8888) }};
-              proxy_http_version 1.1;
-              proxy_set_header Host $host;
-              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-              proxy_set_header X-Real-IP $remote_addr;
-              proxy_set_header Upgrade $http_upgrade;
-              proxy_set_header Connection "upgrade";
-          }
-          
-          # MTLS/TCP passthrough for direct Sliver communication
-          location /mtls/ {
-              proxy_pass https://{{ c2_ip }}:{{ randomized_https_port | default(443) }};
-              proxy_http_version 1.1;
-              proxy_set_header Host $host;
-              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-              proxy_set_header X-Real-IP $remote_addr;
-              proxy_set_header Upgrade $http_upgrade;
-              proxy_set_header Connection "upgrade";
-              proxy_ssl_verify off;
-          }
-          
-          # Static resources that redirect to C2
-          location ~ ^/static/(css|js|images)/.*\.(css|js|png|jpg|jpeg|gif|ico)$ {
-              proxy_pass http://{{ c2_ip }}:{{ randomized_http_port | default(8888) }};
-              proxy_http_version 1.1;
-              proxy_set_header Host $host;
-              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-              proxy_set_header X-Real-IP $remote_addr;
-          }
-          
-          # Security headers
-          add_header X-Content-Type-Options "nosniff" always;
-          add_header X-Frame-Options "SAMEORIGIN" always;
-          add_header X-XSS-Protection "1; mode=block" always;
-          add_header Referrer-Policy "no-referrer" always;
-          add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'" always;
-          
-          # Disable logging if zero-logs is enabled
-          {% if zero_logs | default(true) | bool %}
-          access_log off;
-          error_log /dev/null crit;
-          {% endif %}
-      }
-
-      # Catch-all server block
-      server {
-          listen 80 default_server;
-          listen [::]:80 default_server;
-          listen 443 ssl default_server;
-          listen [::]:443 ssl default_server;
-          
-          # Self-signed cert for catch-all
-          ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;
-          ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
-          
-          # Redirect unknown traffic to a legitimate-looking site
-          return 301 https://www.google.com;
-          
-          # Disable logs
-          access_log off;
-          error_log /dev/null crit;
-      }
+    src: "../templates/redirector-site-config.j2"
     dest: /etc/nginx/sites-available/default
     mode: '0644'
     owner: root
@@ -261,22 +163,27 @@
     owner: root
     group: root
 
-# Add stream module configuration for pure TCP forwarding
 - name: Configure NGINX stream module for TCP traffic
   template:
     content: |
-      # TCP stream configuration for MTLS
+      # TCP stream configuration for Havoc C2
       stream {
-          # TCP forwarding for MTLS
+          # TCP forwarding for Havoc Teamserver
           server {
-              listen {{ randomized_mtls_port | default(31337) }};
-              proxy_pass {{ c2_ip }}:{{ randomized_mtls_port | default(31337) }};
+              listen {{ havoc_teamserver_port | default(40056) }};
+              proxy_pass {{ c2_ip }}:{{ havoc_teamserver_port | default(40056) }};
           }
           
-          # Additional C2 ports
+          # Additional Havoc ports
           server {
-              listen {{ randomized_http_port | default(50051) }};
-              proxy_pass {{ c2_ip }}:{{ randomized_http_port | default(50051) }};
+              listen {{ havoc_http_port | default(8080) }};
+              proxy_pass {{ c2_ip }}:{{ havoc_http_port | default(8080) }};
+          }
+          
+          # HTTPS for Havoc
+          server {
+              listen {{ havoc_https_port | default(443) }};
+              proxy_pass {{ c2_ip }}:{{ havoc_https_port | default(443) }};
           }
       }
     dest: /etc/nginx/modules-enabled/stream.conf

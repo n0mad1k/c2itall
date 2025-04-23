@@ -42,7 +42,7 @@
 
 - name: Update shell handler configuration with randomized port
   replace:
-    path: "/opt/shell-handler/persistent-listener.sh"
+    path: "/root/Tools/shell-handler/persistent-listener.sh"
     regexp: "LISTEN_PORT=.*"
     replace: "LISTEN_PORT={{ randomized_shell_handler_port | default(shell_handler_port) }}"
   when: randomize_ports | default(true) | bool and port_config_result.rc == 0
