@@ -32,18 +32,24 @@ PROVIDER_DIRS = {
     "flokinet": "FlokiNET"
 }
 
-def setup_logging():
+def generate_deployment_id():
+    """Generate a consistent deployment ID for all resources in this deployment"""
+    rand_suffix = generate_random_string(6)
+    return f"{rand_suffix}"
+
+def setup_logging(deployment_id=None):
     """Set up logging for the deployment"""
-    rand_suffix = generate_random_string()
     log_dir = "logs"
     os.makedirs(log_dir, exist_ok=True)
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    log_file = os.path.join(log_dir, f"deployment_{rand_suffix}.log")
+    
+    # Use deployment_id if provided, otherwise use random string
+    log_suffix = deployment_id if deployment_id else generate_random_string()
+    log_file = os.path.join(log_dir, f"deployment_{log_suffix}.log")
     
     # Configure file handler to log DEBUG and above
     logging.basicConfig(
         filename=log_file,
-        level=logging.DEBUG,  # Changed from INFO to DEBUG
+        level=logging.DEBUG,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
     
@@ -55,6 +61,8 @@ def setup_logging():
     logging.getLogger('').addHandler(console)
     
     logging.info("Deployment started")
+    if deployment_id:
+        logging.info(f"Deployment ID: {deployment_id}")
     return log_file
 
 def parse_arguments():
@@ -433,10 +441,15 @@ def generate_random_string(length=8):
     """Generate a random string of letters and digits."""
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
-def generate_ssh_key():
+def generate_ssh_key(deployment_id=None):
     """Generate an SSH key for deployment"""
-    rand_suffix = generate_random_string()
-    key_name = f"c2deploy_{rand_suffix}"
+    # Use deployment_id if provided, otherwise generate random suffix
+    if deployment_id:
+        key_name = f"c2deploy_{deployment_id}"
+    else:
+        rand_suffix = generate_random_string()
+        key_name = f"c2deploy_{rand_suffix}"
+        
     ssh_dir = os.path.expanduser("~/.ssh")
     os.makedirs(ssh_dir, exist_ok=True)
 
@@ -1190,10 +1203,8 @@ def deploy_tracker(config):
 
 def generate_deployment_info(config, success=True):
     """Generate a comprehensive deployment information log file"""
-    rand_suffix = generate_random_string()
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    deployment_name = f"{config.get('provider', 'unknown')}"
-    log_file = os.path.join("logs", f"deployment_info_{rand_suffix}.log")
+    deployment_id = config.get('deployment_id', generate_random_string())
+    log_file = os.path.join("logs", f"deployment_info_{deployment_id}.log")
     
     # Ensure log directory exists
     os.makedirs("logs", exist_ok=True)
@@ -1201,13 +1212,14 @@ def generate_deployment_info(config, success=True):
     # Start collecting information
     info = []
     info.append("=" * 80)
-    info.append(f"C2ingRed Deployment Information - {rand_suffix}")
+    info.append(f"C2ingRed Deployment Information - {deployment_id}")
     info.append("=" * 80)
     info.append("")
     
     # Basic deployment info
     info.append("DEPLOYMENT OVERVIEW")
     info.append("-----------------")
+    info.append(f"Deployment ID: {deployment_id}")
     info.append(f"Deployment Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     info.append(f"Provider: {config.get('provider', 'N/A')}")
     info.append(f"Deployment Status: {'SUCCESS' if success else 'FAILED'}")
@@ -1229,51 +1241,75 @@ def generate_deployment_info(config, success=True):
     # Server Information
     info.append("SERVER INFORMATION")
     info.append("-----------------")
+    ssh_key = config.get('ssh_key', 'N/A')
+    ssh_user = config.get('ssh_user', 'root')
+    
     if not config.get('c2_only'):
+        redirector_ip = config.get('redirector_ip', 'N/A')
         info.append("Redirector:")
         info.append(f"  Name: {config.get('redirector_name', 'N/A')}")
-        info.append(f"  IP: {config.get('redirector_ip', 'N/A')}")
+        info.append(f"  IP: {redirector_ip}")
         info.append(f"  Domain: {config.get('redirector_subdomain', 'cdn')}.{config.get('domain', 'N/A')}")
+        # SSH command for redirector
+        if redirector_ip != 'N/A' and ssh_key != 'N/A':
+            info.append(f"  SSH Command: ssh -i {ssh_key} {ssh_user}@{redirector_ip}")
     
     if not config.get('redirector_only'):
+        c2_ip = config.get('c2_ip', 'N/A')
         info.append("C2 Server:")
         info.append(f"  Name: {config.get('c2_name', 'N/A')}")
-        info.append(f"  IP: {config.get('c2_ip', 'N/A')}")
+        info.append(f"  IP: {c2_ip}")
         info.append(f"  Domain: {config.get('c2_subdomain', 'mail')}.{config.get('domain', 'N/A')}")
+        # SSH command for C2
+        if c2_ip != 'N/A' and ssh_key != 'N/A':
+            info.append(f"  SSH Command: ssh -i {ssh_key} {ssh_user}@{c2_ip}")
     
     if config.get('deploy_tracker') and not config.get('integrated_tracker'):
+        tracker_ip = config.get('tracker_ip', 'N/A')
         info.append("Tracker Server:")
         info.append(f"  Name: {config.get('tracker_name', 'N/A')}")
-        info.append(f"  IP: {config.get('tracker_ip', 'N/A')}")
+        info.append(f"  IP: {tracker_ip}")
         info.append(f"  Domain: {config.get('tracker_domain', 'track.' + config.get('domain', 'N/A'))}")
+        # SSH command for tracker
+        if tracker_ip != 'N/A' and ssh_key != 'N/A':
+            info.append(f"  SSH Command: ssh -i {ssh_key} {ssh_user}@{tracker_ip}")
     
     info.append("")
     
     # SSH Information
     info.append("SSH INFORMATION")
     info.append("--------------")
-    info.append(f"SSH Key: {config.get('ssh_key', 'N/A')}")
-    info.append(f"SSH User: {config.get('ssh_user', 'N/A')}")
+    info.append(f"SSH Key: {ssh_key}")
+    info.append(f"SSH User: {ssh_user}")
     if config.get('ssh_port'):
         info.append(f"SSH Port: {config.get('ssh_port')}")
     info.append("")
     
+    # Extract Havoc C2 information - check all possible variable names
+    havoc_admin_user = config.get('havoc_admin_user') or config.get('admin_user') or 'admin'
+    havoc_admin_password = config.get('havoc_admin_password') or config.get('admin_pass')
+    havoc_teamserver_port = config.get('havoc_teamserver_port') or config.get('teamserver_port') or 40056
+    havoc_http_port = config.get('havoc_http_port') or config.get('http_port') or 8080
+    havoc_https_port = config.get('havoc_https_port') or config.get('https_port') or 443
+    shell_handler_port = config.get('shell_handler_port') or 4444
+    gophish_admin_port = config.get('gophish_admin_port') or 3333
+    
     # Port Information
     info.append("PORT INFORMATION")
     info.append("---------------")
-    info.append(f"HTTP Port: {config.get('havoc_http_port', 8080)}")
-    info.append(f"HTTPS Port: {config.get('havoc_https_port', 443)}")
-    info.append(f"Teamserver Port: {config.get('havoc_teamserver_port', 40056)}")
-    info.append(f"Shell Handler Port: {config.get('shell_handler_port', 4444)}")
-    info.append(f"GoPhish Admin Port: {config.get('gophish_admin_port', 'N/A')}")
+    info.append(f"HTTP Port: {havoc_http_port}")
+    info.append(f"HTTPS Port: {havoc_https_port}")
+    info.append(f"Teamserver Port: {havoc_teamserver_port}")
+    info.append(f"Shell Handler Port: {shell_handler_port}")
+    info.append(f"GoPhish Admin Port: {gophish_admin_port}")
     info.append("")
     
     # Havoc C2 Credentials
     info.append("HAVOC C2 CREDENTIALS")
     info.append("------------------")
-    info.append(f"Admin User: {config.get('havoc_admin_user', 'admin')}")
-    if 'havoc_admin_password' in config:
-        info.append(f"Admin Password: {config.get('havoc_admin_password')}")
+    info.append(f"Admin User: {havoc_admin_user}")
+    if havoc_admin_password:
+        info.append(f"Admin Password: {havoc_admin_password}")
     else:
         info.append("Admin Password: Check /root/Tools/havoc/data/profiles/default.yaotl on C2 server")
     info.append("")
@@ -1311,8 +1347,7 @@ def generate_deployment_info(config, success=True):
     
     if not config.get('redirector_only'):
         c2_ip = config.get('c2_ip', 'YOUR_C2_IP')
-        teamserver_port = config.get('havoc_teamserver_port', '40056')
-        info.append(f"Havoc Teamserver: ./havoc client --address {c2_ip}:{teamserver_port} --username admin --password [password]")
+        info.append(f"Havoc Teamserver: ./havoc client --address {c2_ip}:{havoc_teamserver_port} --username {havoc_admin_user} --password {havoc_admin_password or '[password]'}")
     
     if not config.get('c2_only'):
         redirector_domain = f"{config.get('redirector_subdomain', 'cdn')}.{config.get('domain', 'example.com')}"
@@ -1336,9 +1371,9 @@ def generate_deployment_info(config, success=True):
     info.append("---------------")
     info.append(f"./deploy.py --provider {config.get('provider', 'PROVIDER')} --teardown")
     if config.get('provider') == 'linode':
-        info.append(f"Additional parameters: --linode-token YOUR_TOKEN")
+        info.append(f"Additional parameters: --linode-token YOUR_TOKEN --c2-name {config.get('c2_name', 'C2_NAME')} --redirector-name {config.get('redirector_name', 'REDIRECTOR_NAME')}")
     elif config.get('provider') == 'aws':
-        info.append(f"Additional parameters: --aws-key YOUR_KEY --aws-secret YOUR_SECRET")
+        info.append(f"Additional parameters: --aws-key YOUR_KEY --aws-secret YOUR_SECRET --c2-name {config.get('c2_name', 'C2_NAME')} --redirector-name {config.get('redirector_name', 'REDIRECTOR_NAME')}")
     
     # Write to file
     with open(log_file, 'w') as f:
@@ -1352,12 +1387,15 @@ def main():
     # Display banner
     print("""
 ========================================
-C2itAll - Red Team Infrastructure Setup
+C2ingRed - Red Team Infrastructure Setup
 ========================================
     """)
     
-    # Set up logging
-    log_file = setup_logging()
+    # Generate deployment ID first - will be used throughout
+    deployment_id = generate_deployment_id()
+    
+    # Set up logging with deployment ID
+    log_file = setup_logging(deployment_id)
     
     # Parse command line arguments
     args = parse_arguments()
@@ -1441,12 +1479,13 @@ C2itAll - Red Team Infrastructure Setup
             if not args.teardown:
                 config['ssh_key'] = generate_ssh_key()
         
-        # Generate random instance names with new format
-        rand_suffix = generate_random_string()
-        timestamp = int(time.time()) % 10000
-        config['redirector_name'] = args.redirector_name or f"r-{rand_suffix}"  # Changed from srv- to r-
-        config['c2_name'] = args.c2_name or f"s-{rand_suffix}"  # Changed from node- to s-
-        config['tracker_name'] = args.tracker_name or f"t-{rand_suffix}"  # Changed from track- to t-
+        # Store the deployment ID in the config
+        config['deployment_id'] = deployment_id
+
+        # Use consistent deployment ID for all resource names
+        config['redirector_name'] = args.redirector_name or f"r-{deployment_id}"
+        config['c2_name'] = args.c2_name or f"s-{deployment_id}"
+        config['tracker_name'] = args.tracker_name or f"t-{deployment_id}"
         
         # Deployment options
         config['redirector_only'] = args.redirector_only
@@ -1499,7 +1538,7 @@ C2itAll - Red Team Infrastructure Setup
                     config['ssh_key_path'] = alt_path
                 elif not args.teardown:  # Only generate new key if not in teardown mode
                     logging.warning(f"Public key not found at {config['ssh_key_path']}. Generating a new key.")
-                    config['ssh_key'] = generate_ssh_key()
+                    config['ssh_key'] = generate_ssh_key(deployment_id)
                     config['ssh_key_path'] = f"{config['ssh_key']}.pub"
     
     # Validate deployment mode
