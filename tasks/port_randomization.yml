@@ -61,6 +61,6 @@
     name: "{{ item }}"
     state: restarted
   with_items:
-    - sliver
+    - havoc
     - shell-handler
   when: randomize_ports | default(true) | bool and port_config_result.rc == 0

@@ -76,7 +76,7 @@
 
 - name: Copy shell handler script
   copy:
-    src: "../files/persistent-listener.sh"
+    src: "../files/havoc_shell_handler.sh"
     dest: /root/Tools/shell-handler/persistent-listener.sh
     mode: '0700'
     owner: root

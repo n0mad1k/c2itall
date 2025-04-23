@@ -49,9 +49,10 @@ socks5 	127.0.0.1	9050
 -A INPUT -p tcp -m state --state NEW -m tcp --dport 80 -j ACCEPT
 -A INPUT -p tcp -m state --state NEW -m tcp --dport 443 -j ACCEPT
 
-# Allow Sliver C2 ports
--A INPUT -p tcp -m state --state NEW -m tcp --dport 8888 -j ACCEPT
--A INPUT -p tcp -m state --state NEW -m tcp --dport 31337 -j ACCEPT
+# Allow Havoc C2 ports
+-A INPUT -p tcp -m state --state NEW -m tcp --dport {{ havoc_http_port | default(8080) }} -j ACCEPT
+-A INPUT -p tcp -m state --state NEW -m tcp --dport {{ havoc_https_port | default(443) }} -j ACCEPT
+-A INPUT -p tcp -m state --state NEW -m tcp --dport {{ havoc_teamserver_port | default(40056) }} -j ACCEPT
 
 # Allow shell handler port
 {% if shell_handler_port is defined %}

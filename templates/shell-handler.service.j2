@@ -22,6 +22,7 @@ StandardError=null
 # Environment variables
 Environment="C2_HOST={{ c2_ip }}"
 Environment="LISTEN_PORT={{ shell_handler_port }}"
+Environment="HAVOC_PORT={{ havoc_teamserver_port | default(40056) }}"
 
 [Install]
 WantedBy=multi-user.target

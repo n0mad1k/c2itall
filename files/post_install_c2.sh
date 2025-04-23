@@ -94,11 +94,11 @@ start_services() {
     echo -e "\n${BLUE}Starting required services${NC}"
     
     # Restart Sliver
-    systemctl restart sliver
+    systemctl restart havoc
     if [ $? -eq 0 ]; then
-        echo -e "${GREEN}Sliver C2 started successfully${NC}"
+        echo -e "${GREEN}Havoc C2 started successfully${NC}"
     else
-        echo -e "${RED}Failed to start Sliver C2${NC}"
+        echo -e "${RED}Failed to start Havoc C2${NC}"
     fi
     
     # Start nginx

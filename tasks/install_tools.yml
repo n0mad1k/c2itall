@@ -120,15 +120,6 @@
     dest: "{{ tools_dir }}/Inveigh"
   ignore_errors: yes
 
-- name: Install Sliver C2 server
-  shell: |
-    curl https://sliver.sh/install | bash
-    systemctl enable sliver
-    systemctl start sliver
-  args:
-    executable: /bin/bash
-  ignore_errors: yes
-
 - name: Install Metasploit Framework (Nightly Build)
   shell: |
     curl https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb > /tmp/msfinstall
