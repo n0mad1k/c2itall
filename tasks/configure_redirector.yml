@@ -148,8 +148,6 @@
     mode: '0644'
     owner: root
     group: root
-  notify:
-    - restart nginx
 
 - name: Start and enable shell handler service
   systemd:
