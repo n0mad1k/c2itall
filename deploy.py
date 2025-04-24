@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import re
 import sys
 import subprocess
 import argparse
@@ -564,19 +565,15 @@ def create_inventory_file(config, deployment_type):
 def run_ansible_playbook(playbook, inventory, config, debug=False):
     """Run an Ansible playbook with the given inventory and config"""
     # Convert config dict to JSON for extra-vars
-    # Filter out None values and complex objects
     extra_vars = {k: v for k, v in config.items() if v is not None and not isinstance(v, (dict, list, tuple))}
     
     # Handle the region parameter correctly
     if 'region' in extra_vars:
-        # Set selected_region to match what the playbook expects
         extra_vars['selected_region'] = extra_vars['region']
     elif 'linode_region' in extra_vars:
-        # Map linode_region to selected_region for compatibility
         extra_vars['selected_region'] = extra_vars['linode_region']
     
-    # CRITICAL FIX: Remove ansible_python_interpreter from extra_vars
-    # This prevents local interpreter path from being used on remote hosts
+    # Remove ansible_python_interpreter from extra_vars
     if 'ansible_python_interpreter' in extra_vars:
         extra_vars.pop('ansible_python_interpreter')
     
@@ -591,19 +588,19 @@ def run_ansible_playbook(playbook, inventory, config, debug=False):
     ).strip()
     env["PYTHONPATH"] = python_path
     
-    # Build command
+    # Build command with output JSON facts format
     cmd = [
         "ansible-playbook",
         "-i", inventory,
         playbook,
-        "-e", extra_vars_json
+        "-e", extra_vars_json,
+        "--extra-vars", "ansible_facts_callback=json"  # Get facts in JSON format
     ]
     
     # Add verbosity if debug mode is enabled
     if debug:
         cmd.append("-vvv")
     else:
-        # Always add some verbosity for basic output
         cmd.append("-v")
     
     # Log the command
@@ -620,8 +617,22 @@ def run_ansible_playbook(playbook, inventory, config, debug=False):
             stdout=subprocess.PIPE, 
             stderr=subprocess.PIPE, 
             text=True,
-            env=env  # Use the modified environment
+            env=env
         )
+        
+        # Extract IP addresses from output
+        if "C2 Server IP:" in result.stdout:
+            ip_match = re.search(r"C2 Server IP: ([0-9.]+)", result.stdout)
+            if ip_match:
+                config['c2_ip'] = ip_match.group(1)
+                logging.info(f"Extracted C2 IP: {config['c2_ip']}")
+                
+        if "Redirector IP:" in result.stdout:
+            ip_match = re.search(r"Redirector IP: ([0-9.]+)", result.stdout)
+            if ip_match:
+                config['redirector_ip'] = ip_match.group(1)
+                logging.info(f"Extracted Redirector IP: {config['redirector_ip']}")
+        
         logging.info(f"Playbook {playbook} executed successfully")
         return True, result.stdout, result.stderr
     except subprocess.CalledProcessError as e:
