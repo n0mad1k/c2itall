@@ -118,10 +118,7 @@
       
     - name: Include common C2 configuration tasks
       include_tasks: "../tasks/configure_c2.yml"
-      
-    - name: Include common security hardening tasks
-      include_tasks: "../tasks/security_hardening.yml"
-      
+         
     - name: Include common mail server configuration tasks
       include_tasks: "../tasks/configure_mail.yml"
       

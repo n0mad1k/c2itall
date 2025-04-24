@@ -8,7 +8,7 @@
 
 - name: Set a custom MOTD
   template:
-    src: "../templates/motd-linode.j2"
+    src: "../templates/motd.j2"
     dest: /etc/motd
     owner: root
     group: root
@@ -134,8 +134,19 @@
 - name: Install Havoc C2 Framework
   shell: "/root/Tools/havoc_installer.sh"
   args:
-    creates: "/root/Tools/havoc/Teamserver/teamserver"
-  register: havoc_installation_result
+    creates: "/root/Tools/havoc/teamserver/havoc"
+  async: 1800  # Allow 30 minutes for completion
+  poll: 0      # Don't wait for completion
+  register: havoc_installation_job
+
+- name: Wait for Havoc installation to complete
+  async_status:
+    jid: "{{ havoc_installation_job.ansible_job_id }}"
+  register: job_result
+  until: job_result.finished
+  retries: 60  # Check every 30 seconds for up to 30 minutes
+  delay: 30
+  when: havoc_installation_job is defined
 
 - name: Display Havoc installation output
   debug:
