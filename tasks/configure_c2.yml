@@ -134,7 +134,7 @@
 - name: Install Havoc C2 Framework
   shell: "/root/Tools/havoc_installer.sh"
   args:
-    creates: "/root/Tools/havoc/teamserver/havoc"
+    creates: "/root/Tools/havoc"
   async: 1800  # Allow 30 minutes for completion
   poll: 0      # Don't wait for completion
   register: havoc_installation_job

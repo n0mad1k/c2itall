@@ -14,7 +14,6 @@ Teamserver {
 Operators {
     user "{{ havoc_admin_user | default('admin') }}" {
         Password = "{{ havoc_admin_password | default(lookup('password', '/dev/null chars=ascii_letters,digits length=24')) }}"
-        Secret = "{{ havoc_auth_secret | default(lookup('password', '/dev/null chars=hex_lower length=32')) }}"
     }
     {% if havoc_operators is defined %}
     {% for operator in havoc_operators %}
@@ -168,19 +167,4 @@ Demon {
         Spawn32 = "C:\\Windows\\SysWOW64\\dllhost.exe"
         {% endif %}
     }
-
-    {% if havoc_evasion_enabled | default(true) %}
-    Evasion {
-        StackSpoofing = {{ havoc_stack_spoofing | default(true) | lower }}
-        SleazeUnhook = {{ havoc_sleaze_unhook | default(true) | lower }}
-        AmsiEtwPatching = {{ havoc_amsi_etw_patching | default(true) | lower }}
-        ApiFiltering = {{ havoc_api_filtering | default(true) | lower }}
-        
-        {% if havoc_syscall_method is defined %}
-        SyscallMethod = {{ havoc_syscall_method }}
-        {% else %}
-        SyscallMethod = {{ random_hex[4] | int % 3 }}
-        {% endif %}
-    }
-    {% endif %}
 }
