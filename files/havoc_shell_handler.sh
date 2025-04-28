@@ -6,7 +6,7 @@ LISTEN_PORT=4444
 C2_HOST="127.0.0.1"  # This will be replaced by Ansible with actual C2 IP
 HAVOC_PORT=40056     # Havoc default Teamserver port
 HAVOC_USER="admin"
-HAVOC_DIR="/root/Tools/havoc"
+HAVOC_DIR="/root/Tools/Havoc"
 WINDOWS_PAYLOAD="windows/agent_win.exe"
 LINUX_PAYLOAD="linux/agent_linux"
 
@@ -65,21 +65,21 @@ deploy_agent() {
     log "Deploying Havoc agent for detected OS: $os_type"
     
     # Get the latest payload paths from manifest
-    local manifest="/root/Tools/havoc/payloads/manifest.json"
+    local manifest="/root/Tools/Havoc/payloads/manifest.json"
     if [ -f "$manifest" ]; then
         if [ "$os_type" == "windows" ]; then
             WIN_EXE=$(jq -r '.windows_exe' "$manifest")
-            PAYLOAD_PATH="/root/Tools/havoc/payloads/windows/$WIN_EXE"
+            PAYLOAD_PATH="/root/Tools/Havoc/payloads/windows/$WIN_EXE"
         elif [ "$os_type" == "linux" ]; then
             LINUX_BIN=$(jq -r '.linux_binary' "$manifest")
-            PAYLOAD_PATH="/root/Tools/havoc/payloads/linux/$LINUX_BIN"
+            PAYLOAD_PATH="/root/Tools/Havoc/payloads/linux/$LINUX_BIN"
         fi
     else
         # Use default paths if manifest doesn't exist
         if [ "$os_type" == "windows" ]; then
-            PAYLOAD_PATH="/root/Tools/havoc/payloads/windows/agent_win.exe"
+            PAYLOAD_PATH="/root/Tools/Havoc/payloads/windows/agent_win.exe"
         elif [ "$os_type" == "linux" ]; then
-            PAYLOAD_PATH="/root/Tools/havoc/payloads/linux/agent_linux"
+            PAYLOAD_PATH="/root/Tools/Havoc/payloads/linux/agent_linux"
         fi
     fi
     

@@ -19,7 +19,8 @@ Operators {
     {% for operator in havoc_operators %}
     user "{{ operator.name }}" {
         Password = "{{ operator.password }}"
-        Secret = "{{ operator.secret | default(lookup('password', '/dev/null chars=hex_lower length=32')) }}"
+        # Secret is not in documentation, removed or comment it out
+        # Secret = "{{ operator.secret | default(lookup('password', '/dev/null chars=hex_lower length=32')) }}"
     }
     {% endfor %}
     {% endif %}
@@ -42,6 +43,9 @@ Listeners {
         HostBind = "0.0.0.0"
         HostRotation = "{{ havoc_host_rotation | default('round-robin') }}"
         PortBind = {{ havoc_http_port | default(8080) }}
+        {% if havoc_portconn is defined %}
+        PortConn = {{ havoc_portconn }}
+        {% endif %}
         {% if havoc_user_agent is defined %}
         UserAgent = "{{ havoc_user_agent }}"
         {% else %}
@@ -128,8 +132,8 @@ Listeners {
         Secure = true
         
         Cert {
-            Cert = "{{ havoc_cert_path | default('/root/Tools/havoc/data/certs/havoc.crt') }}"
-            Key = "{{ havoc_key_path | default('/root/Tools/havoc/data/certs/havoc.key') }}"
+            Cert = "{{ havoc_cert_path | default('/root/Tools/Havoc/data/certs/havoc.crt') }}"
+            Key = "{{ havoc_key_path | default('/root/Tools/Havoc/data/certs/havoc.key') }}"
         }
         
         {% if havoc_proxy_enabled | default(false) %}
@@ -153,6 +157,9 @@ Listeners {
 Demon {
     Sleep = {{ havoc_sleep | default(random_hex[0:2] | int % 5 + 2) }}
     Jitter = {{ havoc_jitter | default(random_hex[2:4] | int % 30 + 20) }}
+    {% if havoc_trust_x_forwarded_for is defined %}
+    TrustXForwardedFor = {{ havoc_trust_x_forwarded_for | lower }}
+    {% endif %}
     
     Injection {
         {% if havoc_spawn64 is defined %}
@@ -168,3 +175,24 @@ Demon {
         {% endif %}
     }
 }
+
+{% if havoc_service_enabled | default(false) %}
+Service {
+    Endpoint = "{{ havoc_service_endpoint | default('/api/service') }}"
+    Password = "{{ havoc_service_password | default(lookup('password', '/dev/null chars=ascii_letters,digits length=32')) }}"
+}
+{% endif %}
+
+{% if havoc_webhook_discord_enabled | default(false) %}
+Webhook {
+    Discord {
+        Url = "{{ havoc_webhook_discord_url }}"
+        {% if havoc_webhook_discord_avatar_url is defined %}
+        AvatarUrl = "{{ havoc_webhook_discord_avatar_url }}"
+        {% endif %}
+        {% if havoc_webhook_discord_user is defined %}
+        User = "{{ havoc_webhook_discord_user }}"
+        {% endif %}
+    }
+}
+{% endif %}

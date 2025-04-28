@@ -102,6 +102,10 @@ def parse_arguments():
     parser.add_argument('--c2-name', help='Name for the C2 instance (default: random)')
     parser.add_argument('--redirector-subdomain', default='cdn', help='Subdomain for the redirector (default: cdn)')
     parser.add_argument('--c2-subdomain', default='mail', help='Subdomain for the C2 server (default: mail)')
+    parser.add_argument('--redirector-provider', choices=PROVIDERS, help='Provider to use for redirector (if different from primary provider)')
+    parser.add_argument('--c2-provider', choices=PROVIDERS, help='Provider to use for C2 (if different from primary provider)')
+    parser.add_argument('--redirector-region', help='Region for redirector deployment (can be different from C2)')
+    parser.add_argument('--c2-region', help='Region for C2 deployment (can be different from redirector)')
     
     # Common arguments
     parser.add_argument('--teardown', action='store_true', help='Tear down existing infrastructure')
@@ -143,21 +147,21 @@ def interactive_setup(deployment_id=None):
     config = {}
     
     print("\n========================================")
-    print("C2itAll - Interactive Setup Wizard")
+    print("C2ingRed - Interactive Setup Wizard")
     print("========================================\n")
     
     # Create a deployment ID for consistent resource naming
     deployment_id = deployment_id or generate_deployment_id()
     config['deployment_id'] = deployment_id
     
-    # Select provider
+    # Select primary provider
     print("Available cloud providers:")
     for i, provider in enumerate(PROVIDERS, 1):
         print(f"  {i}. {provider.capitalize()}")
     
     while True:
         try:
-            provider_choice = int(input("\nSelect a provider (1-3): "))
+            provider_choice = int(input("\nSelect a primary provider (1-3): "))
             if 1 <= provider_choice <= len(PROVIDERS):
                 config['provider'] = PROVIDERS[provider_choice - 1]
                 break
@@ -166,117 +170,199 @@ def interactive_setup(deployment_id=None):
         except ValueError:
             print("Please enter a valid number")
     
-    # Load vars file for the selected provider
-    provider_dir = config['provider'].capitalize()
-    if config['provider'] == "aws":
-        provider_dir = "AWS"
-    elif config['provider'] == "flokinet":
-        provider_dir = "FlokiNET"
+    # Ask if user wants to use cross-provider deployment
+    cross_provider = input("\nDo you want to deploy redirector and C2 on different providers? (y/n) [default: n]: ").lower() == 'y'
+    
+    if cross_provider:
+        print("\nSelect redirector provider:")
+        for i, provider in enumerate(PROVIDERS, 1):
+            print(f"  {i}. {provider.capitalize()}")
         
-    vars_file = f"{provider_dir}/vars.yaml"
+        while True:
+            try:
+                redirector_provider_choice = int(input("\nSelect redirector provider (1-3): "))
+                if 1 <= redirector_provider_choice <= len(PROVIDERS):
+                    config['redirector_provider'] = PROVIDERS[redirector_provider_choice - 1]
+                    break
+                else:
+                    print(f"Please enter a number between 1 and {len(PROVIDERS)}")
+            except ValueError:
+                print("Please enter a valid number")
+        
+        print("\nSelect C2 server provider:")
+        for i, provider in enumerate(PROVIDERS, 1):
+            print(f"  {i}. {provider.capitalize()}")
+        
+        while True:
+            try:
+                c2_provider_choice = int(input("\nSelect C2 provider (1-3): "))
+                if 1 <= c2_provider_choice <= len(PROVIDERS):
+                    config['c2_provider'] = PROVIDERS[c2_provider_choice - 1]
+                    break
+                else:
+                    print(f"Please enter a number between 1 and {len(PROVIDERS)}")
+            except ValueError:
+                print("Please enter a valid number")
+    
+    # Load vars files for all selected providers
+    providers_to_configure = set([config['provider']])
+    if cross_provider:
+        providers_to_configure.add(config['redirector_provider'])
+        providers_to_configure.add(config['c2_provider'])
+    
     vars_data = {}
-    
-    if os.path.exists(vars_file):
-        try:
-            with open(vars_file, 'r') as f:
-                vars_data = yaml.safe_load(f) or {}
-            print(f"Loaded configuration from {vars_file}")
-        except Exception as e:
-            print(f"Warning: Failed to load {vars_file}: {e}")
-    
-    # Provider-specific configuration
-    if config['provider'] == "aws":
-        # Set defaults from vars file
-        default_aws_key = vars_data.get('aws_access_key', '')
-        default_aws_secret = vars_data.get('aws_secret_key', '')
+    for provider in providers_to_configure:
+        provider_dir = PROVIDER_DIRS.get(provider, provider.capitalize())
+        vars_file = f"{provider_dir}/vars.yaml"
         
-        config['aws_access_key'] = input(f"\nAWS Access Key [{'*****' if default_aws_key else 'leave blank to use AWS CLI profile'}]: ") or default_aws_key
-        config['aws_secret_key'] = input(f"AWS Secret Key [{'*****' if default_aws_secret else 'leave blank to use AWS CLI profile'}]: ") or default_aws_secret
+        if os.path.exists(vars_file):
+            try:
+                with open(vars_file, 'r') as f:
+                    provider_vars = yaml.safe_load(f) or {}
+                vars_data[provider] = provider_vars
+                print(f"Loaded configuration from {vars_file}")
+            except Exception as e:
+                print(f"Warning: Failed to load {vars_file}: {e}")
+                vars_data[provider] = {}
+    
+    # Configure each provider
+    for provider in providers_to_configure:
+        provider_vars = vars_data.get(provider, {})
         
-        # Show available regions
-        aws_regions = vars_data.get('aws_region_choices', [])
-        if aws_regions:
-            print("\nAvailable AWS regions:")
-            for i, region in enumerate(aws_regions, 1):
-                print(f"  {i}. {region}")
+        print(f"\n--- {provider.capitalize()} Configuration ---")
+        
+        if provider == "aws":
+            # AWS credentials
+            default_aws_key = provider_vars.get('aws_access_key', '')
+            default_aws_secret = provider_vars.get('aws_secret_key', '')
             
-            while True:
-                region_input = input("\nSelect a region (number) or press Enter for random: ")
-                if not region_input:
-                    config['aws_region'] = None  # Random
-                    break
-                try:
-                    region_choice = int(region_input)
-                    if 1 <= region_choice <= len(aws_regions):
-                        config['aws_region'] = aws_regions[region_choice - 1]
-                        break
-                    else:
-                        print(f"Please enter a number between 1 and {len(aws_regions)}")
-                except ValueError:
-                    print("Please enter a valid number or press Enter")
-        else:
-            default_region = vars_data.get('aws_region', 'us-east-1')
-            config['aws_region'] = input(f"\nAWS Region [default: {default_region}]: ") or default_region
-        
-        # Instance size
-        default_size = vars_data.get('aws_instance_type', 't2.medium')
-        config['aws_instance_type'] = input(f"Instance Size [default: {default_size}]: ") or default_size
-    
-    elif config['provider'] == "linode":
-        # Set defaults from vars file
-        default_token = vars_data.get('linode_token', '')
-        
-        config['linode_token'] = input(f"\nLinode API Token [{'*****' if default_token else 'required'}]: ") or default_token
-        
-        # Show available regions
-        linode_regions = vars_data.get('region_choices', [])
-        if linode_regions:
-            print("\nAvailable Linode regions:")
-            for i, region in enumerate(linode_regions, 1):
-                print(f"  {i}. {region}")
+            aws_key = input(f"AWS Access Key [{'*****' if default_aws_key else 'leave blank to use AWS CLI profile'}]: ") or default_aws_key
+            aws_secret = input(f"AWS Secret Key [{'*****' if default_aws_secret else 'leave blank to use AWS CLI profile'}]: ") or default_aws_secret
             
-            while True:
-                region_input = input("\nSelect a region (number) or press Enter for random: ")
-                if not region_input:
-                    config['linode_region'] = None  # Random
-                    break
-                try:
-                    region_choice = int(region_input)
-                    if 1 <= region_choice <= len(linode_regions):
-                        config['linode_region'] = linode_regions[region_choice - 1]
-                        break
-                    else:
-                        print(f"Please enter a number between 1 and {len(linode_regions)}")
-                except ValueError:
-                    print("Please enter a valid number or press Enter")
-        else:
-            # Use defaults or empty values if no regions are defined
-            default_region = vars_data.get('linode_region', '')
-            config['linode_region'] = input(f"\nLinode Region [default: {default_region or 'random'}]: ") or default_region
+            config['aws_access_key'] = aws_key
+            config['aws_secret_key'] = aws_secret
+            
+            # AWS regions
+            aws_regions = provider_vars.get('aws_region_choices', [])
+            if aws_regions:
+                print("\nAvailable AWS regions:")
+                for i, region in enumerate(aws_regions, 1):
+                    print(f"  {i}. {region}")
+                
+                # Select region for redirector if this is the redirector provider
+                if provider == config.get('redirector_provider', config['provider']):
+                    region_input = input("\nSelect region for redirector (number or leave blank for random): ")
+                    if region_input:
+                        try:
+                            region_choice = int(region_input)
+                            if 1 <= region_choice <= len(aws_regions):
+                                config['redirector_region'] = aws_regions[region_choice - 1]
+                            else:
+                                print(f"Invalid choice, using random region")
+                        except ValueError:
+                            print("Invalid input, using random region")
+                
+                # Select region for C2 if this is the C2 provider
+                if provider == config.get('c2_provider', config['provider']):
+                    region_input = input("\nSelect region for C2 (number or leave blank for random): ")
+                    if region_input:
+                        try:
+                            region_choice = int(region_input)
+                            if 1 <= region_choice <= len(aws_regions):
+                                config['c2_region'] = aws_regions[region_choice - 1]
+                            else:
+                                print(f"Invalid choice, using random region")
+                        except ValueError:
+                            print("Invalid input, using random region")
+                
+                # If not cross-provider and no specific regions selected, use general region
+                if not cross_provider and not (config.get('redirector_region') or config.get('c2_region')):
+                    region_input = input("\nSelect region (number or leave blank for random): ")
+                    if region_input:
+                        try:
+                            region_choice = int(region_input)
+                            if 1 <= region_choice <= len(aws_regions):
+                                config['aws_region'] = aws_regions[region_choice - 1]
+                            else:
+                                print(f"Invalid choice, using random region")
+                        except ValueError:
+                            print("Invalid input, using random region")
         
-        # Instance size/plan
-        default_plan = vars_data.get('plan', 'g6-standard-2')
-        config['plan'] = input(f"Instance Plan [default: {default_plan}]: ") or default_plan
-    
-    elif config['provider'] == "flokinet":
-        print("\nFlokiNET requires pre-provisioned servers.")
+        elif provider == "linode":
+            # Linode token
+            default_token = provider_vars.get('linode_token', '')
+            token = input(f"\nLinode API Token [{'*****' if default_token else 'required'}]: ") or default_token
+            config['linode_token'] = token
+            
+            # Linode regions
+            linode_regions = provider_vars.get('region_choices', [])
+            if linode_regions:
+                print("\nAvailable Linode regions:")
+                for i, region in enumerate(linode_regions, 1):
+                    print(f"  {i}. {region}")
+                
+                # Select region for redirector if this is the redirector provider
+                if provider == config.get('redirector_provider', config['provider']):
+                    region_input = input("\nSelect region for redirector (number or leave blank for random): ")
+                    if region_input:
+                        try:
+                            region_choice = int(region_input)
+                            if 1 <= region_choice <= len(linode_regions):
+                                config['redirector_region'] = linode_regions[region_choice - 1]
+                            else:
+                                print(f"Invalid choice, using random region")
+                        except ValueError:
+                            print("Invalid input, using random region")
+                
+                # Select region for C2 if this is the C2 provider
+                if provider == config.get('c2_provider', config['provider']):
+                    region_input = input("\nSelect region for C2 (number or leave blank for random): ")
+                    if region_input:
+                        try:
+                            region_choice = int(region_input)
+                            if 1 <= region_choice <= len(linode_regions):
+                                config['c2_region'] = linode_regions[region_choice - 1]
+                            else:
+                                print(f"Invalid choice, using random region")
+                        except ValueError:
+                            print("Invalid input, using random region")
+                
+                # If not cross-provider and no specific regions selected, use general region
+                if not cross_provider and not (config.get('redirector_region') or config.get('c2_region')):
+                    region_input = input("\nSelect region (number or leave blank for random): ")
+                    if region_input:
+                        try:
+                            region_choice = int(region_input)
+                            if 1 <= region_choice <= len(linode_regions):
+                                config['linode_region'] = linode_regions[region_choice - 1]
+                            else:
+                                print(f"Invalid choice, using random region")
+                        except ValueError:
+                            print("Invalid input, using random region")
+            
+            # Instance size/plan
+            default_plan = provider_vars.get('plan', 'g6-standard-2')
+            plan = input(f"\nInstance Plan [default: {default_plan}]: ") or default_plan
+            config['plan'] = plan
         
-        # Set defaults from vars file
-        default_redirector_ip = vars_data.get('redirector_ip', '')
-        default_c2_ip = vars_data.get('c2_ip', '')
-        default_ssh_user = vars_data.get('ssh_user', DEFAULT_SSH_USER['flokinet'])
-        default_ssh_port = vars_data.get('ssh_port', 22)
-        
-        config['flokinet_redirector_ip'] = input(f"FlokiNET Redirector IP Address [default: {default_redirector_ip}]: ") or default_redirector_ip
-        config['flokinet_c2_ip'] = input(f"FlokiNET C2 Server IP Address [default: {default_c2_ip}]: ") or default_c2_ip
-        config['ssh_user'] = input(f"SSH User [default: {default_ssh_user}]: ") or default_ssh_user
-        config['ssh_port'] = input(f"SSH Port [default: {default_ssh_port}]: ") or default_ssh_port
-        
-        ssh_key = input("Path to SSH Private Key [leave blank to generate new key]: ")
-        if ssh_key:
-            config['ssh_key'] = os.path.expanduser(ssh_key)
-        else:
-            config['ssh_key'] = None  # Will generate a new key
+        elif provider == "flokinet":
+            print("\nFlokiNET requires pre-provisioned servers.")
+            
+            # Set defaults from vars file
+            default_redirector_ip = provider_vars.get('redirector_ip', '')
+            default_c2_ip = provider_vars.get('c2_ip', '')
+            default_ssh_user = provider_vars.get('ssh_user', DEFAULT_SSH_USER['flokinet'])
+            default_ssh_port = provider_vars.get('ssh_port', 22)
+            
+            # Configure FlokiNET servers
+            if provider == config.get('redirector_provider', config['provider']):
+                config['flokinet_redirector_ip'] = input(f"FlokiNET Redirector IP Address [default: {default_redirector_ip}]: ") or default_redirector_ip
+            
+            if provider == config.get('c2_provider', config['provider']):
+                config['flokinet_c2_ip'] = input(f"FlokiNET C2 Server IP Address [default: {default_c2_ip}]: ") or default_c2_ip
+            
+            config['ssh_user'] = input(f"SSH User [default: {default_ssh_user}]: ") or default_ssh_user
+            config['ssh_port'] = input(f"SSH Port [default: {default_ssh_port}]: ") or default_ssh_port
     
     # Deployment type with integrated tracker option
     print("\nDeployment type:")
@@ -317,28 +403,25 @@ def interactive_setup(deployment_id=None):
         config['deploy_tracker'] = False
     
     # Domain configuration
-    default_domain = vars_data.get('domain', 'example.com')
+    default_domain = vars_data.get(config['provider'], {}).get('domain', 'example.com')
     config['domain'] = input(f"\nDomain name [default: {default_domain}]: ") or default_domain
 
-    # Subdomain configuration - new feature
-    default_redirector_subdomain = vars_data.get('redirector_subdomain', 'cdn')
+    # Subdomain configuration
+    default_redirector_subdomain = vars_data.get(config['provider'], {}).get('redirector_subdomain', 'cdn')
     config['redirector_subdomain'] = input(f"Redirector subdomain [default: {default_redirector_subdomain}]: ") or default_redirector_subdomain
     
-    default_c2_subdomain = vars_data.get('c2_subdomain', 'mail')
+    default_c2_subdomain = vars_data.get(config['provider'], {}).get('c2_subdomain', 'mail')
     config['c2_subdomain'] = input(f"C2 server subdomain [default: {default_c2_subdomain}]: ") or default_c2_subdomain
 
-    # Always use the most up-to-date domain for the email default
-    default_email = vars_data.get('letsencrypt_email')
-    if not default_email or "example.com" in default_email:
-        default_email = f"admin@{config['domain']}"
-        
+    # Email for Let's Encrypt
+    default_email = f"admin@{config['domain']}"
     config['letsencrypt_email'] = input(f"Email for Let's Encrypt [default: {default_email}]: ") or default_email
     
     # Security options
     print("\nSecurity options:")
-    default_disable_history = vars_data.get('disable_history', True)
-    default_secure_memory = vars_data.get('secure_memory', True)
-    default_zero_logs = vars_data.get('zero_logs', True)
+    default_disable_history = vars_data.get(config['provider'], {}).get('disable_history', True)
+    default_secure_memory = vars_data.get(config['provider'], {}).get('secure_memory', True)
+    default_zero_logs = vars_data.get(config['provider'], {}).get('zero_logs', True)
     
     disable_history = input(f"Disable command history? (y/n) [default: {'y' if default_disable_history else 'n'}]: ").lower()
     secure_memory = input(f"Enable secure memory settings? (y/n) [default: {'y' if default_secure_memory else 'n'}]: ").lower()
@@ -347,6 +430,48 @@ def interactive_setup(deployment_id=None):
     config['disable_history'] = True if (disable_history == 'y' or (default_disable_history and disable_history != 'n')) else False
     config['secure_memory'] = True if (secure_memory == 'y' or (default_secure_memory and secure_memory != 'n')) else False
     config['zero_logs'] = True if (zero_logs == 'y' or (default_zero_logs and zero_logs != 'n')) else False
+    
+    # Add multi-region option
+    if not cross_provider and not config.get('c2_only') and not config.get('redirector_only'):
+        multi_region = input("\nDo you want to deploy redirector and C2 in different regions? (y/n) [default: n]: ").lower() == 'y'
+        
+        if multi_region:
+            provider_dir = PROVIDER_DIRS.get(config['provider'], config['provider'].capitalize())
+            vars_file = f"{provider_dir}/vars.yaml"
+            
+            if os.path.exists(vars_file):
+                with open(vars_file, 'r') as f:
+                    vars_data = yaml.safe_load(f) or {}
+                
+                if config['provider'] == 'aws':
+                    regions = vars_data.get('aws_region_choices', [])
+                elif config['provider'] == 'linode':
+                    regions = vars_data.get('region_choices', [])
+                else:
+                    regions = []
+                
+                if regions:
+                    print("\nAvailable regions:")
+                    for i, region in enumerate(regions, 1):
+                        print(f"  {i}. {region}")
+                    
+                    redirector_region_input = input("\nSelect redirector region (number): ")
+                    try:
+                        redirector_region_choice = int(redirector_region_input)
+                        if 1 <= redirector_region_choice <= len(regions):
+                            config['redirector_region'] = regions[redirector_region_choice - 1]
+                    except ValueError:
+                        print("Invalid input, using random region for redirector")
+                    
+                    c2_region_input = input("Select C2 region (number): ")
+                    try:
+                        c2_region_choice = int(c2_region_input)
+                        if 1 <= c2_region_choice <= len(regions):
+                            config['c2_region'] = regions[c2_region_choice - 1]
+                    except ValueError:
+                        print("Invalid input, using random region for C2")
+                else:
+                    print("No regions found in vars file, skipping multi-region setup")
     
     # Tracker configuration if enabled
     if config['deploy_tracker']:
@@ -382,11 +507,12 @@ def interactive_setup(deployment_id=None):
     if config.get('deploy_tracker'):
         config['tracker_name'] = f"t-{deployment_id}"
     
-    # Additional settings from vars_data
-    config['gophish_admin_port'] = vars_data.get('gophish_admin_port', str(random.randint(2000, 9000)))
-    config['smtp_auth_user'] = vars_data.get('smtp_auth_user', f"user{random.randint(1000, 9999)}")
-    config['smtp_auth_pass'] = vars_data.get('smtp_auth_pass', ''.join(random.choices(string.ascii_letters + string.digits, k=20)))
-    config['shell_handler_port'] = vars_data.get('shell_handler_port', str(random.randint(4000, 65000)))
+    # Additional settings
+    default_provider_vars = vars_data.get(config['provider'], {})
+    config['gophish_admin_port'] = default_provider_vars.get('gophish_admin_port', str(random.randint(2000, 9000)))
+    config['smtp_auth_user'] = default_provider_vars.get('smtp_auth_user', f"user{random.randint(1000, 9999)}")
+    config['smtp_auth_pass'] = default_provider_vars.get('smtp_auth_pass', ''.join(random.choices(string.ascii_letters + string.digits, k=20)))
+    config['shell_handler_port'] = default_provider_vars.get('shell_handler_port', str(random.randint(4000, 65000)))
     
     # Set up integrated tracker flag for deployment
     if config.get('deploy_tracker') and config.get('integrated_tracker'):
@@ -657,137 +783,87 @@ def deploy_infrastructure(config):
         if config.get('linode_token'):
             os.environ['LINODE_TOKEN'] = config['linode_token']
     
-    # IMPORTANT: Ensure ssh_user is explicitly set to avoid template recursion
-    if provider == "linode":
-        config['ssh_user'] = "root"
-    elif provider == "aws":
-        config['ssh_user'] = "kali"
+    # Set correct ssh_user based on provider
+    if not config.get('ssh_user'):
+        config['ssh_user'] = DEFAULT_SSH_USER.get(provider, 'root')
     
-    # Set tracker deployment flag for C2 configuration
-    if config.get('deploy_tracker') and config.get('integrated_tracker'):
-        config['setup_integrated_tracker'] = True
-        logging.info("Integrated tracker will be deployed on C2 server")
+    # Handle cross-provider deployment
+    redirector_provider = config.get('redirector_provider', provider)
+    c2_provider = config.get('c2_provider', provider)
     
-    # Select random region if not specified
-    if not config.get('region'):
-        if provider == "linode" and config.get('linode_region'):
-            # Use the specified linode_region
-            config['region'] = config['linode_region']
-        elif provider == "aws" and config.get('aws_region'):
-            # Use the specified aws_region
-            config['region'] = config['aws_region']
-        else:
-            # If no specific region provided, select random
-            config['region'] = select_random_region(config)
+    is_cross_provider = (redirector_provider != c2_provider) or \
+                        (config.get('redirector_region') and config.get('c2_region') and \
+                         config.get('redirector_region') != config.get('c2_region'))
     
-    # Set different instance sizes for redirector vs. C2
-    if provider == "linode":
-        # Store the original plan
-        original_plan = config.get('plan', 'g6-standard-2')
+    if is_cross_provider and not (config.get('redirector_only') or config.get('c2_only')):
+        return deploy_cross_provider(config, redirector_provider, c2_provider)
+    
+    # For FlokiNET, validate required IPs
+    if provider == "flokinet":
+        if not config.get('c2_only') and not config.get('flokinet_redirector_ip') and not config.get('redirector_ip'):
+            logging.error("FlokiNET redirector IP is required")
+            return False
         
-        # For redirector, use smaller instance size regardless of what was specified
-        if not config.get('c2_only'):
-            redirector_config = config.copy()
-            redirector_config['plan'] = 'g6-nanode-1'  # Smallest viable Linode plan
+        if not config.get('redirector_only') and not config.get('flokinet_c2_ip') and not config.get('c2_ip'):
+            logging.error("FlokiNET C2 IP is required")
+            return False
+    
+    # Get correct provider directory
+    provider_dir = PROVIDER_DIRS.get(provider, provider.capitalize())
+    
+    # Deploy redirector if needed
+    if not config.get('c2_only'):
+        redirector_config = config.copy()
+        if config.get('redirector_region'):
+            redirector_config['region'] = config['redirector_region']
             
-            # Use the correct case for provider directory
-            provider_dir = PROVIDER_DIRS[provider]
-            playbook = f"{provider_dir}/redirector.yml"
-            inventory_path = create_inventory_file(redirector_config, "local")
-            
-            logging.info(f"Deploying redirector using {playbook} with plan: g6-nanode-1")
-            redirector_success, stdout, stderr = run_ansible_playbook(
-                playbook, inventory_path, redirector_config, redirector_config.get('debug', False)
-            )
-            
-            # Log Ansible output
-            if redirector_config.get('debug', False):
-                logging.debug(f"Ansible stdout: {stdout}")
-                if stderr:
-                    logging.debug(f"Ansible stderr: {stderr}")
-            
-            if os.path.exists(inventory_path):
-                os.unlink(inventory_path)
-                
-            if not redirector_success:
-                logging.error("Redirector deployment failed")
-                return False
+        playbook = f"{provider_dir}/redirector.yml"
+        inventory_path = create_inventory_file(redirector_config, "local")
         
-        # For C2, use the original plan
-        if not config.get('redirector_only'):
-            # Restore original plan for C2
-            config['plan'] = original_plan
-            
-            provider_dir = PROVIDER_DIRS[provider]
-            playbook = f"{provider_dir}/c2.yml"
-            inventory_path = create_inventory_file(config, "local")
-            
-            logging.info(f"Deploying C2 server using {playbook} with plan: {config['plan']}")
-            c2_success, stdout, stderr = run_ansible_playbook(
-                playbook, inventory_path, config, config.get('debug', False)
-            )
-            
-            # Log Ansible output
-            if config.get('debug', False):
-                logging.debug(f"Ansible stdout: {stdout}")
-                if stderr:
-                    logging.debug(f"Ansible stderr: {stderr}")
-            
-            if os.path.exists(inventory_path):
-                os.unlink(inventory_path)
-                
-            if not c2_success:
-                logging.error("C2 server deployment failed")
-                return False
-    else:
-        # For AWS and other providers, follow the same pattern but with their directory names
-        provider_dir = PROVIDER_DIRS[provider]
+        logging.info(f"Deploying {provider} redirector using {playbook} in region {redirector_config.get('region', 'default')}")
+        redirector_success, stdout, stderr = run_ansible_playbook(
+            playbook, inventory_path, redirector_config, redirector_config.get('debug', False)
+        )
         
-        # Redirector deployment
-        if not config.get('c2_only'):
-            playbook = f"{provider_dir}/redirector.yml"
-            inventory_path = create_inventory_file(config, "local")
+        if os.path.exists(inventory_path):
+            os.unlink(inventory_path)
             
-            logging.info(f"Deploying redirector using {playbook}")
-            redirector_success, stdout, stderr = run_ansible_playbook(
-                playbook, inventory_path, config, config.get('debug', False)
-            )
+        if not redirector_success:
+            logging.error(f"{provider} redirector deployment failed")
+            if redirector_config.get('debug'):
+                logging.error(f"Ansible stderr: {stderr}")
+            return False
             
-            # Log Ansible output
-            if config.get('debug', False):
-                logging.debug(f"Ansible stdout: {stdout}")
-                if stderr:
-                    logging.debug(f"Ansible stderr: {stderr}")
+        # Extract and save redirector IP for C2 configuration
+        if 'redirector_ip' in redirector_config:
+            config['redirector_ip'] = redirector_config['redirector_ip']
+    
+    # Deploy C2 if needed
+    if not config.get('redirector_only'):
+        c2_config = config.copy()
+        if config.get('c2_region'):
+            c2_config['region'] = config['c2_region']
             
-            if os.path.exists(inventory_path):
-                os.unlink(inventory_path)
-                
-            if not redirector_success:
-                logging.error("Redirector deployment failed")
-                return False
+        playbook = f"{provider_dir}/c2.yml"
+        inventory_path = create_inventory_file(c2_config, "local")
         
-        # C2 deployment
-        if not config.get('redirector_only'):
-            playbook = f"{provider_dir}/c2.yml"
-            inventory_path = create_inventory_file(config, "local")
+        logging.info(f"Deploying {provider} C2 server using {playbook} in region {c2_config.get('region', 'default')}")
+        c2_success, stdout, stderr = run_ansible_playbook(
+            playbook, inventory_path, c2_config, c2_config.get('debug', False)
+        )
+        
+        if os.path.exists(inventory_path):
+            os.unlink(inventory_path)
             
-            logging.info(f"Deploying C2 server using {playbook}")
-            c2_success, stdout, stderr = run_ansible_playbook(
-                playbook, inventory_path, config, config.get('debug', False)
-            )
+        if not c2_success:
+            logging.error(f"{provider} C2 server deployment failed")
+            if c2_config.get('debug'):
+                logging.error(f"Ansible stderr: {stderr}")
+            return False
             
-            # Log Ansible output
-            if config.get('debug', False):
-                logging.debug(f"Ansible stdout: {stdout}")
-                if stderr:
-                    logging.debug(f"Ansible stderr: {stderr}")
-            
-            if os.path.exists(inventory_path):
-                os.unlink(inventory_path)
-                
-            if not c2_success:
-                logging.error("C2 server deployment failed")
-                return False
+        # Extract and save C2 IP for reference
+        if 'c2_ip' in c2_config:
+            config['c2_ip'] = c2_config['c2_ip']
     
     return True
 
@@ -951,11 +1027,13 @@ def ssh_to_instance(config):
     # Build SSH command
     ssh_cmd = [
         "ssh",
+        "-t",
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
         "-o", "IdentitiesOnly=yes",
         "-i", ssh_key,
-        f"{ssh_user}@{ip}"
+        f"{ssh_user}@{ip}",
+        "tmux new"
     ]
     
     # Add port if specified
@@ -1325,7 +1403,7 @@ def generate_deployment_info(config, success=True):
     if havoc_admin_password:
         info.append(f"Admin Password: {havoc_admin_password}")
     else:
-        info.append("Admin Password: Check /root/Tools/havoc/data/profiles/default.yaotl on C2 server")
+        info.append("Admin Password: Check /root/Tools/Havoc/data/profiles/default.yaotl on C2 server")
     info.append("")
     
     # DNS Configuration
@@ -1395,6 +1473,54 @@ def generate_deployment_info(config, success=True):
     
     logging.info(f"Deployment information saved to {log_file}")
     return log_file
+
+def deploy_cross_provider(config, redirector_provider, c2_provider):
+    """Deploy infrastructure across multiple providers"""
+    # Create copies of config for each provider
+    redirector_config = config.copy()
+    redirector_config['provider'] = redirector_provider
+    redirector_config['c2_only'] = False
+    redirector_config['redirector_only'] = True
+    
+    c2_config = config.copy()
+    c2_config['provider'] = c2_provider
+    c2_config['c2_only'] = True
+    c2_config['redirector_only'] = False
+    
+    # Set specific regions if provided
+    if config.get('redirector_region'):
+        redirector_config['region'] = config['redirector_region']
+    if config.get('c2_region'):
+        c2_config['region'] = config['c2_region']
+    
+    logging.info(f"Cross-provider deployment: Redirector using {redirector_provider} in {redirector_config.get('region', 'default region')}")
+    
+    # Deploy redirector first
+    redirector_success = deploy_infrastructure(redirector_config)
+    
+    if not redirector_success:
+        logging.error("Redirector deployment failed!")
+        return False
+    
+    # Pass redirector IP to C2 config
+    if 'redirector_ip' in redirector_config:
+        c2_config['redirector_ip'] = redirector_config['redirector_ip']
+        config['redirector_ip'] = redirector_config['redirector_ip']
+    
+    logging.info(f"Cross-provider deployment: C2 server using {c2_provider} in {c2_config.get('region', 'default region')}")
+    
+    # Deploy C2 server
+    c2_success = deploy_infrastructure(c2_config)
+    
+    if not c2_success:
+        logging.error("C2 server deployment failed!")
+        return False
+    
+    # Update the original config with IPs from both deployments
+    if 'c2_ip' in c2_config:
+        config['c2_ip'] = c2_config['c2_ip']
+    
+    return True
 
 def main():
     """Main function to run the deployment"""

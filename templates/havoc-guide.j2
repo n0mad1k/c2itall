@@ -12,7 +12,7 @@ Teamserver Port: {{ havoc_teamserver_port | default(40056) }}
 HTTP Listener Port: {{ havoc_http_port | default(8080) }}
 HTTPS Listener Port: {{ havoc_https_port | default(443) }}
 Admin User: {{ havoc_admin_user | default('admin') }}
-Admin Password: Stored in /root/Tools/havoc/data/profiles/default.yaotl
+Admin Password: Stored in /root/Tools/Havoc/data/profiles/default.yaotl
 
 CONNECTING TO THE TEAMSERVER
 ---------------------------
@@ -29,7 +29,7 @@ From your local machine:
    - Host: {{ c2_ip }}
    - Port: {{ havoc_teamserver_port | default(40056) }}
    - User: {{ havoc_admin_user | default('admin') }}
-   - Password: See /root/Tools/havoc/data/profiles/default.yaotl
+   - Password: See /root/Tools/Havoc/data/profiles/default.yaotl
 
 3. CLI Connection:
    $ ./havoc client --address {{ c2_ip }}:{{ havoc_teamserver_port | default(40056) }} --username {{ havoc_admin_user | default('admin') }} --password [password]
@@ -44,7 +44,7 @@ To view and manage listeners: Attack → Listeners in the Havoc client.
 
 GENERATING PAYLOADS
 -----------------
-Pre-generated payloads are available in /root/Tools/havoc/payloads/
+Pre-generated payloads are available in /root/Tools/Havoc/payloads/
 
 To generate new payloads:
 1. Connect to the Teamserver
@@ -94,7 +94,7 @@ SERVER MANAGEMENT
 ---------------
 - Havoc Teamserver service: systemctl status havoc
 - Service configuration: /etc/systemd/system/havoc.service
-- Configuration profiles: /root/Tools/havoc/data/profiles/
+- Configuration profiles: /root/Tools/Havoc/data/profiles/
 
 TROUBLESHOOTING
 --------------

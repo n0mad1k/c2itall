@@ -134,7 +134,7 @@
 - name: Install Havoc C2 Framework
   shell: "/root/Tools/havoc_installer.sh"
   args:
-    creates: "/root/Tools/havoc"
+    creates: "/root/Tools/Havoc"
   async: 1800  # Allow 30 minutes for completion
   poll: 0      # Don't wait for completion
   register: havoc_installation_job
@@ -164,7 +164,7 @@
 - name: Create Havoc C2 configuration from template
   template:
     src: "../templates/havoc-config.yaotl.j2"
-    dest: "/root/Tools/havoc/data/havoc.yaotl"
+    dest: "/root/Tools/Havoc/data/havoc.yaotl"
     mode: '0600'
     owner: root
     group: root
@@ -204,7 +204,7 @@
 - name: Generate Havoc payloads
   shell: "/root/Tools/generate_havoc_payloads.sh"
   args:
-    creates: "/root/Tools/havoc/payloads/manifest.json"
+    creates: "/root/Tools/Havoc/payloads/manifest.json"
   register: payload_generation_result
   environment:
     PATH: "{{ ansible_env.PATH }}:/usr/local/bin"

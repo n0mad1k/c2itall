@@ -6,8 +6,8 @@
 set -e
 TEMP_DIR=$(mktemp -d)
 LOG_FILE="/root/Tools/havoc_installer.log"
-HAVOC_DIR="/root/Tools/havoc"
-HAVOC_DATA_DIR="/root/Tools/havoc/data"
+HAVOC_DIR="/root/Tools/Havoc"
+HAVOC_DATA_DIR="/root/Tools/Havoc/data"
 COMPILER_URL="http://musl.cc/x86_64-w64-mingw32-cross.tgz"
 COMPILER_DIR="/usr/bin/x86_64-w64-mingw32-cross"
 COMPILER_PATH="$COMPILER_DIR/bin/x86_64-w64-mingw32-gcc"

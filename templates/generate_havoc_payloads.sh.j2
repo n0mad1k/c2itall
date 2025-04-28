@@ -2,13 +2,13 @@
 # EDR-evasive payload generator for Havoc C2
 
 # Configuration (automatically populated by Ansible)
-PAYLOADS_DIR="/root/Tools/havoc/payloads"
+PAYLOADS_DIR="/root/Tools/Havoc/payloads"
 C2_HOST="{{ ansible_host }}"
 REDIRECTOR_HOST="{{ redirector_subdomain }}.{{ domain }}"
 REDIRECTOR_PORT="{{ redirector_port | default('443') }}"
 TEAMSERVER_HOST="127.0.0.1"
 TEAMSERVER_PORT="40056"
-HAVOC_DIR="/root/Tools/havoc"
+HAVOC_DIR="/root/Tools/Havoc"
 HAVOC_CLIENT="$HAVOC_DIR/Client/havoc"
 
 # Ensure required directories exist

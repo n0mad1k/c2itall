@@ -107,7 +107,7 @@ After deployment:
 
 ## Using Havoc C2
 
-Havoc C2 Framework is installed at `/root/Tools/havoc` on the C2 server.
+Havoc C2 Framework is installed at `/root/Tools/Havoc` on the C2 server.
 
 ### Connecting to the Teamserver
 
@@ -126,11 +126,11 @@ From your local machine:
    ```bash
    ./havoc client --address YOUR_C2_IP:40056 --username admin --password [password]
    ```
-   (The password is stored in `/root/Tools/havoc/data/profiles/default.yaotl`)
+   (The password is stored in `/root/Tools/Havoc/data/profiles/default.yaotl`)
 
 ### Generating Payloads
 
-Pre-generated payloads are available in `/root/Tools/havoc/payloads/`. You can create new payloads using:
+Pre-generated payloads are available in `/root/Tools/Havoc/payloads/`. You can create new payloads using:
 
 ```bash
 cd /root/Tools
