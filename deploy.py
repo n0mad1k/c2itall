@@ -178,6 +178,45 @@ def interactive_setup(deployment_id=None):
     if not cross_provider:
         use_multi_region = input("\nDo you want to deploy redirector and C2 in different regions? (y/n) [default: n]: ").lower() == 'y'
         config['use_multi_region'] = use_multi_region
+        
+        # If they want multi-region deployment, let them select regions now
+        if use_multi_region and not config.get('c2_only') and not config.get('redirector_only'):
+            provider_dir = PROVIDER_DIRS.get(config['provider'], config['provider'].capitalize())
+            vars_file = f"{provider_dir}/vars.yaml"
+            
+            if os.path.exists(vars_file):
+                with open(vars_file, 'r') as f:
+                    vars_data = yaml.safe_load(f) or {}
+                
+                if config['provider'] == 'aws':
+                    regions = vars_data.get('aws_region_choices', [])
+                elif config['provider'] == 'linode':
+                    regions = vars_data.get('region_choices', [])
+                else:
+                    regions = []
+                
+                if regions:
+                    print("\nAvailable regions:")
+                    for i, region in enumerate(regions, 1):
+                        print(f"  {i}. {region}")
+                    
+                    redirector_region_input = input("\nSelect redirector region (number): ")
+                    try:
+                        redirector_region_choice = int(redirector_region_input)
+                        if 1 <= redirector_region_choice <= len(regions):
+                            config['redirector_region'] = regions[redirector_region_choice - 1]
+                    except ValueError:
+                        print("Invalid input, using random region for redirector")
+                    
+                    c2_region_input = input("Select C2 region (number): ")
+                    try:
+                        c2_region_choice = int(c2_region_input)
+                        if 1 <= c2_region_choice <= len(regions):
+                            config['c2_region'] = regions[c2_region_choice - 1]
+                    except ValueError:
+                        print("Invalid input, using random region for C2")
+                else:
+                    print("No regions found in vars file, using random regions")
     
     if cross_provider:
         print("\nSelect redirector provider:")
@@ -436,48 +475,6 @@ def interactive_setup(deployment_id=None):
     config['disable_history'] = True if (disable_history == 'y' or (default_disable_history and disable_history != 'n')) else False
     config['secure_memory'] = True if (secure_memory == 'y' or (default_secure_memory and secure_memory != 'n')) else False
     config['zero_logs'] = True if (zero_logs == 'y' or (default_zero_logs and zero_logs != 'n')) else False
-    
-    # Add multi-region option
-    if not cross_provider and not config.get('c2_only') and not config.get('redirector_only'):
-        multi_region = input("\nDo you want to deploy redirector and C2 in different regions? (y/n) [default: n]: ").lower() == 'y'
-        
-        if multi_region:
-            provider_dir = PROVIDER_DIRS.get(config['provider'], config['provider'].capitalize())
-            vars_file = f"{provider_dir}/vars.yaml"
-            
-            if os.path.exists(vars_file):
-                with open(vars_file, 'r') as f:
-                    vars_data = yaml.safe_load(f) or {}
-                
-                if config['provider'] == 'aws':
-                    regions = vars_data.get('aws_region_choices', [])
-                elif config['provider'] == 'linode':
-                    regions = vars_data.get('region_choices', [])
-                else:
-                    regions = []
-                
-                if regions:
-                    print("\nAvailable regions:")
-                    for i, region in enumerate(regions, 1):
-                        print(f"  {i}. {region}")
-                    
-                    redirector_region_input = input("\nSelect redirector region (number): ")
-                    try:
-                        redirector_region_choice = int(redirector_region_input)
-                        if 1 <= redirector_region_choice <= len(regions):
-                            config['redirector_region'] = regions[redirector_region_choice - 1]
-                    except ValueError:
-                        print("Invalid input, using random region for redirector")
-                    
-                    c2_region_input = input("Select C2 region (number): ")
-                    try:
-                        c2_region_choice = int(c2_region_input)
-                        if 1 <= c2_region_choice <= len(regions):
-                            config['c2_region'] = regions[c2_region_choice - 1]
-                    except ValueError:
-                        print("Invalid input, using random region for C2")
-                else:
-                    print("No regions found in vars file, skipping multi-region setup")
     
     # Tracker configuration if enabled
     if config['deploy_tracker']:
@@ -1067,6 +1064,40 @@ def cleanup_resources(config, interactive=True):
     # Use the correct case for provider directory
     provider_dir = PROVIDER_DIRS.get(provider, provider.upper())
     
+    # Load credentials from vars.yaml if they're not already in the config
+    if provider == "aws" and not (config.get('aws_access_key') and config.get('aws_secret_key')):
+        try:
+            vars_file = f"{provider_dir}/vars.yaml"
+            if os.path.exists(vars_file):
+                with open(vars_file, 'r') as f:
+                    vars_data = yaml.safe_load(f) or {}
+                config['aws_access_key'] = vars_data.get('aws_access_key')
+                config['aws_secret_key'] = vars_data.get('aws_secret_key')
+                logging.info("Loaded AWS credentials from vars.yaml for cleanup")
+        except Exception as e:
+            logging.warning(f"Failed to load AWS credentials from vars file: {e}")
+            
+    elif provider == "linode" and not config.get('linode_token'):
+        try:
+            vars_file = f"{provider_dir}/vars.yaml"
+            if os.path.exists(vars_file):
+                with open(vars_file, 'r') as f:
+                    vars_data = yaml.safe_load(f) or {}
+                config['linode_token'] = vars_data.get('linode_token')
+                logging.info("Loaded Linode token from vars.yaml for cleanup")
+        except Exception as e:
+            logging.warning(f"Failed to load Linode token from vars file: {e}")
+    
+    # Set provider-specific environment variables for cleanup
+    if provider == "aws":
+        if config.get('aws_access_key'):
+            os.environ['AWS_ACCESS_KEY_ID'] = config['aws_access_key']
+        if config.get('aws_secret_key'):
+            os.environ['AWS_SECRET_ACCESS_KEY'] = config['aws_secret_key']
+    elif provider == "linode":
+        if config.get('linode_token'):
+            os.environ['LINODE_TOKEN'] = config['linode_token']
+    
     # If interactive, ask for confirmation before cleaning up
     if interactive:
         print("\n============================================================")
@@ -1467,7 +1498,7 @@ def generate_deployment_info(config, success=True):
     info.append("")
     info.append("CLEANUP COMMAND")
     info.append("---------------")
-    info.append(f"./deploy.py --provider {config.get('provider', 'PROVIDER')} --teardown")
+    info.append(f"python3 deploy.py --provider {config.get('provider', 'PROVIDER')} --teardown")
     if config.get('provider') == 'linode':
         info.append(f"Additional parameters: --linode-token YOUR_TOKEN --c2-name {config.get('c2_name', 'C2_NAME')} --redirector-name {config.get('redirector_name', 'REDIRECTOR_NAME')}")
     elif config.get('provider') == 'aws':
