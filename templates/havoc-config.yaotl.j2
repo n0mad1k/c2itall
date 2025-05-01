@@ -1,12 +1,10 @@
-{% set random_hex = lookup('password', '/dev/null chars=hex_lower length=8') %}
-
 Teamserver {
     Host = "0.0.0.0"
     Port = {{ havoc_teamserver_port | default(40056) }}
     
     Build {
         Compiler64 = "/usr/bin/x86_64-w64-mingw32-gcc"
-        Compiler86 = "/usr/bin/i686-w64-mingw32-gcc"
+        Compiler86 = "/usr/bin/x86_64-w64-mingw32-gcc"
         Nasm = "/usr/bin/nasm"
     }
 }
@@ -19,8 +17,6 @@ Operators {
     {% for operator in havoc_operators %}
     user "{{ operator.name }}" {
         Password = "{{ operator.password }}"
-        # Secret is not in documentation, removed or comment it out
-        # Secret = "{{ operator.secret | default(lookup('password', '/dev/null chars=hex_lower length=32')) }}"
     }
     {% endfor %}
     {% endif %}
@@ -28,138 +24,46 @@ Operators {
 
 Listeners {
     Http {
-        Name = "http"
-        KillDate = "{{ havoc_killdate | default('2030-01-01') }}"
-        WorkingHours = "{{ havoc_working_hours | default('0:00-23:59') }}"
-        {% if havoc_hosts is defined %}
-        Hosts = [
-            {% for host in havoc_hosts %}
-            "{{ host }}"{% if not loop.last %},{% endif %}
-            {% endfor %}
-        ]
-        {% else %}
-        Hosts = ["0.0.0.0"]
-        {% endif %}
-        HostBind = "0.0.0.0"
-        HostRotation = "{{ havoc_host_rotation | default('round-robin') }}"
-        PortBind = {{ havoc_http_port | default(8080) }}
-        {% if havoc_portconn is defined %}
-        PortConn = {{ havoc_portconn }}
-        {% endif %}
-        {% if havoc_user_agent is defined %}
-        UserAgent = "{{ havoc_user_agent }}"
-        {% else %}
-        UserAgent = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:{{ random_hex[1] | int + 90 }}.0) Gecko/20100101 Firefox/{{ random_hex[2] | int + 95 }}.0"
-        {% endif %}
-        Headers = [
-            {% if havoc_http_headers is defined %}
-            {% for header in havoc_http_headers %}
-            "{{ header }}"{% if not loop.last %},{% endif %}
-            {% endfor %}
-            {% else %}
-            "Accept: */*",
-            "Accept-Language: en-US,en;q=0.9",
-            "X-Requested-With: XMLHttpRequest"
-            {% endif %}
-        ]
-        Uris = [
-            {% if havoc_http_uris is defined %}
-            {% for uri in havoc_http_uris %}
-            "{{ uri }}"{% if not loop.last %},{% endif %}
-            {% endfor %}
-            {% else %}
-            "/api/v{{ random_hex[6] | int + 1 }}",
-            "/dashboard",
-            "/content/{{ random_hex[1:4] }}",
-            "/wp-includes/{{ random_hex[1:6] }}.js"
-            {% endif %}
-        ]
-        Secure = false
-        {% if havoc_proxy_enabled | default(false) %}
-        Proxy {
-            Host = "{{ havoc_proxy_host }}"
-            Port = {{ havoc_proxy_port }}
-            Username = "{{ havoc_proxy_username | default('') }}"
-            Password = "{{ havoc_proxy_password | default('') }}"
-        }
-        {% endif %}
-    }
-    
-    Http {
         Name = "https"
         KillDate = "{{ havoc_killdate | default('2030-01-01') }}"
         WorkingHours = "{{ havoc_working_hours | default('0:00-23:59') }}"
-        {% if havoc_hosts is defined %}
         Hosts = [
-            {% for host in havoc_hosts %}
-            "{{ host }}"{% if not loop.last %},{% endif %}
-            {% endfor %}
+            "{{ redirector_subdomain }}.{{ domain }}"
         ]
-        {% else %}
-        Hosts = ["0.0.0.0"]
-        {% endif %}
         HostBind = "0.0.0.0"
-        HostRotation = "{{ havoc_host_rotation | default('round-robin') }}"
+        HostRotation = "round-robin"
         PortBind = {{ havoc_https_port | default(443) }}
-        {% if havoc_user_agent is defined %}
-        UserAgent = "{{ havoc_user_agent }}"
-        {% else %}
-        UserAgent = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:{{ random_hex[1] | int + 90 }}.0) Gecko/20100101 Firefox/{{ random_hex[2] | int + 95 }}.0"
-        {% endif %}
+        PortConn = {{ havoc_https_port | default(443) }}
+        UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36"
         Headers = [
-            {% if havoc_https_headers is defined %}
-            {% for header in havoc_https_headers %}
-            "{{ header }}"{% if not loop.last %},{% endif %}
-            {% endfor %}
-            {% else %}
             "Accept: */*",
-            "Accept-Language: en-US,en;q=0.9",
-            "X-Requested-With: XMLHttpRequest"
-            {% endif %}
+            "Accept-Language: en-US,en;q=0.9"
         ]
         Uris = [
-            {% if havoc_https_uris is defined %}
-            {% for uri in havoc_https_uris %}
-            "{{ uri }}"{% if not loop.last %},{% endif %}
-            {% endfor %}
-            {% else %}
-            "/api/v{{ random_hex[6] | int + 2 }}",
+            "/api/v2",
             "/content",
-            "/static/{{ random_hex[2:5] }}",
-            "/wp-content/plugins/{{ random_hex[1:6] }}"
-            {% endif %}
+            "/static/css",
+            "/wp-content/plugins"
         ]
+        Response {
+            Headers = [
+                "Content-Type: application/json",
+                "Cache-Control: no-store, private",
+                "X-Content-Type-Options: nosniff"
+            ]
+        }
         Secure = true
         
         Cert {
-            Cert = "{{ havoc_cert_path | default('/root/Tools/Havoc/data/certs/havoc.crt') }}"
-            Key = "{{ havoc_key_path | default('/root/Tools/Havoc/data/certs/havoc.key') }}"
+            Cert = "/etc/letsencrypt/live/{{ domain }}/fullchain.pem"
+            Key = "/etc/letsencrypt/live/{{ domain }}/privkey.pem"
         }
-        
-        {% if havoc_proxy_enabled | default(false) %}
-        Proxy {
-            Host = "{{ havoc_proxy_host }}"
-            Port = {{ havoc_proxy_port }}
-            Username = "{{ havoc_proxy_username | default('') }}"
-            Password = "{{ havoc_proxy_password | default('') }}"
-        }
-        {% endif %}
     }
-    
-    {% if havoc_smb_enabled | default(false) %}
-    Smb {
-        Name = "smb"
-        PipeName = "{{ havoc_smb_pipename | default('havoc-' ~ random_hex[0:6]) }}"
-    }
-    {% endif %}
 }
 
 Demon {
-    Sleep = {{ havoc_sleep | default(random_hex[0:2] | int % 5 + 2) }}
-    Jitter = {{ havoc_jitter | default(random_hex[2:4] | int % 30 + 20) }}
-    {% if havoc_trust_x_forwarded_for is defined %}
-    TrustXForwardedFor = {{ havoc_trust_x_forwarded_for | lower }}
-    {% endif %}
+    Sleep = {{ havoc_sleep | default(5) }}
+    Jitter = {{ havoc_jitter | default(30) }}
     
     Injection {
         {% if havoc_spawn64 is defined %}
@@ -175,24 +79,3 @@ Demon {
         {% endif %}
     }
 }
-
-{% if havoc_service_enabled | default(false) %}
-Service {
-    Endpoint = "{{ havoc_service_endpoint | default('/api/service') }}"
-    Password = "{{ havoc_service_password | default(lookup('password', '/dev/null chars=ascii_letters,digits length=32')) }}"
-}
-{% endif %}
-
-{% if havoc_webhook_discord_enabled | default(false) %}
-Webhook {
-    Discord {
-        Url = "{{ havoc_webhook_discord_url }}"
-        {% if havoc_webhook_discord_avatar_url is defined %}
-        AvatarUrl = "{{ havoc_webhook_discord_avatar_url }}"
-        {% endif %}
-        {% if havoc_webhook_discord_user is defined %}
-        User = "{{ havoc_webhook_discord_user }}"
-        {% endif %}
-    }
-}
-{% endif %}

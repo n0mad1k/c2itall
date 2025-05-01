@@ -173,6 +173,12 @@ def interactive_setup(deployment_id=None):
     # Ask if user wants to use cross-provider deployment
     cross_provider = input("\nDo you want to deploy redirector and C2 on different providers? (y/n) [default: n]: ").lower() == 'y'
     
+    # If not cross-provider, ask if they want multi-region deployment upfront
+    use_multi_region = False
+    if not cross_provider:
+        use_multi_region = input("\nDo you want to deploy redirector and C2 in different regions? (y/n) [default: n]: ").lower() == 'y'
+        config['use_multi_region'] = use_multi_region
+    
     if cross_provider:
         print("\nSelect redirector provider:")
         for i, provider in enumerate(PROVIDERS, 1):
@@ -249,34 +255,34 @@ def interactive_setup(deployment_id=None):
                 for i, region in enumerate(aws_regions, 1):
                     print(f"  {i}. {region}")
                 
-                # Select region for redirector if this is the redirector provider
-                if provider == config.get('redirector_provider', config['provider']):
-                    region_input = input("\nSelect region for redirector (number or leave blank for random): ")
-                    if region_input:
-                        try:
-                            region_choice = int(region_input)
-                            if 1 <= region_choice <= len(aws_regions):
-                                config['redirector_region'] = aws_regions[region_choice - 1]
-                            else:
-                                print(f"Invalid choice, using random region")
-                        except ValueError:
-                            print("Invalid input, using random region")
-                
-                # Select region for C2 if this is the C2 provider
-                if provider == config.get('c2_provider', config['provider']):
-                    region_input = input("\nSelect region for C2 (number or leave blank for random): ")
-                    if region_input:
-                        try:
-                            region_choice = int(region_input)
-                            if 1 <= region_choice <= len(aws_regions):
-                                config['c2_region'] = aws_regions[region_choice - 1]
-                            else:
-                                print(f"Invalid choice, using random region")
-                        except ValueError:
-                            print("Invalid input, using random region")
-                
-                # If not cross-provider and no specific regions selected, use general region
-                if not cross_provider and not (config.get('redirector_region') or config.get('c2_region')):
+                # Handle region selection based on deployment type
+                if cross_provider or use_multi_region:
+                    # Select specific regions for redirector/C2 if this provider is used for them
+                    if provider == config.get('redirector_provider', config['provider']):
+                        region_input = input("\nSelect region for redirector (number or leave blank for random): ")
+                        if region_input:
+                            try:
+                                region_choice = int(region_input)
+                                if 1 <= region_choice <= len(aws_regions):
+                                    config['redirector_region'] = aws_regions[region_choice - 1]
+                                else:
+                                    print(f"Invalid choice, using random region")
+                            except ValueError:
+                                print("Invalid input, using random region")
+                    
+                    if provider == config.get('c2_provider', config['provider']):
+                        region_input = input("\nSelect region for C2 (number or leave blank for random): ")
+                        if region_input:
+                            try:
+                                region_choice = int(region_input)
+                                if 1 <= region_choice <= len(aws_regions):
+                                    config['c2_region'] = aws_regions[region_choice - 1]
+                                else:
+                                    print(f"Invalid choice, using random region")
+                            except ValueError:
+                                print("Invalid input, using random region")
+                else:
+                    # Single region for both if not using multi-region
                     region_input = input("\nSelect region (number or leave blank for random): ")
                     if region_input:
                         try:
@@ -301,34 +307,34 @@ def interactive_setup(deployment_id=None):
                 for i, region in enumerate(linode_regions, 1):
                     print(f"  {i}. {region}")
                 
-                # Select region for redirector if this is the redirector provider
-                if provider == config.get('redirector_provider', config['provider']):
-                    region_input = input("\nSelect region for redirector (number or leave blank for random): ")
-                    if region_input:
-                        try:
-                            region_choice = int(region_input)
-                            if 1 <= region_choice <= len(linode_regions):
-                                config['redirector_region'] = linode_regions[region_choice - 1]
-                            else:
-                                print(f"Invalid choice, using random region")
-                        except ValueError:
-                            print("Invalid input, using random region")
-                
-                # Select region for C2 if this is the C2 provider
-                if provider == config.get('c2_provider', config['provider']):
-                    region_input = input("\nSelect region for C2 (number or leave blank for random): ")
-                    if region_input:
-                        try:
-                            region_choice = int(region_input)
-                            if 1 <= region_choice <= len(linode_regions):
-                                config['c2_region'] = linode_regions[region_choice - 1]
-                            else:
-                                print(f"Invalid choice, using random region")
-                        except ValueError:
-                            print("Invalid input, using random region")
-                
-                # If not cross-provider and no specific regions selected, use general region
-                if not cross_provider and not (config.get('redirector_region') or config.get('c2_region')):
+                # Handle region selection based on deployment type
+                if cross_provider or use_multi_region:
+                    # Select specific regions for redirector/C2 if this provider is used for them
+                    if provider == config.get('redirector_provider', config['provider']):
+                        region_input = input("\nSelect region for redirector (number or leave blank for random): ")
+                        if region_input:
+                            try:
+                                region_choice = int(region_input)
+                                if 1 <= region_choice <= len(linode_regions):
+                                    config['redirector_region'] = linode_regions[region_choice - 1]
+                                else:
+                                    print(f"Invalid choice, using random region")
+                            except ValueError:
+                                print("Invalid input, using random region")
+                    
+                    if provider == config.get('c2_provider', config['provider']):
+                        region_input = input("\nSelect region for C2 (number or leave blank for random): ")
+                        if region_input:
+                            try:
+                                region_choice = int(region_input)
+                                if 1 <= region_choice <= len(linode_regions):
+                                    config['c2_region'] = linode_regions[region_choice - 1]
+                                else:
+                                    print(f"Invalid choice, using random region")
+                            except ValueError:
+                                print("Invalid input, using random region")
+                else:
+                    # Single region for both if not using multi-region
                     region_input = input("\nSelect region (number or leave blank for random): ")
                     if region_input:
                         try:
