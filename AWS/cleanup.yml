@@ -151,6 +151,30 @@
                      (c2_vpcs.stdout | default('') | trim | split('\n') | select('string') | list)) | unique }}"
       when: (redirector_vpcs.stdout | default('') | trim != '') or (c2_vpcs.stdout | default('') | trim != '')
 
+    - name: Find shared infrastructure resources by deployment ID
+      command: >
+        aws ec2 describe-vpcs
+        --filters "Name=tag:deployment_id,Values={{ deployment_id }}"
+        --query "Vpcs[].VpcId"
+        --output text
+        --region {{ aws_region }}
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
+        AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
+      register: infra_vpcs
+      failed_when: false
+      changed_when: false
+
+    - name: Add shared infrastructure VPCs to cleanup list
+      set_fact:
+        vpc_ids: "{{ vpc_ids | default([]) + (infra_vpcs.stdout | default('') | trim | split('\n') | select('string') | list) }}"
+      when: infra_vpcs.stdout | default('') | trim != ''
+      
+    - name: Remove infrastructure state file if it exists
+      file:
+        path: "infrastructure_state.json"
+        state: absent
+
     # Process each VPC
     - name: Process each VPC
       include_tasks: process_vpc.yml
