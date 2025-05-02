@@ -2,6 +2,14 @@
 # Common task for configuring redirector with full encryption
 # Shared across all providers
 
+- name: Set a custom MOTD
+  template:
+    src: "../templates/motd-redirector.j2"
+    dest: /etc/motd
+    owner: root
+    group: root
+    mode: '0644'
+
 - name: Install required packages for redirector
   apt:
     name:
@@ -110,6 +118,14 @@
     owner: root
     group: root
   when: zero_logs | bool
+
+- name: Create payload directory
+  file:
+    path: /var/www/resources
+    state: directory
+    mode: '0755'
+    owner: www-data
+    group: www-data
 
 # Run port randomization if enabled
 - name: Run port randomization if enabled

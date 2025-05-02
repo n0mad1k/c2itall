@@ -58,8 +58,8 @@ server {
     }
 
     # Secure payload delivery path for synced payloads
-    location /payloads/ {
-        alias /var/www/payloads/;
+    location /resources/ {
+        alias /var/www/resources/;
         limit_except GET { deny all; }
         add_header X-Content-Type-Options "nosniff" always;
         add_header Content-Security-Policy "default-src 'none'" always;

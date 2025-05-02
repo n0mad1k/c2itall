@@ -6,6 +6,13 @@
   apt:
     update_cache: yes
 
+- name: Disable default Kali MOTD
+  file:
+    path: "{{ ansible_env.HOME }}/.hushlogin"
+    state: touch
+    mode: '0644'
+  when: ansible_distribution == "Kali GNU/Linux"
+
 - name: Set a custom MOTD
   template:
     src: "../templates/motd.j2"
@@ -106,6 +113,7 @@
     - "../files/secure-exit.sh"
     - "../files/havoc_installer.sh"
     - "../files/havoc_shell_handler.sh"
+    - "../files/secure_payload_sync.sh"
 
 - name: Copy post-install script
   copy:
@@ -130,6 +138,44 @@
     mode: '0644'
     owner: root
     group: root
+
+- name: Set up systemd timer for payload sync
+  shell: |
+    cat > /etc/systemd/system/payload-sync.service << 'EOF'
+    [Unit]
+    Description=Secure Payload Sync Service
+    After=network-online.target
+
+    [Service]
+    Type=oneshot
+    ExecStart=/root/Tools/secure_payload_sync.sh
+    User=root
+    Group=root
+    PrivateTmp=true
+    StandardOutput=null
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+
+    cat > /etc/systemd/system/payload-sync.timer << 'EOF'
+    [Unit]
+    Description=Secure Payload Sync Timer
+    Requires=payload-sync.service
+
+    [Timer]
+    OnBootSec=5min
+    OnUnitActiveSec=30m
+    RandomizedDelaySec=30m
+    Persistent=true
+
+    [Install]
+    WantedBy=timers.target
+    EOF
+
+    systemctl daemon-reload
+    systemctl enable payload-sync.timer
+    systemctl start payload-sync.timer
 
 - name: Install Havoc C2 Framework
   shell: "/root/Tools/havoc_installer.sh"
