@@ -73,6 +73,11 @@
         aws_c2_region: "{{ aws_region_choices | random }}"
       when: aws_region_choices is defined and aws_region_choices|length > 0 and aws_c2_region is not defined
 
+    - name: Set AMI ID for the selected region
+      set_fact:
+        ami_id: "{{ ami_map[aws_redirector_region] }}"
+      when: ami_map is defined and aws_redirector_region in ami_map
+
     - name: Launch EC2 instance for C2 server
       amazon.aws.ec2_instance:
         name: "{{ c2_name }}"

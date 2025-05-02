@@ -114,31 +114,41 @@
         aws_redirector_region: "{{ aws_region_choices | random }}"
       when: aws_region_choices is defined and aws_region_choices|length > 0 and aws_redirector_region is not defined
 
-    - name: Launch EC2 instance for redirector
-      amazon.aws.ec2_instance:
-        name: "{{ redirector_name }}"
-        key_name: "{{ aws_keypair_name }}"
-        instance_type: "{{ instance_type | default('t2.micro') }}"
-        security_group: "{{ redirector_name }}-sg"
-        image_id: "{{ ami_id }}"
+    - name: Set AMI ID for the selected region
+      set_fact:
+        ami_id: "{{ ami_map[aws_redirector_region] }}"
+      when: ami_map is defined and aws_redirector_region in ami_map
+
+    - name: Create security group for redirector
+      amazon.aws.ec2_security_group:
+        name: "{{ redirector_name }}-sg"
+        description: "Security group for redirector {{ redirector_name }}"
+        vpc_id: "{{ vpc_id }}"
         region: "{{ aws_redirector_region }}"
+        rules:
+          - proto: tcp
+            ports:
+              - 22
+              - 80
+              - 443
+              - "{{ shell_handler_port | default(4444) }}"
+            cidr_ip: 0.0.0.0/0
+        rules_egress:
+          - proto: -1
+            cidr_ip: 0.0.0.0/0
         state: present
-        wait: yes
-        tags:
-          Name: "{{ redirector_name }}"
-      register: ec2
+      register: security_group
 
     - name: Launch EC2 instance for redirector
       amazon.aws.ec2_instance:
         name: "{{ redirector_name }}"
-        key_name: "{{ aws_keypair_name }}"
+        key_name: "{{ redirector_name }}"
+        instance_type: "{{ redirector_instance_type | default('t2.micro') }}"
         vpc_subnet_id: "{{ subnet_result.subnet.id | default(omit) }}"
-        instance_type: "{{ instance_type | default('t2.micro') }}"
-        security_group: "{{ redirector_name }}-sg"
-        network:
-          assign_public_ip: true
+        security_group_ids: 
+          - "{{ security_group.group_id }}"
         image_id: "{{ ami_id }}"
-        region: "{{ aws_region }}"
+        region: "{{ aws_redirector_region }}"
         state: present
         wait: yes
         tags:
