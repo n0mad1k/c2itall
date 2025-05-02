@@ -32,6 +32,7 @@
       meta: end_play
       when: confirm_cleanup and confirmation.user_input != 'yes'
 
+    # Find instance IDs for cleanup
     - name: Find redirector instance ID
       command: >
         aws ec2 describe-instances
@@ -72,196 +73,118 @@
         c2_instance_id: "{{ c2_id_result.stdout | trim }}"
       when: cleanup_c2 and c2_id_result.stdout is defined and c2_id_result.stdout | trim != ""
 
-    - name: Get information about the redirector security group
-      amazon.aws.ec2_security_group_info:
-        filters:
-          tag:redirector_name: "{{ redirector_name }}"
-        region: "{{ aws_region }}"
-      register: sg_info
-      ignore_errors: yes
-      when: cleanup_redirector | bool
-
-    - name: Get information about the VPC
+    # Find VPCs with specific redirector tag
+    - name: Find VPCs with specific redirector tag
       amazon.aws.ec2_vpc_net_info:
-        filters:
-          tag:redirector_name: "{{ redirector_name }}"
         region: "{{ aws_region }}"
-      register: vpc_info
-      ignore_errors: yes
-      when: cleanup_redirector | bool
-
-    - name: Get subnet information
-      amazon.aws.ec2_vpc_subnet_info:
         filters:
-          tag:redirector_name: "{{ redirector_name }}"
-        region: "{{ aws_region }}"
-      register: subnet_info
-      ignore_errors: yes
-      when: vpc_info.vpcs is defined and vpc_info.vpcs | length > 0
+          "tag:redirector_name": "{{ redirector_name }}"
+      register: tagged_vpcs_info
+      when: cleanup_redirector | default(false) | bool
 
-    - name: Get internet gateway information
-      amazon.aws.ec2_vpc_igw_info:
-        filters:
-          tag:redirector_name: "{{ redirector_name }}"
-        region: "{{ aws_region }}"
-      register: igw_info
-      ignore_errors: yes
-      when: vpc_info.vpcs is defined and vpc_info.vpcs | length > 0
+    - name: Display matched VPCs for cleanup
+      debug:
+        msg: "Found {{ tagged_vpcs_info.vpcs | default([]) | length }} VPCs with tag redirector_name={{ redirector_name }} to clean up"
+      when: cleanup_redirector | default(false) | bool and tagged_vpcs_info is defined
 
-    - name: Get route table information
-      amazon.aws.ec2_vpc_route_table_info:
-        filters:
-          tag:redirector_name: "{{ redirector_name }}"
-        region: "{{ aws_region }}"
-      register: rtb_info
-      ignore_errors: yes
-      when: vpc_info.vpcs is defined and vpc_info.vpcs | length > 0
-
-    - name: Ensure all internet gateways are detached and deleted
+    - name: Clean up each VPC and its dependencies
       block:
-        - name: Get all internet gateways for the VPC
-          command: >
-            aws ec2 describe-internet-gateways 
-            --region {{ aws_region }} 
-            --filters "Name=attachment.vpc-id,Values={{ vpc_info.vpcs[0].id }}" 
-            --query "InternetGateways[*].InternetGatewayId" 
-            --output text
-          environment:
-            AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
-            AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
-          register: igw_ids
-          when: vpc_info.vpcs is defined and vpc_info.vpcs | length > 0
+        - name: Get all subnets for target VPC
+          amazon.aws.ec2_vpc_subnet_info:
+            filters:
+              vpc-id: "{{ item.id }}"
+              "tag:redirector_name": "{{ redirector_name }}"
+            region: "{{ aws_region }}"
+          register: vpc_subnets
+          with_items: "{{ tagged_vpcs_info.vpcs }}"
           
+        - name: Get all internet gateways for target VPC
+          amazon.aws.ec2_vpc_igw_info:
+            filters:
+              attachment.vpc-id: "{{ item.id }}"
+            region: "{{ aws_region }}"
+          register: vpc_igws
+          with_items: "{{ tagged_vpcs_info.vpcs }}"
+          
+        - name: Get all route tables for target VPC
+          amazon.aws.ec2_vpc_route_table_info:
+            filters:
+              vpc-id: "{{ item.id }}"
+              "tag:redirector_name": "{{ redirector_name }}"
+            region: "{{ aws_region }}"
+          register: vpc_route_tables
+          with_items: "{{ tagged_vpcs_info.vpcs }}"
+        
+        - name: Get security groups for target VPC
+          amazon.aws.ec2_security_group_info:
+            filters:
+              vpc-id: "{{ item.id }}"
+              group-name: "{{ redirector_name }}-sg"
+            region: "{{ aws_region }}"
+          register: vpc_security_groups
+          with_items: "{{ tagged_vpcs_info.vpcs }}"
+        
+        # Start deleting resources in proper dependency order
+        - name: Delete non-main route tables
+          amazon.aws.ec2_vpc_route_table:
+            route_table_id: "{{ item.route_table_id }}"
+            region: "{{ aws_region }}"
+            state: absent
+          loop: "{{ vpc_route_tables.results | map(attribute='route_tables') | flatten | selectattr('associations', 'defined') | list }}"
+          ignore_errors: yes
+        
         - name: Detach internet gateways
-          command: >
+          shell: >
             aws ec2 detach-internet-gateway 
             --region {{ aws_region }} 
-            --internet-gateway-id {{ item }} 
-            --vpc-id {{ vpc_info.vpcs[0].id }}
+            --internet-gateway-id {{ item.internet_gateway_id }} 
+            --vpc-id {{ item.attachments[0].vpc_id }}
           environment:
             AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
             AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
-          with_items: "{{ igw_ids.stdout_lines | default([]) }}"
-          when: vpc_info.vpcs is defined and vpc_info.vpcs | length > 0 and igw_ids.stdout != ""
+          loop: "{{ vpc_igws.results | map(attribute='internet_gateways') | flatten | selectattr('attachments', 'defined') | list }}"
           ignore_errors: yes
-
+        
         - name: Delete internet gateways
-          command: >
-            aws ec2 delete-internet-gateway 
-            --region {{ aws_region }} 
-            --internet-gateway-id {{ item }}
-          environment:
-            AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
-            AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
-          with_items: "{{ igw_ids.stdout_lines | default([]) }}"
-          when: igw_ids.stdout is defined and igw_ids.stdout != ""
-          ignore_errors: yes
-      when: vpc_info.vpcs is defined and vpc_info.vpcs | length > 0
-      ignore_errors: yes
-
-    # Add this task to the cleanup script to get all VPCs with redirector tags
-    - name: Get all VPCs with redirector tags
-      amazon.aws.ec2_vpc_net_info:
-        region: "{{ aws_region }}"
-      register: all_vpcs_info
-      
-    # Add a task to identify VPCs to cleanup based on tags
-    - name: Identify redirector VPCs for cleanup
-      set_fact:
-        vpcs_to_cleanup: "{{ all_vpcs_info.vpcs | selectattr('tags.redirector_name', 'defined') | list }}"
-      when: all_vpcs_info.vpcs is defined
-      
-    # Enhanced VPC deletion with better dependency handling
-    - name: Delete all VPC resources
-      block:
-        - name: Delete associated subnets
-          amazon.aws.ec2_vpc_subnet:
-            vpc_id: "{{ item.id }}"
-            state: absent
+          amazon.aws.ec2_vpc_igw:
+            igw_id: "{{ item.internet_gateway_id }}"
             region: "{{ aws_region }}"
-          with_items: "{{ vpcs_to_cleanup }}"
+            state: absent
+          loop: "{{ vpc_igws.results | map(attribute='internet_gateways') | flatten | list }}"
+          ignore_errors: yes
+        
+        - name: Delete subnets
+          amazon.aws.ec2_vpc_subnet:
+            subnet_id: "{{ item.subnet_id }}"
+            region: "{{ aws_region }}"
+            state: absent
+          loop: "{{ vpc_subnets.results | map(attribute='subnets') | flatten | list }}"
           ignore_errors: yes
           
-        - name: Ensure all internet gateways are detached
-          shell: >
-            aws ec2 describe-internet-gateways --region {{ aws_region }} --filters "Name=attachment.vpc-id,Values={{ item.id }}" --query "InternetGateways[*].InternetGatewayId" --output text | 
-            xargs -I % aws ec2 detach-internet-gateway --region {{ aws_region }} --internet-gateway-id % --vpc-id {{ item.id }}
-          with_items: "{{ vpcs_to_cleanup }}"
+        - name: Delete security groups
+          amazon.aws.ec2_security_group:
+            group_id: "{{ item.group_id }}"
+            region: "{{ aws_region }}"
+            state: absent
+          loop: "{{ vpc_security_groups.results | map(attribute='security_groups') | flatten | list }}"
           ignore_errors: yes
-          
-        - name: Delete all VPCs
+        
+        - name: Delete VPCs
           amazon.aws.ec2_vpc_net:
             vpc_id: "{{ item.id }}"
-            state: absent
             region: "{{ aws_region }}"
-          with_items: "{{ vpcs_to_cleanup }}"
+            state: absent
+          loop: "{{ tagged_vpcs_info.vpcs }}"
           ignore_errors: yes
-      when: vpcs_to_cleanup is defined and vpcs_to_cleanup | length > 0      
+      when: cleanup_redirector | bool and tagged_vpcs_info is defined and tagged_vpcs_info.vpcs | default([]) | length > 0
 
-    - name: Delete route tables
-      amazon.aws.ec2_vpc_route_table:
-        route_table_id: "{{ item.id }}"
-        region: "{{ aws_region }}"
-        state: absent
-      loop: "{{ rtb_info.route_tables | default([]) }}"
-      ignore_errors: yes
-      when: rtb_info.route_tables is defined and rtb_info.route_tables | length > 0
-
-    - name: Detach internet gateway from VPC
-      amazon.aws.ec2_vpc_igw:
-        vpc_id: "{{ vpc_info.vpcs[0].id }}"
-        region: "{{ aws_region }}"
-        state: absent
-      ignore_errors: yes
-      when: vpc_info.vpcs is defined and vpc_info.vpcs | length > 0 and igw_info.internet_gateways is defined and igw_info.internet_gateways | length > 0
-
-    - name: Delete internet gateway
-      amazon.aws.ec2_vpc_igw:
-        igw_id: "{{ item.id }}"
-        region: "{{ aws_region }}"
-        state: absent
-      loop: "{{ igw_info.internet_gateways | default([]) }}"
-      ignore_errors: yes
-      when: igw_info.internet_gateways is defined and igw_info.internet_gateways | length > 0
-
-    - name: Delete subnets
-      amazon.aws.ec2_vpc_subnet:
-        vpc_id: "{{ vpc_info.vpcs[0].id }}"
-        cidr: "{{ item.cidr_block }}"
-        region: "{{ aws_region }}"
-        state: absent
-      loop: "{{ subnet_info.subnets | default([]) }}"
-      ignore_errors: yes
-      when: subnet_info.subnets is defined and subnet_info.subnets | length > 0
-
-    - name: Delete security groups
-      amazon.aws.ec2_security_group:
-        group_id: "{{ item.group_id }}"
-        region: "{{ aws_region }}"
-        state: absent
-      loop: "{{ sg_info.security_groups | default([]) }}"
-      ignore_errors: yes
-      when: sg_info.security_groups is defined and sg_info.security_groups | length > 0
-
-    - name: Delete VPC
-      amazon.aws.ec2_vpc_net:
-        vpc_id: "{{ vpc_info.vpcs[0].id }}"
-        region: "{{ aws_region }}"
-        state: absent
-      ignore_errors: yes
-      when: vpc_info.vpcs is defined and vpc_info.vpcs | length > 0
-
-
-
-
+    # Instance, security group, and key pair cleanup
     - name: Terminate redirector instance
       amazon.aws.ec2_instance:
         state: absent
         instance_ids:
           - "{{ redirector_instance_id }}"
         region: "{{ aws_region }}"
-        aws_access_key: "{{ aws_access_key }}"
-        aws_secret_key: "{{ aws_secret_key }}"
       when: cleanup_redirector and redirector_instance_id is defined and redirector_instance_id != ""
       register: redirector_termination
 
@@ -271,8 +194,6 @@
         instance_ids:
           - "{{ c2_instance_id }}"
         region: "{{ aws_region }}"
-        aws_access_key: "{{ aws_access_key }}"
-        aws_secret_key: "{{ aws_secret_key }}"
       when: cleanup_c2 and c2_instance_id is defined and c2_instance_id != ""
       register: c2_termination
 
@@ -288,8 +209,6 @@
         name: "{{ redirector_name }}-sg"
         state: absent
         region: "{{ aws_region }}"
-        aws_access_key: "{{ aws_access_key }}"
-        aws_secret_key: "{{ aws_secret_key }}"
       ignore_errors: yes
       when: cleanup_redirector and redirector_name is defined and redirector_name != ""
 
@@ -298,8 +217,6 @@
         name: "{{ c2_name }}-sg"
         state: absent
         region: "{{ aws_region }}"
-        aws_access_key: "{{ aws_access_key }}"
-        aws_secret_key: "{{ aws_secret_key }}"
       ignore_errors: yes
       when: cleanup_c2 and c2_name is defined and c2_name != ""
 
@@ -308,8 +225,6 @@
         name: "{{ redirector_name }}"
         state: absent
         region: "{{ aws_region }}"
-        aws_access_key: "{{ aws_access_key }}"
-        aws_secret_key: "{{ aws_secret_key }}"
       when: cleanup_redirector and redirector_name is defined and redirector_name != ""
 
     - name: Delete C2 key pair
@@ -317,8 +232,6 @@
         name: "{{ c2_name }}"
         state: absent
         region: "{{ aws_region }}"
-        aws_access_key: "{{ aws_access_key }}"
-        aws_secret_key: "{{ aws_secret_key }}"
       when: cleanup_c2 and c2_name is defined and c2_name != ""
 
     - name: Remove redirector SSH key file
