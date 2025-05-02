@@ -41,48 +41,51 @@
       when: c2_key_pair.changed and c2_key_pair.key.private_key is defined
 
     - name: Create a security group for the C2 server
-      amazon.aws.ec2_group:
-        access_key: "{{ aws_access_key }}"
-        secret_key: "{{ aws_secret_key }}"
+      amazon.aws.ec2_security_group:
         name: "{{ c2_name }}-sg"
         description: "Security group for C2 server {{ c2_name }}"
+        vpc_id: "{{ vpc_id }}"
         region: "{{ aws_region }}"
         rules:
           - proto: tcp
-            ports: 
+            ports:
               - 22
               - 80
               - 443
-              - 8888  # Sliver HTTP listener
-              - 50051 # Sliver gRPC port
-              - 31337 # Additional C2 port
+              - "{{ havoc_teamserver_port | default(40056) }}"
+              - "{{ havoc_http_port | default(8080) }}"
+              - "{{ havoc_https_port | default(443) }}"
+              - "{{ gophish_admin_port | default(3333) }}"
             cidr_ip: 0.0.0.0/0
         rules_egress:
           - proto: -1
             cidr_ip: 0.0.0.0/0
-      register: c2_sg_result
+        state: present
+      register: security_group
 
-    - name: Launch C2 EC2 instance
+    - name: Set region for AWS C2 server
+      set_fact:
+        aws_c2_region: "{{ aws_region | default(region, true) | default('us-east-1', true) }}"
+      when: aws_region_choices is not defined or aws_region_choices|length == 0
+
+    - name: Set random region for AWS C2 server
+      set_fact:
+        aws_c2_region: "{{ aws_region_choices | random }}"
+      when: aws_region_choices is defined and aws_region_choices|length > 0 and aws_c2_region is not defined
+
+    - name: Launch EC2 instance for C2 server
       amazon.aws.ec2_instance:
-        access_key: "{{ aws_access_key }}"
-        secret_key: "{{ aws_secret_key }}"
-        region: "{{ aws_region }}"
         name: "{{ c2_name }}"
-        image_id: "{{ ami_map[aws_region] }}"
-        instance_type: "{{ instance_type }}"
-        key_name: "{{ c2_name }}"
-        security_groups:
-          - "{{ c2_name }}-sg"
+        key_name: "{{ aws_keypair_name }}"
+        instance_type: "{{ instance_type | default('t2.medium') }}"
+        security_group: "{{ c2_name }}-sg"
+        image_id: "{{ ami_id }}"
+        region: "{{ aws_c2_region }}"
+        state: present
         wait: yes
         tags:
           Name: "{{ c2_name }}"
-          Role: "c2"
-        volumes:
-          - device_name: "/dev/xvda"
-            ebs:
-              volume_size: 100
-              delete_on_termination: true
-      register: c2_instance
+      register: ec2
 
     - name: Set c2_ip for later use
       set_fact:

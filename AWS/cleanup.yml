@@ -72,6 +72,105 @@
         c2_instance_id: "{{ c2_id_result.stdout | trim }}"
       when: cleanup_c2 and c2_id_result.stdout is defined and c2_id_result.stdout | trim != ""
 
+    - name: Get information about the redirector security group
+      amazon.aws.ec2_security_group_info:
+        filters:
+          tag:redirector_name: "{{ redirector_name }}"
+        region: "{{ aws_region }}"
+      register: sg_info
+      ignore_errors: yes
+      when: cleanup_redirector | bool
+
+    - name: Get information about the VPC
+      amazon.aws.ec2_vpc_net_info:
+        filters:
+          tag:redirector_name: "{{ redirector_name }}"
+        region: "{{ aws_region }}"
+      register: vpc_info
+      ignore_errors: yes
+      when: cleanup_redirector | bool
+
+    - name: Get subnet information
+      amazon.aws.ec2_vpc_subnet_info:
+        filters:
+          tag:redirector_name: "{{ redirector_name }}"
+        region: "{{ aws_region }}"
+      register: subnet_info
+      ignore_errors: yes
+      when: vpc_info.vpcs is defined and vpc_info.vpcs | length > 0
+
+    - name: Get internet gateway information
+      amazon.aws.ec2_vpc_igw_info:
+        filters:
+          tag:redirector_name: "{{ redirector_name }}"
+        region: "{{ aws_region }}"
+      register: igw_info
+      ignore_errors: yes
+      when: vpc_info.vpcs is defined and vpc_info.vpcs | length > 0
+
+    - name: Get route table information
+      amazon.aws.ec2_vpc_route_table_info:
+        filters:
+          tag:redirector_name: "{{ redirector_name }}"
+        region: "{{ aws_region }}"
+      register: rtb_info
+      ignore_errors: yes
+      when: vpc_info.vpcs is defined and vpc_info.vpcs | length > 0
+
+    # Delete in proper order (dependencies first)
+    - name: Delete route tables
+      amazon.aws.ec2_vpc_route_table:
+        route_table_id: "{{ item.id }}"
+        region: "{{ aws_region }}"
+        state: absent
+      loop: "{{ rtb_info.route_tables | default([]) }}"
+      ignore_errors: yes
+      when: rtb_info.route_tables is defined and rtb_info.route_tables | length > 0
+
+    - name: Detach internet gateway from VPC
+      amazon.aws.ec2_vpc_igw:
+        vpc_id: "{{ vpc_info.vpcs[0].id }}"
+        region: "{{ aws_region }}"
+        state: absent
+      ignore_errors: yes
+      when: vpc_info.vpcs is defined and vpc_info.vpcs | length > 0 and igw_info.internet_gateways is defined and igw_info.internet_gateways | length > 0
+
+    - name: Delete internet gateway
+      amazon.aws.ec2_vpc_igw:
+        igw_id: "{{ item.id }}"
+        region: "{{ aws_region }}"
+        state: absent
+      loop: "{{ igw_info.internet_gateways | default([]) }}"
+      ignore_errors: yes
+      when: igw_info.internet_gateways is defined and igw_info.internet_gateways | length > 0
+
+    - name: Delete subnets
+      amazon.aws.ec2_vpc_subnet:
+        vpc_id: "{{ vpc_info.vpcs[0].id }}"
+        cidr: "{{ item.cidr_block }}"
+        region: "{{ aws_region }}"
+        state: absent
+      loop: "{{ subnet_info.subnets | default([]) }}"
+      ignore_errors: yes
+      when: subnet_info.subnets is defined and subnet_info.subnets | length > 0
+
+    - name: Delete security groups
+      amazon.aws.ec2_security_group:
+        group_id: "{{ item.group_id }}"
+        region: "{{ aws_region }}"
+        state: absent
+      loop: "{{ sg_info.security_groups | default([]) }}"
+      ignore_errors: yes
+      when: sg_info.security_groups is defined and sg_info.security_groups | length > 0
+
+    - name: Delete VPC
+      amazon.aws.ec2_vpc_net:
+        vpc_id: "{{ vpc_info.vpcs[0].id }}"
+        region: "{{ aws_region }}"
+        state: absent
+      ignore_errors: yes
+      when: vpc_info.vpcs is defined and vpc_info.vpcs | length > 0
+
     - name: Terminate redirector instance
       amazon.aws.ec2_instance:
         state: absent

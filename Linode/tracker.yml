@@ -23,13 +23,23 @@
           - linode_token is defined and linode_token != ""
         fail_msg: "Linode API token is required. Set linode_token in vars.yaml."
 
+    - name: Set region for tracker
+      set_fact:
+        tracker_region_value: "{{ selected_region | default(region, true) | default(linode_region, true) | default('us-east', true) }}"
+      when: region_choices is not defined or region_choices|length == 0
+
+    - name: Set random region for tracker
+      set_fact:
+        tracker_region_value: "{{ region_choices | random }}"
+      when: region_choices is defined and region_choices|length > 0 and tracker_region_value is not defined
+
     - name: Create tracker Linode instance
       community.general.linode_v4:
         access_token: "{{ linode_token }}"
         label: "{{ tracker_name }}"
         type: "{{ plan }}"
-        region: "{{ linode_region }}"
-        image: "{{ tracker_image }}"
+        region: "{{ tracker_region_value }}"
+        image: "{{ image | default('linode/debian12') }}"
         root_pass: "{{ lookup('password', '/dev/null length=16') }}"
         authorized_keys:
           - "{{ lookup('file', ssh_key_path) }}"
