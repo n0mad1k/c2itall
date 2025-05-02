@@ -1,5 +1,5 @@
 ---
-# AWS Redirector-only Deployment Playbook
+# AWS Redirector-only Deployment Playbook (Fixed)
 
 - name: Deploy AWS redirector
   hosts: localhost
@@ -10,6 +10,7 @@
   vars:
     # Default values for required variables
     ssh_user: "{{ ssh_user | default('kali') }}"
+    aws_region: "{{ aws_region | default(aws_region_choices | random) }}"
     instance_type: "{{ aws_instance_type | default('t2.micro') }}"
     
     # Generate random instance name if not provided
@@ -26,19 +27,22 @@
           - aws_secret_key is defined and aws_secret_key != ""
         fail_msg: "AWS credentials are required. Set aws_access_key and aws_secret_key."
     
-    # Set a single consistent region variable early
-    - name: Set deployment region
+    # Select the region first - CRITICAL FIX
+    - name: Set region for AWS redirector
       set_fact:
-        aws_region: "{{ aws_region | default(aws_region_choices | random if aws_region_choices is defined and aws_region_choices | length > 0 else 'us-east-1') }}"
+        aws_redirector_region: "{{ aws_region | default(aws_region_choices | random if aws_region_choices is defined else 'us-east-1') }}"
     
-    - name: Display selected region
-      debug:
-        msg: "Deploying in AWS region: {{ aws_region }}"
+    - name: Set AMI ID for the selected region
+      set_fact:
+        ami_id: "{{ ami_map[aws_redirector_region] }}"
+      when: ami_map is defined and aws_redirector_region in ami_map
 
     - name: Create EC2 key pair for redirector
       amazon.aws.ec2_key:
+        access_key: "{{ aws_access_key }}"
+        secret_key: "{{ aws_secret_key }}"
         name: "{{ redirector_name }}"
-        region: "{{ aws_region }}"
+        region: "{{ aws_redirector_region }}"
         state: present
       register: redirector_key_pair
 
@@ -49,56 +53,52 @@
         mode: "0600"
       when: redirector_key_pair.changed and redirector_key_pair.key.private_key is defined
 
-    - name: Check if VPC exists with specified ID (if provided)
-      amazon.aws.ec2_vpc_net_info:
-        vpc_ids: "{{ vpc_id | default(omit) }}"
-        region: "{{ aws_region }}"
-      register: vpc_info
-      when: vpc_id is defined and vpc_id | length > 0
-
-    - name: Create VPC if not provided or not found
+    - name: Create VPC
       amazon.aws.ec2_vpc_net:
         name: "{{ redirector_name }}-vpc"
         cidr_block: "10.0.0.0/16"
-        region: "{{ aws_region }}"
+        region: "{{ aws_redirector_region }}"
         tags:
           Name: "{{ redirector_name }}-vpc"
           redirector_name: "{{ redirector_name }}"
+        state: present
       register: vpc_result
-      when: vpc_id is not defined or vpc_id | length == 0 or (vpc_info.vpcs | default([]) | length == 0)
 
-    - name: Set VPC ID from existing or newly created VPC
+    - name: Store VPC ID
       set_fact:
-        vpc_id: "{{ vpc_id if (vpc_id is defined and vpc_id | length > 0 and vpc_info.vpcs | default([]) | length > 0) else vpc_result.vpc.id }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+
+    - name: Wait for VPC to be fully available
+      pause:
+        seconds: 10
+      when: vpc_result.changed
 
     - name: Create internet gateway for VPC
       amazon.aws.ec2_vpc_igw:
         vpc_id: "{{ vpc_id }}"
-        region: "{{ aws_region }}"
+        region: "{{ aws_redirector_region }}"
         state: present
         tags:
           Name: "{{ redirector_name }}-igw"
           redirector_name: "{{ redirector_name }}"
       register: igw_result
-      when: vpc_result.changed | default(false)
 
     - name: Create subnet in VPC
       amazon.aws.ec2_vpc_subnet:
         vpc_id: "{{ vpc_id }}"
         cidr: "10.0.1.0/24"
-        region: "{{ aws_region }}"
-        az: "{{ aws_region }}a"
+        region: "{{ aws_redirector_region }}"
+        az: "{{ aws_redirector_region }}a"
         map_public: yes
         tags:
           Name: "{{ redirector_name }}-subnet"
           redirector_name: "{{ redirector_name }}"
       register: subnet_result
-      when: vpc_result.changed | default(false)
 
     - name: Create routing table for internet access
       amazon.aws.ec2_vpc_route_table:
         vpc_id: "{{ vpc_id }}"
-        region: "{{ aws_region }}"
+        region: "{{ aws_redirector_region }}"
         tags:
           Name: "{{ redirector_name }}-rtb"
           redirector_name: "{{ redirector_name }}"
@@ -108,19 +108,13 @@
         subnets:
           - "{{ subnet_result.subnet.id }}"
       register: route_table_result
-      when: vpc_result.changed | default(false) and igw_result.changed | default(false) and subnet_result.changed | default(false)
-
-    - name: Set AMI ID for the selected region
-      set_fact:
-        ami_id: "{{ ami_map[aws_region] }}"
-      when: ami_map is defined and aws_region in ami_map
 
     - name: Create security group for redirector
       amazon.aws.ec2_security_group:
         name: "{{ redirector_name }}-sg"
         description: "Security group for redirector {{ redirector_name }}"
         vpc_id: "{{ vpc_id }}"
-        region: "{{ aws_region }}"
+        region: "{{ aws_redirector_region }}"
         rules:
           - proto: tcp
             ports:
@@ -140,17 +134,15 @@
         name: "{{ redirector_name }}"
         key_name: "{{ redirector_name }}"
         instance_type: "{{ redirector_instance_type | default('t2.micro') }}"
-        vpc_subnet_id: "{{ subnet_result.subnet.id | default(omit) }}"
-        security_groups:
-          - "{{ redirector_name }}-sg"
+        vpc_subnet_id: "{{ subnet_result.subnet.id }}"
+        security_groups: 
+          - "{{ security_group.group_id }}"
         image_id: "{{ ami_id }}"
-        region: "{{ aws_region }}"
+        region: "{{ aws_redirector_region }}"
         state: present
         wait: yes
         tags:
           Name: "{{ redirector_name }}"
-          redirector_name: "{{ redirector_name }}"
-          aws_region: "{{ aws_region }}"
       register: redirector_instance
 
     - name: Set redirector_ip for later use
@@ -158,29 +150,13 @@
         redirector_ip: "{{ redirector_instance.instances[0].public_ip_address }}"
         redirector_instance_id: "{{ redirector_instance.instances[0].instance_id }}"
 
-    # Added longer wait time for SSH to be available
     - name: Wait for redirector SSH to be available
       wait_for:
         host: "{{ redirector_ip }}"
         port: 22
-        delay: 60
+        delay: 30
         timeout: 300
         state: started
-
-    # Added SSH connection test to verify credentials
-    - name: Test SSH connection to instance
-      command: >
-        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10
-        -i ~/.ssh/{{ redirector_name }}.pem {{ ssh_user }}@{{ redirector_ip }} echo "SSH connection test"
-      register: ssh_test
-      retries: 5
-      delay: 20
-      until: ssh_test.rc == 0
-      ignore_errors: yes
-
-    - name: Display SSH connection status
-      debug:
-        msg: "{{ 'SSH connection successful' if ssh_test.rc == 0 else 'SSH connection failed - check key permissions' }}"
 
     - name: Add redirector to inventory
       add_host:
@@ -190,38 +166,3 @@
         ansible_user: "{{ ssh_user }}"
         ansible_ssh_private_key_file: "~/.ssh/{{ redirector_name }}.pem"
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-
-- name: Configure redirector server
-  hosts: redirectors
-  become: true
-  gather_facts: true
-  vars_files:
-    - vars.yaml
-  vars:
-    c2_ip: "{{ c2_ip | default('127.0.0.1') }}"
-    redirector_subdomain: "{{ redirector_subdomain | default('cdn') }}"
-  tasks:
-    - name: Wait for apt to be available
-      apt:
-        update_cache: yes
-      register: apt_result
-      until: apt_result is success
-      retries: 5
-      delay: 10
-      
-    - name: Include common redirector configuration tasks
-      include_tasks: "../tasks/configure_redirector.yml"
-      
-    - name: Include common security hardening tasks
-      include_tasks: "../tasks/security_hardening.yml"
-
-    - name: Print deployment summary
-      debug:
-        msg:
-          - "Redirector Deployment Complete!"
-          - "-------------------------------"
-          - "Redirector IP: {{ ansible_host }}"
-          - "Redirector Domain: {{ redirector_subdomain }}.{{ domain }} (Update DNS A record)"
-          - "Shell Handler Port: {{ shell_handler_port }}"
-          - "SSH Key: ~/.ssh/{{ redirector_name }}.pem"
-      when: not disable_summary | default(false)

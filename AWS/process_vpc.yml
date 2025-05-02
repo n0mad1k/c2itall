@@ -1,0 +1,206 @@
+---
+# VPC Cleanup Process
+# Step 1: Route Tables
+- name: Find all route tables for VPC {{ vpc_id }}
+  command: >
+    aws ec2 describe-route-tables
+    --filters "Name=vpc-id,Values={{ vpc_id }}"
+    --query "RouteTables[?Associations[0].Main != `true`].RouteTableId"
+    --output text
+    --region {{ aws_region }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
+    AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
+  register: rt_ids
+  failed_when: false
+  changed_when: false
+
+- name: Process route tables
+  when: rt_ids.stdout | trim != ""
+  block:
+    - name: Find route table associations
+      command: >
+        aws ec2 describe-route-tables
+        --route-table-id {{ item }}
+        --query "RouteTables[].Associations[].RouteTableAssociationId"
+        --output text
+        --region {{ aws_region }}
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
+        AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
+      register: rt_assocs
+      with_items: "{{ rt_ids.stdout.split() }}"
+      failed_when: false
+      changed_when: false
+
+    - name: Disassociate route tables
+      command: >
+        aws ec2 disassociate-route-table
+        --association-id {{ item.1 }}
+        --region {{ aws_region }}
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
+        AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
+      with_subelements:
+        - "{{ rt_assocs.results }}"
+        - stdout_lines
+      when: item.0.stdout | trim != ""
+      failed_when: false
+      ignore_errors: true
+
+    - name: Delete route tables
+      command: >
+        aws ec2 delete-route-table
+        --route-table-id {{ item }}
+        --region {{ aws_region }}
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
+        AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
+      with_items: "{{ rt_ids.stdout.split() }}"
+      register: deleted_rts
+      failed_when: false
+      ignore_errors: true
+
+    - name: Update cleaned route tables
+      set_fact:
+        cleaned_resources: "{{ cleaned_resources | combine({'route_tables': cleaned_resources.route_tables + rt_ids.stdout.split()}, recursive=True) }}"
+      when: rt_ids.stdout | trim != ""
+
+# Step 2: Internet Gateways
+- name: Find internet gateways for VPC {{ vpc_id }}
+  command: >
+    aws ec2 describe-internet-gateways
+    --filters "Name=attachment.vpc-id,Values={{ vpc_id }}"
+    --query "InternetGateways[].InternetGatewayId"
+    --output text
+    --region {{ aws_region }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
+    AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
+  register: igw_ids
+  failed_when: false
+  changed_when: false
+
+- name: Process internet gateways
+  when: igw_ids.stdout | trim != ""
+  block:
+    - name: Detach internet gateways
+      command: >
+        aws ec2 detach-internet-gateway
+        --internet-gateway-id {{ item }}
+        --vpc-id {{ vpc_id }}
+        --region {{ aws_region }}
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
+        AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
+      with_items: "{{ igw_ids.stdout.split() }}"
+      failed_when: false
+      ignore_errors: true
+
+    - name: Delete internet gateways
+      command: >
+        aws ec2 delete-internet-gateway
+        --internet-gateway-id {{ item }}
+        --region {{ aws_region }}
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
+        AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
+      with_items: "{{ igw_ids.stdout.split() }}"
+      register: deleted_igws
+      failed_when: false
+      ignore_errors: true
+
+    - name: Update cleaned internet gateways
+      set_fact:
+        cleaned_resources: "{{ cleaned_resources | combine({'internet_gateways': cleaned_resources.internet_gateways + igw_ids.stdout.split()}, recursive=True) }}"
+      when: igw_ids.stdout | trim != ""
+
+# Step 3: Subnets
+- name: Find subnets for VPC {{ vpc_id }}
+  command: >
+    aws ec2 describe-subnets
+    --filters "Name=vpc-id,Values={{ vpc_id }}"
+    --query "Subnets[].SubnetId"
+    --output text
+    --region {{ aws_region }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
+    AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
+  register: subnet_ids
+  failed_when: false
+  changed_when: false
+
+- name: Delete subnets
+  command: >
+    aws ec2 delete-subnet
+    --subnet-id {{ item }}
+    --region {{ aws_region }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
+    AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
+  with_items: "{{ subnet_ids.stdout.split() }}"
+  register: deleted_subnets
+  failed_when: false
+  ignore_errors: true
+  when: subnet_ids.stdout | trim != ""
+
+- name: Update cleaned subnets
+  set_fact:
+    cleaned_resources: "{{ cleaned_resources | combine({'subnets': cleaned_resources.subnets + subnet_ids.stdout.split()}, recursive=True) }}"
+  when: subnet_ids.stdout | trim != ""
+
+# Step 4: Security Groups (except default)
+- name: Find non-default security groups for VPC {{ vpc_id }}
+  command: >
+    aws ec2 describe-security-groups
+    --filters "Name=vpc-id,Values={{ vpc_id }}" 
+    --query "SecurityGroups[?GroupName != 'default'].GroupId"
+    --output text
+    --region {{ aws_region }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
+    AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
+  register: sg_ids
+  failed_when: false
+  changed_when: false
+
+- name: Delete security groups
+  command: >
+    aws ec2 delete-security-group
+    --group-id {{ item }}
+    --region {{ aws_region }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
+    AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
+  with_items: "{{ sg_ids.stdout.split() }}"
+  register: deleted_sgs
+  failed_when: false
+  ignore_errors: true
+  when: sg_ids.stdout | trim != ""
+
+- name: Update cleaned security groups
+  set_fact:
+    cleaned_resources: "{{ cleaned_resources | combine({'security_groups': cleaned_resources.security_groups + sg_ids.stdout.split()}, recursive=True) }}"
+  when: sg_ids.stdout | trim != ""
+
+# Step 5: Wait a bit and delete VPC
+- name: Wait before trying to delete VPC
+  pause:
+    seconds: 10
+
+- name: Delete VPC {{ vpc_id }}
+  command: >
+    aws ec2 delete-vpc
+    --vpc-id {{ vpc_id }}
+    --region {{ aws_region }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
+    AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
+  register: deleted_vpc
+  failed_when: false
+  ignore_errors: true
+
+- name: Update cleaned VPCs
+  set_fact:
+    cleaned_resources: "{{ cleaned_resources | combine({'vpcs': cleaned_resources.vpcs + [vpc_id]}, recursive=True) }}"
+  when: deleted_vpc.rc == 0
