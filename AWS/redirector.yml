@@ -9,7 +9,7 @@
     - vars.yaml
   vars:
     # Default values
-    ssh_user: "{{ ssh_user | default('kali') }}"
+    ssh_user: "{{ ssh_user | default('ubuntu') }}"  # Changed from 'kali' to 'ubuntu'
     aws_region: "{{ aws_region | default(aws_region_choices | random) }}"
     instance_type: "{{ aws_instance_type | default('t2.micro') }}"
     deployment_id: "{{ deployment_id | default('') }}"
@@ -17,6 +17,19 @@
     shell_handler_port: "{{ shell_handler_port | default(4000 + 60000 | random) }}"
     # Check for shared infrastructure
     use_shared_infra: "{{ not (c2_region is defined and redirector_region is defined and c2_region != redirector_region) }}"
+    # Ubuntu AMI IDs for different regions (Ubuntu 22.04 LTS)
+    ubuntu_ami_map:
+      us-east-1: "ami-0aa2b7722dc1b5612"
+      us-east-2: "ami-06c4532923d4ba1ec"
+      us-west-1: "ami-0573b70afecda915d"
+      us-west-2: "ami-0c79c59ac2c572b87"
+      eu-west-1: "ami-0694d931cee176e7d"
+      eu-west-2: "ami-0505148b3591e4c07"
+      eu-central-1: "ami-06dd92ecc74fdfb36"
+      ap-southeast-1: "ami-0df7a207adb9748c7"
+      ap-southeast-2: "ami-0df4b2961410d4cff"
+      ap-northeast-1: "ami-0014b5f031a76c1b1"
+      sa-east-1: "ami-0af6e9042ea5a4e3e"
 
   tasks:
     - name: Validate AWS credentials
@@ -51,9 +64,8 @@
       
     - name: Set AMI ID for selected region
       set_fact:
-        ami_id: "{{ ami_map[aws_redirector_region] }}"
-      when: ami_map is defined and aws_redirector_region in ami_map
-
+        ami_id: "{{ ubuntu_ami_map[aws_redirector_region] | default(ubuntu_ami_map['us-east-1']) }}"
+      
     - name: Create EC2 key pair
       amazon.aws.ec2_key:
         name: "{{ redirector_name }}"
@@ -190,9 +202,10 @@
         name: "redirector"
         groups: "redirectors"
         ansible_host: "{{ redirector_ip }}"
-        ansible_user: "{{ ssh_user }}"
+        ansible_user: "ubuntu"  # Change this from 'kali' to 'ubuntu'
         ansible_ssh_private_key_file: "~/.ssh/{{ redirector_name }}.pem"
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes"
+        ansible_python_interpreter: "/usr/bin/python3"
 
 # Rest of the playbook for configuring the redirector
 - name: Configure redirector
@@ -205,11 +218,7 @@
     c2_ip: "{{ hostvars['localhost']['c2_ip'] | default('127.0.0.1') }}"
     
   # Include the rest of your redirector configuration tasks here
-  tasks:
-    - name: Update apt cache
-      apt:
-        update_cache: yes
-        
+  tasks:    
     - name: Include common redirector configuration tasks
       include_tasks: "../tasks/configure_redirector.yml"
       

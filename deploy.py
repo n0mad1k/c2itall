@@ -382,14 +382,8 @@ def interactive_setup(deployment_id=None):
     # Debug mode
     config['debug'] = input("Enable debug mode? (y/n) [default: n]: ").lower() == 'y'
     
-    # SSH key if not already set
-    if 'ssh_key' not in config or not config['ssh_key']:
-        ssh_key = input("\nPath to SSH Private Key [leave blank to generate new key]: ")
-        if ssh_key:
-            config['ssh_key'] = os.path.expanduser(ssh_key)
-        else:
-            # Generate SSH key using the deployment ID
-            config['ssh_key'] = generate_ssh_key(deployment_id)
+    # Always generate a new SSH key using the deployment ID
+    config['ssh_key'] = generate_ssh_key(deployment_id)
     
     # Generate instance names with consistent deployment ID
     config['redirector_name'] = f"r-{deployment_id}"
@@ -445,7 +439,7 @@ def load_vars_file(provider):
     provider_dir = PROVIDER_DIRS[provider]
     vars_file = f"{provider_dir}/vars.yaml"
     
-    if os.path.exists(vars_file):
+    if (os.path.exists(vars_file)):
         try:
             with open(vars_file, 'r') as f:
                 vars_data = yaml.safe_load(f) or {}

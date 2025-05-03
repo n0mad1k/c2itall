@@ -1,0 +1,139 @@
+---
+# Security hardening tasks for C2 server
+
+- name: Check if system is updated
+  apt:
+    update_cache: yes
+  register: apt_update_result
+  until: apt_update_result is success
+  retries: 5
+  delay: 5
+
+- name: Install security packages
+  apt:
+    name:
+      - fail2ban
+      - ufw
+      - unattended-upgrades
+      - debsums
+      - aide
+      - rkhunter
+      - logrotate
+    state: present
+  register: package_install
+  until: package_install is success
+  retries: 3
+  delay: 5
+
+- name: Configure UFW default policies
+  ufw:
+    state: enabled
+    policy: deny
+    direction: incoming
+  ignore_errors: yes
+
+- name: Allow required ports through firewall
+  ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop:
+    - "22"
+    - "80"
+    - "443"
+    - "{{ havoc_teamserver_port | default('40056') }}"
+    - "{{ havoc_http_port | default('8080') }}"
+    - "{{ gophish_admin_port | default('3333') }}"
+  ignore_errors: yes
+
+- name: Set up fail2ban SSH jail
+  copy:
+    dest: /etc/fail2ban/jail.d/sshd.conf
+    content: |
+      [sshd]
+      enabled = true
+      port = ssh
+      filter = sshd
+      logpath = /var/log/auth.log
+      maxretry = 5
+      bantime = 3600
+    mode: '0644'
+  notify: Restart fail2ban
+
+- name: Enable automatic security updates
+  copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+    mode: '0644'
+
+- name: Create log cleaning script if zero-logs is enabled
+  copy:
+    dest: /root/Tools/clean-logs.sh
+    content: |
+      #!/bin/bash
+      # Log cleaning script
+      echo "Cleaning system logs at $(date)"
+      
+      # Clear auth logs
+      echo "" > /var/log/auth.log
+      echo "" > /var/log/auth.log.1
+      
+      # Clear syslog
+      echo "" > /var/log/syslog
+      echo "" > /var/log/syslog.1
+      
+      # Clear application specific logs
+      find /var/log -type f -name "*.log" -exec truncate -s 0 {} \;
+      
+      # Clear bash history
+      cat /dev/null > ~/.bash_history
+      history -c
+      
+      echo "Log cleaning completed at $(date)"
+    mode: '0700'
+  when: zero_logs | default(false) | bool
+
+# SSH Hardening
+- name: Harden SSH configuration
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    state: present
+  loop:
+    - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
+    - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
+    - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
+    - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 3' }
+    - { regexp: '^#?AllowTcpForwarding', line: 'AllowTcpForwarding yes' }
+    - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval 300' }
+    - { regexp: '^#?ClientAliveCountMax', line: 'ClientAliveCountMax 2' }
+  register: ssh_config_updated
+
+- name: Configure system resource limits
+  pam_limits:
+    domain: "*"
+    limit_type: "{{ item.limit_type }}"
+    limit_item: "{{ item.limit_item }}"
+    value: "{{ item.value }}"
+  loop:
+    - { limit_type: soft, limit_item: nofile, value: 65535 }
+    - { limit_type: hard, limit_item: nofile, value: 65535 }
+    - { limit_type: soft, limit_item: nproc, value: 4096 }
+    - { limit_type: hard, limit_item: nproc, value: 4096 }
+
+# Replace handlers with direct service restart tasks
+- name: Restart SSH service
+  service:
+    name: ssh
+    state: restarted
+  when: ssh_config_updated.changed
+
+- name: Restart fail2ban service
+  service:
+    name: fail2ban
+    state: restarted
+  when: ansible_facts.services['fail2ban.service'] is defined
