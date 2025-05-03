@@ -15,7 +15,8 @@
     deployment_id: "{{ deployment_id | default('') }}"
     c2_name: "{{ c2_name | default('s-' + deployment_id) }}"
     # Check for shared infrastructure
-    use_shared_infra: "{{ not (c2_region is defined and redirector_region is defined and c2_region != redirector_region) }}"
+    # Only use shared when C2 and redirector are in the same region
+    use_shared_infra: "{{ not (c2_region is defined and redirector_region is defined and c2_region != redirector_region) and not c2_only | default(false) | bool and not redirector_only | default(false) | bool }}"
 
   tasks:
     - name: Validate AWS credentials
@@ -53,11 +54,16 @@
         ami_id: "{{ ami_map[aws_c2_region] }}"
       when: ami_map is defined and aws_c2_region in ami_map
 
-    # Add AMI username mapping
+    # Add AMI username mapping - improved with better detection
     - name: Determine correct SSH user for the AMI
       set_fact:
-        ami_ssh_user: >-
-          {% if ami_id == 'ami-061b17d332829ab1c' %}kali{% else %}ubuntu{% endif %}
+        ami_ssh_user: "{{ 'kali' if (ami_id is defined and ami_id is search('-kali-')) or (ami_id is defined and ami_id == 'ami-061b17d332829ab1c') else 'ubuntu' }}"
+
+    - name: Display AMI and user information for debugging
+      debug:
+        msg: 
+          - "Using AMI ID: {{ ami_id | default('AMI not defined') }}"
+          - "Detected SSH user: {{ ami_ssh_user }}"
 
     - name: Create EC2 key pair
       amazon.aws.ec2_key:
@@ -130,12 +136,14 @@
       set_fact:
         vpc_id: "{{ shared_infra.vpc_id }}"
         subnet_id: "{{ shared_infra.subnet_id }}"
+        c2_vpc_id: "{{ shared_infra.vpc_id }}"  # Store for cleanup reference
       when: use_shared_infra | bool and infra_state_file.stat.exists | default(false)
 
     - name: Set VPC ID from created infrastructure
       set_fact:
         vpc_id: "{{ vpc_result.vpc.id }}"
         subnet_id: "{{ subnet_result.subnet.id }}"
+        c2_vpc_id: "{{ vpc_result.vpc.id }}"  # Store for cleanup reference
       when: not (use_shared_infra | bool and infra_state_file.stat.exists | default(false))
 
     # Create security group
@@ -189,6 +197,13 @@
         c2_ip: "{{ c2_instance.instances[0].public_ip_address }}"
         c2_instance_id: "{{ c2_instance.instances[0].instance_id }}"
 
+    - name: Display C2 instance details for debugging
+      debug:
+        msg:
+          - "C2 IP: {{ c2_ip }}"
+          - "C2 Instance ID: {{ c2_instance_id }}"
+          - "SSH User to use: {{ ami_ssh_user }}"
+
     - name: Wait for C2 instance initialization
       pause:
         seconds: 180
@@ -212,7 +227,7 @@
         name: "c2"
         groups: "c2servers"
         ansible_host: "{{ c2_ip }}"
-        ansible_user: "{{ ami_ssh_user | default('kali') }}"
+        ansible_user: "{{ ami_ssh_user }}"
         ansible_ssh_private_key_file: "~/.ssh/{{ c2_name }}.pem"
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes"
         ansible_python_interpreter: "/usr/bin/python3"
@@ -225,6 +240,21 @@
     redirector_ip: "{{ hostvars['localhost']['redirector_ip'] | default('127.0.0.1') }}"
     c2_subdomain: "{{ c2_subdomain | default('mail') }}"
   tasks:
+    - name: Install python3 if it doesn't exist on target
+      raw: test -e /usr/bin/python3 || (apt-get update && apt-get install -y python3)
+      args:
+        executable: /bin/bash
+      register: python_install
+      ignore_errors: yes
+      
+    - name: Debug connection information
+      debug:
+        msg:
+          - "Connected to C2 server successfully"
+          - "Host: {{ ansible_host }}"
+          - "User: {{ ansible_user }}"
+          - "Python version: {{ ansible_python_version | default('unknown') }}"
+      
     - name: Download Kali archive keyring to temporary location
       get_url:
         url: https://archive.kali.org/archive-keyring.gpg

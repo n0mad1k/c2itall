@@ -16,7 +16,8 @@
     redirector_name: "{{ redirector_name | default('r-' + deployment_id) }}"
     shell_handler_port: "{{ shell_handler_port | default(4000 + 60000 | random) }}"
     # Check for shared infrastructure
-    use_shared_infra: "{{ not (c2_region is defined and redirector_region is defined and c2_region != redirector_region) }}"
+    # Only use shared when C2 and redirector are in the same region
+    use_shared_infra: "{{ not (c2_region is defined and redirector_region is defined and c2_region != redirector_region) and not c2_only | default(false) | bool and not redirector_only | default(false) | bool }}"
     # Ubuntu AMI IDs for different regions (Ubuntu 22.04 LTS)
     ubuntu_ami_map:
       us-east-1: "ami-0aa2b7722dc1b5612"
@@ -137,12 +138,14 @@
       set_fact:
         vpc_id: "{{ shared_infra.vpc_id }}"
         subnet_id: "{{ shared_infra.subnet_id }}"
+        redirector_vpc_id: "{{ shared_infra.vpc_id }}"  # Store for cleanup reference
       when: use_shared_infra | bool and infra_state_file.stat.exists | default(false)
 
     - name: Set VPC ID from created infrastructure
       set_fact:
         vpc_id: "{{ vpc_result.vpc.id }}"
         subnet_id: "{{ subnet_result.subnet.id }}"
+        redirector_vpc_id: "{{ vpc_result.vpc.id }}"  # Store for cleanup reference
       when: not (use_shared_infra | bool and infra_state_file.stat.exists | default(false))
 
     # Create security group

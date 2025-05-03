@@ -58,7 +58,7 @@
       maxretry = 5
       bantime = 3600
     mode: '0644'
-  notify: Restart fail2ban
+  register: fail2ban_config_updated
 
 - name: Enable automatic security updates
   copy:
@@ -125,15 +125,20 @@
     - { limit_type: soft, limit_item: nproc, value: 4096 }
     - { limit_type: hard, limit_item: nproc, value: 4096 }
 
-# Replace handlers with direct service restart tasks
-- name: Restart SSH service
+# Service restart handlers
+- name: Restart SSH service if configuration changed
   service:
     name: ssh
     state: restarted
   when: ssh_config_updated.changed
 
-- name: Restart fail2ban service
+- name: Check if fail2ban service exists
+  stat:
+    path: "/etc/init.d/fail2ban"
+  register: fail2ban_service_stat
+
+- name: Restart fail2ban service if installed and configuration changed
   service:
     name: fail2ban
     state: restarted
-  when: ansible_facts.services['fail2ban.service'] is defined
+  when: fail2ban_service_stat.stat.exists and fail2ban_config_updated.changed
