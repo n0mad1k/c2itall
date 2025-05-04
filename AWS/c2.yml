@@ -65,17 +65,18 @@
           - "Using AMI ID: {{ ami_id | default('AMI not defined') }}"
           - "Detected SSH user: {{ ami_ssh_user }}"
 
-    - name: Create EC2 key pair
+    # Fix: Use the deployment_id key name if c2deploy prefix exists (for consistency with tool scripts)
+    - name: Create EC2 key pair with consistent naming
       amazon.aws.ec2_key:
-        name: "{{ c2_name }}"
+        name: "c2deploy_{{ deployment_id }}"
         region: "{{ aws_c2_region }}"
         state: present
       register: c2_key_pair
 
-    - name: Save private key locally
+    - name: Save private key with consistent naming
       copy:
         content: "{{ c2_key_pair.key.private_key }}"
-        dest: "~/.ssh/{{ c2_name }}.pem"
+        dest: "~/.ssh/c2deploy_{{ deployment_id }}.pem"
         mode: "0600"
       when: c2_key_pair.changed and c2_key_pair.key.private_key is defined
 
@@ -169,11 +170,11 @@
         state: present
       register: security_group
 
-    # Launch the C2 server
+    # Launch the C2 server - use the consistent key pair name
     - name: Launch C2 instance
       amazon.aws.ec2_instance:
         name: "{{ c2_name }}"
-        key_name: "{{ c2_name }}"
+        key_name: "c2deploy_{{ deployment_id }}"  # Use the same key name as created above
         instance_type: "{{ instance_type | default('t2.medium') }}"
         vpc_subnet_id: "{{ subnet_id }}"
         security_groups:
@@ -203,11 +204,17 @@
           - "C2 IP: {{ c2_ip }}"
           - "C2 Instance ID: {{ c2_instance_id }}"
           - "SSH User to use: {{ ami_ssh_user }}"
+          - "SSH Key path: ~/.ssh/c2deploy_{{ deployment_id }}.pem"
 
     - name: Wait for C2 instance initialization
       pause:
         seconds: 180
       when: c2_instance.changed
+
+    - name: Set correct permissions on SSH key
+      file:
+        path: "~/.ssh/c2deploy_{{ deployment_id }}.pem"
+        mode: "0600"
 
     - name: Wait for C2 SSH to be available
       wait_for:
@@ -217,18 +224,23 @@
         timeout: 300
         state: started
 
-    - name: Set correct permissions on SSH key
-      file:
-        path: "~/.ssh/{{ c2_name }}.pem"
-        mode: "0600"
+    # Test SSH connection directly to verify key is working
+    - name: Test SSH connection to verify key
+      shell: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i ~/.ssh/c2deploy_{{ deployment_id }}.pem {{ ami_ssh_user }}@{{ c2_ip }} 'echo SSH CONNECTION SUCCESSFUL'"
+      register: ssh_test
+      ignore_errors: yes
 
-    - name: Add C2 to inventory
+    - name: Display SSH test results
+      debug:
+        msg: "{{ ssh_test.stdout | default('SSH Connection failed!') }}"
+
+    - name: Add C2 to inventory with updated SSH key path
       add_host:
         name: "c2"
         groups: "c2servers"
         ansible_host: "{{ c2_ip }}"
         ansible_user: "{{ ami_ssh_user }}"
-        ansible_ssh_private_key_file: "~/.ssh/{{ c2_name }}.pem"
+        ansible_ssh_private_key_file: "~/.ssh/c2deploy_{{ deployment_id }}.pem"
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes"
         ansible_python_interpreter: "/usr/bin/python3"
 
@@ -317,5 +329,5 @@
           - "C2 Server IP: {{ ansible_host }}"
           - "C2 Server Domain: {{ c2_subdomain }}.{{ domain }} (Update DNS A record)"
           - "GoPhish Admin Port: {{ gophish_admin_port }}"
-          - "SSH Key: ~/.ssh/{{ hostvars['localhost']['c2_name'] }}.pem"
+          - "SSH Key: ~/.ssh/c2deploy_{{ hostvars['localhost']['deployment_id'] }}.pem"
       when: not disable_summary | default(false)
