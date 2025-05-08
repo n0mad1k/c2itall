@@ -9,7 +9,7 @@
     - vars.yaml
   vars:
     # Default values
-    ssh_user: "{{ ssh_user | default('kali') }}"
+    ssh_user: "{{ ssh_user | default('root') }}"
     aws_region: "{{ aws_region | default(aws_region_choices | random) }}"
     instance_type: "{{ aws_instance_type | default('t2.medium') }}"
     deployment_id: "{{ deployment_id | default('') }}"
@@ -57,7 +57,7 @@
     # Add AMI username mapping - improved with better detection
     - name: Determine correct SSH user for the AMI
       set_fact:
-        ami_ssh_user: "{{ 'kali' if (ami_id is defined and ami_id is search('-kali-')) or (ami_id is defined and ami_id == 'ami-061b17d332829ab1c') else 'ubuntu' }}"
+        ami_ssh_user: "{{ 'root' if (ami_id is defined and ami_id is search('-root-')) or (ami_id is defined and ami_id == 'ami-061b17d332829ab1c') else 'ubuntu' }}"
 
     - name: Display AMI and user information for debugging
       debug:

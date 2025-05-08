@@ -3,3 +3,4 @@ venv
 deployment*
 config.yml
 logs/
+domainhunter/

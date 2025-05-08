@@ -15,13 +15,487 @@ import logging
 import tempfile
 from datetime import datetime
 
+debug_mode = True
+deployment_id = None
+
+# Color codes for terminal output
+COLORS = {
+    "RESET": "\033[0m",
+    "RED": "\033[91m",
+    "GREEN": "\033[92m",
+    "YELLOW": "\033[93m",
+    "BLUE": "\033[94m",
+    "PURPLE": "\033[95m",
+    "CYAN": "\033[96m",
+    "WHITE": "\033[97m",
+    "GRAY": "\033[90m"
+}
+
+def clear_screen():
+    """Clear the terminal screen"""
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+def print_banner():
+    """Print the C2ingRed banner"""
+    banner = f"""
+{COLORS['BLUE']}========================================================{COLORS['RESET']}
+{COLORS['BLUE']}   ██████╗██████╗ ██╗███╗   ██╗ ██████╗ ██████╗ ███████╗██████╗{COLORS['RESET']}
+{COLORS['BLUE']}  ██╔════╝╚════██╗██║████╗  ██║██╔════╝ ██╔══██╗██╔════╝██╔══██╗{COLORS['RESET']}
+{COLORS['BLUE']}  ██║      █████╔╝██║██╔██╗ ██║██║  ███╗██████╔╝█████╗  ██║  ██║{COLORS['RESET']}
+{COLORS['BLUE']}  ██║     ██╔═══╝ ██║██║╚██╗██║██║   ██║██╔══██╗██╔══╝  ██║  ██║{COLORS['RESET']}
+{COLORS['BLUE']}  ╚██████╗███████╗██║██║ ╚████║╚██████╔╝██║  ██║███████╗██████╔╝{COLORS['RESET']}
+{COLORS['BLUE']}   ╚═════╝╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═════╝{COLORS['RESET']}
+{COLORS['BLUE']}                                                                {COLORS['RESET']}
+{COLORS['BLUE']}  Red Team Infrastructure Deployment Tool                       {COLORS['RESET']}
+{COLORS['BLUE']}========================================================{COLORS['RESET']}
+    """
+    print(banner)
+
+def main_menu():
+    """Display the main menu and handle user selection"""
+    global debug_mode
+    while True:
+        clear_screen()
+        print_banner()
+        print(f"{COLORS['WHITE']}MAIN MENU{COLORS['RESET']}")
+        print(f"{COLORS['WHITE']}=========={COLORS['RESET']}")
+        print(f"1) Deploy Full C2 Infrastructure")
+        print(f"2) Deploy Basic C2 Infrastructure")
+        print(f"3) Deploy C2 Server")
+        print(f"4) Deploy Redirector")
+        print(f"5) Deploy Email Tracking Server")
+        print(f"6) Deploy Payload Server {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
+        print(f"7) Deploy Phishing Server {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
+        print(f"8) Deploy Logging Server {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
+        print(f"9) Deploy Share-Drive {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
+        print(f"10) Deploy Hashtopolis {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
+        print(f"11) Custom Deployment")
+        print(f"12) Tools")
+        print(f"13) Debug Mode: {COLORS['GREEN'] if debug_mode else COLORS['RED']}{debug_mode}{COLORS['RESET']}")
+        print(f"")
+        print(f"99) Exit")
+        
+        choice = input("\nSelect an option: ")
+        
+        if choice == "1":
+            deploy_full_c2()
+        elif choice == "2":
+            deploy_basic_c2()
+        elif choice == "3":
+            deploy_c2_server()
+        elif choice == "4":
+            redirector_menu()
+        elif choice == "5":
+            deploy_tracker()
+        elif choice in ["6", "7", "8", "9", "10"]:
+            print(f"\n{COLORS['YELLOW']}This feature is currently under construction.{COLORS['RESET']}")
+            input("\nPress Enter to continue...")
+        elif choice == "11":
+            custom_deployment()
+        elif choice == "12":
+            tools_menu()
+        elif choice == "13":
+            toggle_debug_mode()
+        elif choice == "99":
+            print(f"\n{COLORS['GREEN']}Exiting C2ingRed. Goodbye!{COLORS['RESET']}")
+            sys.exit(0)
+        else:
+            print(f"\n{COLORS['RED']}Invalid option. Please try again.{COLORS['RESET']}")
+            time.sleep(1)
+
+def toggle_debug_mode():
+    """Toggle debug mode on/off"""
+    global debug_mode
+    debug_mode = not debug_mode
+    # Set environment variables for more verbose Ansible output
+    if debug_mode:
+        os.environ["ANSIBLE_VERBOSITY"] = "3"
+    else:
+        os.environ.pop("ANSIBLE_VERBOSITY", None)
+    print(f"\n{COLORS['GREEN']}Debug mode {'enabled' if debug_mode else 'disabled'}.{COLORS['RESET']}")
+    time.sleep(1)
+
+def redirector_menu():
+    """Display the redirector submenu and handle user selection"""
+    while True:
+        clear_screen()
+        print_banner()
+        print(f"{COLORS['WHITE']}REDIRECTOR MENU{COLORS['RESET']}")
+        print(f"{COLORS['WHITE']}================{COLORS['RESET']}")
+        print(f"1) HTTPS Redirector")
+        print(f"2) DNS Redirector {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
+        print(f"3) SMTP Redirector {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
+        print(f"99) Return to Main Menu")
+        
+        choice = input("\nSelect an option: ")
+        
+        if choice == "1":
+            deploy_https_redirector()
+        elif choice in ["2", "3"]:
+            print(f"\n{COLORS['YELLOW']}This feature is currently under construction.{COLORS['RESET']}")
+            input("\nPress Enter to continue...")
+        elif choice == "99":
+            return
+        else:
+            print(f"\n{COLORS['RED']}Invalid option. Please try again.{COLORS['RESET']}")
+            time.sleep(1)
+
+def tools_menu():
+    """Display the tools submenu and handle user selection"""
+    while True:
+        clear_screen()
+        print_banner()
+        print(f"{COLORS['WHITE']}TOOLS MENU{COLORS['RESET']}")
+        print(f"{COLORS['WHITE']}=========={COLORS['RESET']}")
+        print(f"1) Distributed Amass Scanning {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
+        print(f"2) PLACEHOLDER {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
+        print(f"99) Return to Main Menu")
+        
+        choice = input("\nSelect an option: ")
+        
+        if choice in ["1", "2"]:
+            print(f"\n{COLORS['YELLOW']}This feature is currently under construction.{COLORS['RESET']}")
+            input("\nPress Enter to continue...")
+        elif choice == "99":
+            return
+        else:
+            print(f"\n{COLORS['RED']}Invalid option. Please try again.{COLORS['RESET']}")
+            time.sleep(1)
+
+def deploy_full_c2():
+    """Deploy a complete C2 infrastructure with all components"""
+    config = gather_common_parameters()
+    if not config:
+        return
+    
+    config['redirector_only'] = False
+    config['c2_only'] = False
+    config['deploy_tracker'] = True
+    config['integrated_tracker'] = False
+    
+    execute_deployment(config)
+
+def deploy_basic_c2():
+    """Deploy a basic C2 infrastructure with C2 server and redirector"""
+    config = gather_common_parameters()
+    if not config:
+        return
+    
+    config['redirector_only'] = False
+    config['c2_only'] = False
+    config['deploy_tracker'] = False
+    config['integrated_tracker'] = False
+    
+    execute_deployment(config)
+
+def deploy_c2_server():
+    """Deploy only the C2 server"""
+    config = gather_common_parameters()
+    if not config:
+        return
+    
+    config['redirector_only'] = False
+    config['c2_only'] = True
+    config['deploy_tracker'] = False
+    config['integrated_tracker'] = False
+    
+    execute_deployment(config)
+
+def deploy_https_redirector():
+    """Deploy only the HTTPS redirector"""
+    config = gather_common_parameters()
+    if not config:
+        return
+    
+    config['redirector_only'] = True
+    config['c2_only'] = False
+    config['deploy_tracker'] = False
+    config['integrated_tracker'] = False
+    
+    execute_deployment(config)
+
+def deploy_tracker():
+    """Deploy an email tracking server"""
+    config = gather_common_parameters()
+    if not config:
+        return
+    
+    config['redirector_only'] = False
+    config['c2_only'] = False
+    config['deploy_tracker'] = True
+    config['integrated_tracker'] = False
+    
+    execute_deployment(config)
+
+def custom_deployment():
+    """Run the full interactive deployment wizard"""
+    deployment_id = generate_deployment_id()
+    config = interactive_setup(deployment_id)
+    if config:
+        execute_deployment(config)
+
+def initialize_deployment():
+    """Initialize global deployment ID"""
+    global deployment_id
+    deployment_id = generate_deployment_id()
+    return deployment_id
+
+def gather_common_parameters():
+    """Collect common parameters needed for deployments"""
+    global debug_mode, deployment_id
+    config = {'deployment_id': deployment_id}
+    config['debug'] = debug_mode
+
+    # Get provider
+    provider = select_provider()
+    if not provider:
+        return None
+    config['provider'] = provider
+    
+    # Load provider-specific vars
+    provider_vars = load_vars_file(provider)
+    
+    # Get provider-specific credentials
+    if provider == "aws":
+        aws_creds = get_aws_credentials(provider_vars)
+        if not aws_creds:
+            return None
+        config.update(aws_creds)
+    elif provider == "linode":
+        linode_token = get_linode_token(provider_vars)
+        if not linode_token:
+            return None
+        config['linode_token'] = linode_token
+    elif provider == "flokinet":
+        flokinet_ips = get_flokinet_ips(provider_vars)
+        if not flokinet_ips:
+            return None
+        config.update(flokinet_ips)
+    
+    # Ask if user wants multi-region or cross-provider deployment
+    multi_region = input(f"\n{COLORS['YELLOW']}Do you want to deploy redirector and C2 in different regions? (y/n) [default: n]: {COLORS['RESET']}").lower() == 'y'
+    
+    if multi_region:
+        if provider != "flokinet":  # FlokiNET doesn't support region selection
+            # Get region for C2
+            c2_region = select_region(provider, provider_vars, "C2 server")
+            if provider == "aws":
+                config['c2_region'] = c2_region
+            elif provider == "linode":
+                config['c2_region'] = c2_region
+            
+            # Get region for redirector
+            redirector_region = select_region(provider, provider_vars, "redirector")
+            if provider == "aws":
+                config['redirector_region'] = redirector_region
+            elif provider == "linode":
+                config['redirector_region'] = redirector_region
+    else:
+        # Get single region for both
+        region = select_region(provider, provider_vars)
+        if provider == "aws":
+            config['aws_region'] = region
+        elif provider == "linode":
+            config['linode_region'] = region
+        else:
+            config['region'] = region
+    
+    # Get domain
+    domain = input(f"\nEnter domain name [default: {provider_vars.get('domain', 'example.com')}]: ") or provider_vars.get('domain', 'example.com')
+    config['domain'] = domain
+    
+    # Get subdomains
+    redirector_subdomain = input(f"\nEnter redirector subdomain [default: cdn]: ") or "cdn"
+    config['redirector_subdomain'] = redirector_subdomain
+    
+    c2_subdomain = input(f"Enter C2 server subdomain [default: mail]: ") or "mail"
+    config['c2_subdomain'] = c2_subdomain
+    
+    # Get email for Let's Encrypt
+    default_email = f"admin@{domain}"
+    email = input(f"\nEnter email for Let's Encrypt [default: {default_email}]: ") or default_email
+    config['letsencrypt_email'] = email
+    
+    # Set SSH key
+    config['ssh_key'] = generate_ssh_key(deployment_id)
+    config['ssh_key_path'] = f"{config['ssh_key']}.pub"
+    
+    # Set consistent resource names based on deployment ID
+    config['redirector_name'] = f"r-{deployment_id}"
+    config['c2_name'] = f"s-{deployment_id}"
+    config['tracker_name'] = f"t-{deployment_id}"
+    
+    # Security options
+    print("\nSecurity options:")
+    config['disable_history'] = input("Disable command history? (y/n) [default: y]: ").lower() != 'n'
+    config['secure_memory'] = input("Enable secure memory settings? (y/n) [default: y]: ").lower() != 'n'
+    config['zero_logs'] = input("Enable zero-logs configuration? (y/n) [default: y]: ").lower() != 'n'
+    
+    return config
+
+def select_provider():
+    """Let the user select a cloud provider"""
+    print("\nAvailable cloud providers:")
+    for i, provider in enumerate(PROVIDERS, 1):
+        print(f"  {i}. {provider.capitalize()}")
+    
+    while True:
+        try:
+            provider_choice = input("\nSelect a provider (1-3 or 99 to cancel): ")
+            if provider_choice == "99":
+                return None
+            
+            provider_choice = int(provider_choice)
+            if 1 <= provider_choice <= len(PROVIDERS):
+                return PROVIDERS[provider_choice - 1]
+            else:
+                print(f"{COLORS['RED']}Please enter a number between 1 and {len(PROVIDERS)}{COLORS['RESET']}")
+        except ValueError:
+            print(f"{COLORS['RED']}Please enter a valid number{COLORS['RESET']}")
+
+def get_aws_credentials(provider_vars):
+    """Get AWS credentials from user or vars file"""
+    default_aws_key = provider_vars.get('aws_access_key', '')
+    default_aws_secret = provider_vars.get('aws_secret_key', '')
+    
+    aws_key = input(f"\nAWS Access Key [{'*****' if default_aws_key else 'leave blank to use AWS CLI profile'}]: ") or default_aws_key
+    aws_secret = input(f"AWS Secret Key [{'*****' if default_aws_secret else 'leave blank to use AWS CLI profile'}]: ") or default_aws_secret
+    
+    return {
+        'aws_access_key': aws_key,
+        'aws_secret_key': aws_secret
+    }
+
+def get_linode_token(provider_vars):
+    """Get Linode API token from user or vars file"""
+    default_token = provider_vars.get('linode_token', '')
+    token = input(f"\nLinode API Token [{'*****' if default_token else 'required'}]: ") or default_token
+    
+    if not token:
+        print(f"{COLORS['RED']}Linode API token is required{COLORS['RESET']}")
+        input("\nPress Enter to continue...")
+        return None
+    
+    return token
+
+def get_flokinet_ips(provider_vars):
+    """Get FlokiNET server IPs from user or vars file"""
+    default_redirector_ip = provider_vars.get('redirector_ip', '')
+    default_c2_ip = provider_vars.get('c2_ip', '')
+    
+    redirector_ip = input(f"\nFlokiNET Redirector IP Address [default: {default_redirector_ip}]: ") or default_redirector_ip
+    c2_ip = input(f"FlokiNET C2 Server IP Address [default: {default_c2_ip}]: ") or default_c2_ip
+    
+    return {
+        'flokinet_redirector_ip': redirector_ip,
+        'flokinet_c2_ip': c2_ip
+    }
+
+def select_region(provider, provider_vars, component=None):
+    """Let the user select a region for deployment"""
+    component_str = f" for {component}" if component else ""
+    
+    if provider == "aws":
+        regions = provider_vars.get('aws_region_choices', [])
+    elif provider == "linode":
+        regions = provider_vars.get('region_choices', [])
+    else:
+        return None
+    
+    if not regions:
+        print(f"{COLORS['YELLOW']}No regions found for {provider}, using random selection{COLORS['RESET']}")
+        return None
+    
+    print(f"\nAvailable {provider.capitalize()} regions{component_str}:")
+    for i, region in enumerate(regions, 1):
+        print(f"  {i}. {region}")
+    
+    region_input = input(f"\nSelect region{component_str} (number or leave blank for random): ")
+    
+    if not region_input:
+        return random.choice(regions)
+    
+    try:
+        region_choice = int(region_input)
+        if 1 <= region_choice <= len(regions):
+            return regions[region_choice - 1]
+        else:
+            print(f"{COLORS['RED']}Invalid choice, using random region{COLORS['RESET']}")
+            return random.choice(regions)
+    except ValueError:
+        print(f"{COLORS['RED']}Invalid input, using random region{COLORS['RESET']}")
+        return random.choice(regions)
+
+def ensure_full_cleanup(config, success=False):
+    """Ensure all resources are properly cleaned up on failure"""
+    if success:
+        # Only cleanup SSH keys on successful deployment
+        if hasattr(generate_ssh_key, 'generated_keys') and not config.get('keep_ssh_keys', False):
+            for key_path in generate_ssh_key.generated_keys:
+                # Only remove keys we generated for this deployment
+                if config.get('deployment_id') and f"_{config['deployment_id']}" in key_path:
+                    try:
+                        if os.path.exists(key_path):
+                            os.remove(key_path)
+                        if os.path.exists(f"{key_path}.pub"):
+                            os.remove(f"{key_path}.pub")
+                        logging.info(f"Removed temporary SSH key: {key_path}")
+                    except Exception as e:
+                        logging.error(f"Failed to remove SSH key {key_path}: {e}")
+        return
+    
+    # For failed deployments, clean up all resources
+    try:
+        cleanup_resources(config, interactive=True)
+    except Exception as e:
+        logging.error(f"Error during resource cleanup: {e}")
+    
+    # Always clean up SSH keys on failure
+    if hasattr(generate_ssh_key, 'generated_keys'):
+        for key_path in generate_ssh_key.generated_keys:
+            try:
+                if os.path.exists(key_path):
+                    os.remove(key_path)
+                if os.path.exists(f"{key_path}.pub"):
+                    os.remove(f"{key_path}.pub")
+                logging.info(f"Removed temporary SSH key: {key_path}")
+            except Exception as e:
+                logging.error(f"Failed to remove SSH key {key_path}: {e}")
+
+def execute_deployment(config):
+    """Execute the deployment with the given configuration"""
+    clear_screen()
+    print_banner()
+    print(f"\n{COLORS['GREEN']}Starting deployment with the following configuration:{COLORS['RESET']}")
+    
+    # Print configuration (excluding sensitive data)
+    for key, value in config.items():
+        if key not in ['aws_secret_key', 'linode_token', 'smtp_auth_pass']:
+            print(f"  {key}: {value}")
+    
+    confirm = input(f"\n{COLORS['YELLOW']}Proceed with deployment? (y/n): {COLORS['RESET']}").lower()
+    if confirm != 'y':
+        print(f"\n{COLORS['YELLOW']}Deployment cancelled.{COLORS['RESET']}")
+        input("\nPress Enter to return to menu...")
+        return
+    
+    # Call the existing deployment function
+    success = deploy_infrastructure(config)
+    
+    if success:
+        print(f"\n{COLORS['GREEN']}Deployment completed successfully!{COLORS['RESET']}")
+    else:
+        print(f"\n{COLORS['RED']}Deployment failed.{COLORS['RESET']}")
+    
+    input("\nPress Enter to return to menu...")
+
 # Disable Ansible host key checking
 os.environ["ANSIBLE_HOST_KEY_CHECKING"] = "False"
 
 # Constants for providers
 PROVIDERS = ["aws", "linode", "flokinet"]
 DEFAULT_SSH_USER = {
-    "aws": "kali",
+    "aws": "root",
     "linode": "root",
     "flokinet": "root"
 }
@@ -452,12 +926,8 @@ def load_vars_file(provider):
     
     return {}
 
-def generate_random_string(length=8):
-    """Generate a random string of letters and digits."""
-    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
-
 def generate_ssh_key(deployment_id=None):
-    """Generate an SSH key for deployment"""
+    """Generate an SSH key for deployment with proper tracking for cleanup"""
     # Use deployment_id if provided, otherwise generate random suffix
     if deployment_id:
         key_name = f"c2deploy_{deployment_id}"
@@ -470,6 +940,13 @@ def generate_ssh_key(deployment_id=None):
 
     private_key_path = os.path.join(ssh_dir, key_name)
     public_key_path = f"{private_key_path}.pub"
+
+    # Add key to global cleanup tracking dict if it doesn't exist
+    if not hasattr(generate_ssh_key, 'generated_keys'):
+        generate_ssh_key.generated_keys = set()
+    
+    generate_ssh_key.generated_keys.add(private_key_path)
+    logging.info(f"Added {private_key_path} to cleanup tracking (total: {len(generate_ssh_key.generated_keys)})")
 
     logging.info(f"Generating SSH key: {key_name}")
     try:
@@ -618,6 +1095,33 @@ def select_random_region(config):
     region = random.choice(region_choices)
     logging.info(f"Selected random {provider} region: {region}")
     return region
+
+def create_consistent_resource_names(config):
+    """Ensure all resources have consistent naming based on deployment ID"""
+    deployment_id = config.get('deployment_id')
+    if not deployment_id:
+        logging.error("No deployment ID found in config")
+        return config
+    
+    # Set consistent names for all resources
+    config['redirector_name'] = f"r-{deployment_id}"
+    config['c2_name'] = f"s-{deployment_id}"
+    config['tracker_name'] = f"t-{deployment_id}"
+    
+    # Ensure SSH key follows same pattern
+    if not config.get('ssh_key'):
+        config['ssh_key'] = os.path.expanduser(f"~/.ssh/c2deploy_{deployment_id}")
+    
+    # Set consistent public key path
+    if config.get('ssh_key'):
+        config['ssh_key_path'] = f"{config['ssh_key']}.pub"
+        
+    # Set other resource names with the same deployment ID
+    config['vpc_name'] = f"vpc-{deployment_id}"
+    config['sg_name'] = f"sg-{deployment_id}"
+    
+    logging.info(f"Set consistent resource names with deployment ID: {deployment_id}")
+    return config
 
 def create_inventory_file(config, deployment_type):
     """Create a temporary inventory file for Ansible based on deployment type"""
@@ -1471,7 +1975,7 @@ def generate_deployment_info(config, success=True):
     info.append("")
     info.append("CLEANUP COMMAND")
     info.append("---------------")
-    info.append(f"python3 deploy.py --provider {config.get('provider', 'PROVIDER')} --teardown")
+    info.append(f"python3 deploy.py --provider {config.get('provider', 'PROVIDER')} --c2-name {config.get('c2_name', 'C2_NAME')} --redirector-name {config.get('redirector_name', 'REDIRECTOR_NAME')} --teardown")
     if config.get('provider') == 'linode':
         info.append(f"Additional parameters: --linode-token YOUR_TOKEN --c2-name {config.get('c2_name', 'C2_NAME')} --redirector-name {config.get('redirector_name', 'REDIRECTOR_NAME')}")
     elif config.get('provider') == 'aws':
@@ -1534,36 +2038,47 @@ def deploy_cross_provider(config, redirector_provider, c2_provider):
 
 def main():
     """Main function to run the deployment"""
-    # Display banner
-    print("""
-========================================
-C2ingRed - Red Team Infrastructure Setup
-========================================
-    """)
+    global debug_mode, deployment_id
     
-    # Parse command line arguments first (don't set up logging yet)
-    args = parse_arguments()
-    
-    # Check dependencies
-    check_dependencies()
-    
-    # Generate a single deployment ID that will be used for EVERYTHING
+    # Initialize the global deployment ID
     deployment_id = generate_deployment_id()
     
-    # NOW set up logging with our deployment ID
-    log_file = setup_logging(deployment_id)
+    # Check if any command-line arguments were provided
+    if len(sys.argv) > 1:
+        # Arguments provided, use the original CLI flow
+        args = parse_arguments()
         
-    # Use interactive mode if specified
-    if args.interactive:
-        config = interactive_setup(deployment_id)
-    else:
+        # Generate a deployment ID FIRST - before any other operations
+        deployment_id = generate_deployment_id()
+        
+        # Set up logging with our consistent deployment ID
+        log_file = setup_logging(deployment_id)
+        
+        # Check dependencies
+        check_dependencies()
+        
+        # Validate deployment mode
+        if hasattr(args, 'redirector_only') and hasattr(args, 'c2_only') and args.redirector_only and args.c2_only:
+            logging.error("Cannot specify both --redirector-only and --c2-only")
+            return
+        
+        # Check if this is a teardown operation
+        if hasattr(args, 'teardown') and args.teardown:
+            teardown_infrastructure(vars(args))
+            return
+        
+        # Check if this is a test operation
+        if hasattr(args, 'run_tests') and args.run_tests:
+            run_tests(vars(args))
+            return
+            
         # Override provider if --flokinet is specified
-        if args.flokinet:
+        if hasattr(args, 'flokinet') and args.flokinet:
             args.provider = "flokinet"
         
         # Load variables from provider-specific vars.yaml if provider is specified
         vars_data = {}
-        if args.provider:
+        if hasattr(args, 'provider') and args.provider:
             provider_dir = PROVIDER_DIRS.get(args.provider, args.provider.upper())
             vars_file = f"{provider_dir}/vars.yaml"
             if os.path.exists(vars_file):
@@ -1574,207 +2089,245 @@ C2ingRed - Red Team Infrastructure Setup
                 except Exception as e:
                     logging.warning(f"Failed to load {vars_file}: {e}")
         
-        # Build configuration by combining args and vars_data
-        config = {}
-        
-        # Provider settings
-        config['provider'] = args.provider
-        
-        # Copy all values from vars_data to config first
-        for key, value in vars_data.items():
-            config[key] = value
-        
-        # Store the deployment ID in the config
-        config['deployment_id'] = deployment_id
+        # Handle the interactive flag
+        if hasattr(args, 'interactive') and args.interactive:
+            config = interactive_setup(deployment_id)  # Pass the deployment_id here
+        else:
+            # Build configuration by combining args and vars_data
+            config = {}
+            
+            # Copy all values from vars_data to config first
+            for key, value in vars_data.items():
+                config[key] = value
+            
+            # Provider settings
+            if hasattr(args, 'provider'):
+                config['provider'] = args.provider
+            
+            # Store the deployment ID
+            config['deployment_id'] = deployment_id  # Use our consistent deployment ID
 
-        # Use consistent deployment ID for all resource names
-        config['redirector_name'] = args.redirector_name or f"r-{deployment_id}"
-        config['c2_name'] = args.c2_name or f"s-{deployment_id}"
-        config['tracker_name'] = args.tracker_name or f"t-{deployment_id}"
-        
-        # Subdomain settings - ensure these are explicitly set
-        config['redirector_subdomain'] = args.redirector_subdomain or 'cdn'
-        config['c2_subdomain'] = args.c2_subdomain or 'mail'
-        
-        # AWS settings
-        if args.provider == "aws":
-            config['aws_access_key'] = args.aws_key or vars_data.get('aws_access_key')
-            config['aws_secret_key'] = args.aws_secret or vars_data.get('aws_secret_key')
-            config['aws_region'] = args.aws_region or args.region or vars_data.get('aws_region')
-            config['aws_region_choices'] = vars_data.get('aws_region_choices', [])
-            config['ami_map'] = vars_data.get('ami_map', {})
-            config['size'] = args.size or vars_data.get('aws_instance_type', 't2.medium')
-        
-        # Linode settings
-        elif args.provider == "linode":
-            config['linode_token'] = args.linode_token or vars_data.get('linode_token')
-            config['linode_region'] = args.linode_region or args.region or vars_data.get('linode_region')
-            # Ensure region_choices are correctly set
-            config['region_choices'] = vars_data.get('region_choices', [])
-            config['plan'] = args.size or vars_data.get('plan', 'g6-standard-2')
-            config['image'] = vars_data.get('image', 'linode/kali')
-            config['redirector_image'] = vars_data.get('redirector_image', 'linode/debian11')
-        
-        # FlokiNET settings
-        elif args.provider == "flokinet":
-            config['flokinet_redirector_ip'] = args.flokinet_redirector_ip or vars_data.get('redirector_ip')
-            config['flokinet_c2_ip'] = args.flokinet_c2_ip or vars_data.get('c2_ip')
-            config['flokinet_region_choices'] = vars_data.get('flokinet_region_choices', [])
-            config['ssh_port'] = vars_data.get('ssh_port', 22)
-        
-        # SSH settings - explicitly set SSH user to avoid template recursion
-        if args.provider == "linode":
-            config['ssh_user'] = "root"
-        elif args.provider == "aws":
-            config['ssh_user'] = "kali"
-        else:
-            config['ssh_user'] = args.ssh_user or vars_data.get('ssh_user') or (DEFAULT_SSH_USER.get(args.provider) if args.provider else None)
-            
-        if args.ssh_key:
-            config['ssh_key'] = os.path.expanduser(args.ssh_key)
-        else:
-            # Generate a key if no key is provided and we're not in teardown mode
-            if not args.teardown:
-                config['ssh_key'] = generate_ssh_key(deployment_id)
-             
-        # Deployment options
-        config['redirector_only'] = args.redirector_only
-        config['c2_only'] = args.c2_only
-        config['debug'] = args.debug
-        config['domain'] = args.domain or vars_data.get('domain', 'example.com')
-        config['letsencrypt_email'] = args.letsencrypt_email or vars_data.get('letsencrypt_email', f"admin@{config['domain']}")
-        
-        # OPSEC settings
-        config['disable_history'] = args.disable_history if args.disable_history is not None else vars_data.get('disable_history', True)
-        config['secure_memory'] = args.secure_memory if args.secure_memory is not None else vars_data.get('secure_memory', True)
-        config['zero_logs'] = args.zero_logs if args.zero_logs is not None else vars_data.get('zero_logs', True)
-        
-        # Other settings from vars_data
-        config['gophish_admin_port'] = vars_data.get('gophish_admin_port', str(random.randint(2000, 9000)))
-        config['smtp_auth_user'] = vars_data.get('smtp_auth_user', f"user{random.randint(1000, 9999)}")
-        config['smtp_auth_pass'] = vars_data.get('smtp_auth_pass', ''.join(random.choices(string.ascii_letters + string.digits, k=20)))
-        config['shell_handler_port'] = vars_data.get('shell_handler_port', str(random.randint(4000, 65000)))
-        
-        # Tracker options
-        config['deploy_tracker'] = args.deploy_tracker
-        config['integrated_tracker'] = args.integrated_tracker
-        if args.deploy_tracker:
-            config['tracker_domain'] = args.tracker_domain or f"track.{config['domain']}"
-            config['tracker_email'] = args.tracker_email or config['letsencrypt_email']
-            config['tracker_ipinfo_token'] = args.tracker_ipinfo_token
-            config['tracker_setup_ssl'] = args.tracker_setup_ssl
-            config['tracker_create_pixel'] = args.tracker_create_pixel
-            
-            # Set the integrated tracker flag for deployment
-            if args.integrated_tracker:
-                config['setup_integrated_tracker'] = True
-        
-        # SSH after deploy
-        config['ssh_after_deploy'] = args.ssh_after_deploy
-        
-        # Run tests
-        config['run_tests'] = args.run_tests
-        
-        # Make sure we have the public key path if we're generating one
-        if config.get('ssh_key') and config['ssh_key'].startswith(os.path.expanduser("~/.ssh/c2deploy_")):
-            config['ssh_key_path'] = f"{config['ssh_key']}.pub"
-        elif config.get('ssh_key'):
-            config['ssh_key_path'] = f"{config['ssh_key']}.pub"
-            # Check if the public key exists
-            if not os.path.exists(config['ssh_key_path']):
-                # Try alternative extension
-                alt_path = f"{config['ssh_key']}.pub"
-                if os.path.exists(alt_path):
-                    config['ssh_key_path'] = alt_path
-                elif not args.teardown:  # Only generate new key if not in teardown mode
-                    logging.warning(f"Public key not found at {config['ssh_key_path']}. Generating a new key.")
-                    config['ssh_key'] = generate_ssh_key(deployment_id)
-                    config['ssh_key_path'] = f"{config['ssh_key']}.pub"
-    
-    # Validate deployment mode
-    if config.get('redirector_only') and config.get('c2_only'):
-        logging.error("Cannot specify both --redirector-only and --c2-only")
-        return
-    
-    # Log configuration (excluding sensitive data)
-    logging.info("Deployment configuration:")
-    for key, value in config.items():
-        if key not in ['aws_secret_key', 'linode_token', 'smtp_auth_pass', 'tracker_ipinfo_token']:
-            if isinstance(value, (dict, list)):
-                logging.info(f"  {key}: <complex data>")
+            # Use consistent deployment ID for all resource names
+            if hasattr(args, 'redirector_name'):
+                config['redirector_name'] = args.redirector_name or f"r-{deployment_id}"
             else:
-                logging.info(f"  {key}: {value}")
-    
-    # Check if this is a teardown operation
-    if args.teardown:
-        teardown_infrastructure(config)
-        return
-    
-    # Check if this is a test operation
-    if args.run_tests:
-        run_tests(config)
-        return
-    
-    # Run deployment
-    try:
-        # Deploy the standard infrastructure first (redirector + C2)
-        if not config.get('deploy_tracker') or config.get('integrated_tracker'):
-            success = deploy_infrastructure(config)
-            if not success:
-                logging.error("Deployment failed!")
-                deployment_info_log = generate_deployment_info(config, success=False)
-                print(f"\nDeployment information saved to: {deployment_info_log}")
-                cleanup_resources(config, interactive=True)
-                return
-            logging.info("Deployment completed successfully!")
-            deployment_info_log = generate_deployment_info(config, success=True)
-            print(f"\nDeployment information saved to: {deployment_info_log}")
-            
-            # SSH into instance if requested
-            if config.get('ssh_after_deploy'):
-                ssh_to_instance(config)
-        
-        # Deploy standalone tracker if requested and not integrated
-        elif config.get('deploy_tracker') and not config.get('integrated_tracker'):
-            success = deploy_tracker(config)
-            if not success:
-                logging.error("Tracker deployment failed!")
-                deployment_info_log = generate_deployment_info(config, success=False)
-                print(f"\nDeployment information saved to: {deployment_info_log}")
-                cleanup_resources(config, interactive=True)
-                return
-            logging.info("Tracker deployment completed successfully!")
-            deployment_info_log = generate_deployment_info(config, success=True)
-            print(f"\nDeployment information saved to: {deployment_info_log}")
-            
-            # SSH into tracker if requested
-            if config.get('ssh_after_deploy'):
-                ssh_to_instance(config)
+                config['redirector_name'] = f"r-{deployment_id}"
                 
-    except KeyboardInterrupt:
-        print("\n\nDeployment interrupted by user")
-        logging.info("Deployment interrupted by user")
-        deployment_info_log = generate_deployment_info(config, success=False)
-        print(f"\nDeployment information saved to: {deployment_info_log}")
+            if hasattr(args, 'c2_name'):
+                config['c2_name'] = args.c2_name or f"s-{deployment_id}"
+            else:
+                config['c2_name'] = f"s-{deployment_id}"
+                
+            if hasattr(args, 'tracker_name'):
+                config['tracker_name'] = args.tracker_name or f"t-{deployment_id}"
+            else:
+                config['tracker_name'] = f"t-{deployment_id}"
+            
+            # Subdomain settings - ensure these are explicitly set
+            if hasattr(args, 'redirector_subdomain'):
+                config['redirector_subdomain'] = args.redirector_subdomain or 'cdn'
+            if hasattr(args, 'c2_subdomain'):
+                config['c2_subdomain'] = args.c2_subdomain or 'mail'
+            
+            # AWS settings
+            if args.provider == "aws":
+                if hasattr(args, 'aws_key'):
+                    config['aws_access_key'] = args.aws_key or vars_data.get('aws_access_key')
+                if hasattr(args, 'aws_secret'):
+                    config['aws_secret_key'] = args.aws_secret or vars_data.get('aws_secret_key')
+                if hasattr(args, 'aws_region'):
+                    config['aws_region'] = args.aws_region or args.region or vars_data.get('aws_region')
+                config['aws_region_choices'] = vars_data.get('aws_region_choices', [])
+                config['ami_map'] = vars_data.get('ami_map', {})
+                if hasattr(args, 'size'):
+                    config['size'] = args.size or vars_data.get('aws_instance_type', 't2.medium')
+            
+            # Linode settings
+            elif args.provider == "linode":
+                if hasattr(args, 'linode_token'):
+                    config['linode_token'] = args.linode_token or vars_data.get('linode_token')
+                if hasattr(args, 'linode_region'):
+                    config['linode_region'] = args.linode_region or args.region or vars_data.get('linode_region')
+                # Ensure region_choices are correctly set
+                config['region_choices'] = vars_data.get('region_choices', [])
+                if hasattr(args, 'size'):
+                    config['plan'] = args.size or vars_data.get('plan', 'g6-standard-2')
+                config['image'] = vars_data.get('image', 'linode/kali')
+                config['redirector_image'] = vars_data.get('redirector_image', 'linode/debian11')
+            
+            # FlokiNET settings
+            elif args.provider == "flokinet":
+                if hasattr(args, 'flokinet_redirector_ip'):
+                    config['flokinet_redirector_ip'] = args.flokinet_redirector_ip or vars_data.get('redirector_ip')
+                if hasattr(args, 'flokinet_c2_ip'):
+                    config['flokinet_c2_ip'] = args.flokinet_c2_ip or vars_data.get('c2_ip')
+                config['flokinet_region_choices'] = vars_data.get('flokinet_region_choices', [])
+                config['ssh_port'] = vars_data.get('ssh_port', 22)
+            
+            # SSH settings - explicitly set SSH user to avoid template recursion
+            if args.provider == "linode":
+                config['ssh_user'] = "root"
+            elif args.provider == "aws":
+                config['ssh_user'] = "root"
+            else:
+                if hasattr(args, 'ssh_user'):
+                    config['ssh_user'] = args.ssh_user or vars_data.get('ssh_user') or DEFAULT_SSH_USER.get(args.provider)
+                    
+            # ONLY generate an SSH key if needed - not for teardown operations
+            if hasattr(args, 'ssh_key'):
+                config['ssh_key'] = os.path.expanduser(args.ssh_key)
+            else:
+                # Generate a key if no key is provided and we're not in teardown mode
+                if not hasattr(args, 'teardown') or not args.teardown:
+                    config['ssh_key'] = generate_ssh_key(deployment_id)  # Use the same deployment ID
+                 
+            # Deployment options
+            if hasattr(args, 'redirector_only'):
+                config['redirector_only'] = args.redirector_only
+            if hasattr(args, 'c2_only'):
+                config['c2_only'] = args.c2_only
+            if hasattr(args, 'debug'):
+                config['debug'] = args.debug
+            if hasattr(args, 'domain'):
+                config['domain'] = args.domain or vars_data.get('domain', 'example.com')
+            if hasattr(args, 'letsencrypt_email'):
+                config['letsencrypt_email'] = args.letsencrypt_email or vars_data.get('letsencrypt_email', f"admin@{config['domain']}")
+            
+            # OPSEC settings
+            if hasattr(args, 'disable_history'):
+                config['disable_history'] = args.disable_history if args.disable_history is not None else vars_data.get('disable_history', True)
+            if hasattr(args, 'secure_memory'):
+                config['secure_memory'] = args.secure_memory if args.secure_memory is not None else vars_data.get('secure_memory', True)
+            if hasattr(args, 'zero_logs'):
+                config['zero_logs'] = args.zero_logs if args.zero_logs is not None else vars_data.get('zero_logs', True)
+            
+            # Other settings from vars_data
+            config['gophish_admin_port'] = vars_data.get('gophish_admin_port', str(random.randint(2000, 9000)))
+            config['smtp_auth_user'] = vars_data.get('smtp_auth_user', f"user{random.randint(1000, 9999)}")
+            config['smtp_auth_pass'] = vars_data.get('smtp_auth_pass', ''.join(random.choices(string.ascii_letters + string.digits, k=20)))
+            config['shell_handler_port'] = vars_data.get('shell_handler_port', str(random.randint(4000, 65000)))
+            
+            # Tracker options
+            if hasattr(args, 'deploy_tracker'):
+                config['deploy_tracker'] = args.deploy_tracker
+                if hasattr(args, 'integrated_tracker'):
+                    config['integrated_tracker'] = args.integrated_tracker
+                if args.deploy_tracker:
+                    if hasattr(args, 'tracker_domain'):
+                        config['tracker_domain'] = args.tracker_domain or f"track.{config['domain']}"
+                    if hasattr(args, 'tracker_email'):
+                        config['tracker_email'] = args.tracker_email or config['letsencrypt_email']
+                    if hasattr(args, 'tracker_ipinfo_token'):
+                        config['tracker_ipinfo_token'] = args.tracker_ipinfo_token
+                    if hasattr(args, 'tracker_setup_ssl'):
+                        config['tracker_setup_ssl'] = args.tracker_setup_ssl
+                    if hasattr(args, 'tracker_create_pixel'):
+                        config['tracker_create_pixel'] = args.tracker_create_pixel
+                    
+                    # Set the integrated tracker flag for deployment
+                    if args.integrated_tracker:
+                        config['setup_integrated_tracker'] = True
+            
+            # SSH after deploy
+            if hasattr(args, 'ssh_after_deploy'):
+                config['ssh_after_deploy'] = args.ssh_after_deploy
+            
+            # Run tests
+            if hasattr(args, 'run_tests'):
+                config['run_tests'] = args.run_tests
+            
+            # Make sure we have the public key path if we're generating one
+            if config.get('ssh_key') and config['ssh_key'].startswith(os.path.expanduser("~/.ssh/c2deploy_")):
+                config['ssh_key_path'] = f"{config['ssh_key']}.pub"
+            elif config.get('ssh_key'):
+                config['ssh_key_path'] = f"{config['ssh_key']}.pub"
+                # Check if the public key exists
+                if not os.path.exists(config['ssh_key_path']):
+                    # Try alternative extension
+                    alt_path = f"{config['ssh_key']}.pub"
+                    if os.path.exists(alt_path):
+                        config['ssh_key_path'] = alt_path
+                    elif not hasattr(args, 'teardown'):  # Only generate new key if not in teardown mode
+                        logging.warning(f"Public key not found at {config['ssh_key_path']}. Generating a new key.")
+                        config['ssh_key'] = generate_ssh_key(deployment_id)  # Use the same deployment ID
+                        config['ssh_key_path'] = f"{config['ssh_key']}.pub"
+        
+        # Run deployment
         try:
-            cleanup_resources(config, interactive=True)
+            # Deploy the standard infrastructure first (redirector + C2)
+            if not config.get('deploy_tracker') or config.get('integrated_tracker'):
+                success = deploy_infrastructure(config)
+                if not success:
+                    logging.error("Deployment failed!")
+                    deployment_info_log = generate_deployment_info(config, success=False)
+                    print(f"\nDeployment information saved to: {deployment_info_log}")
+                    cleanup_resources(config, interactive=True)
+                    return
+                logging.info("Deployment completed successfully!")
+                deployment_info_log = generate_deployment_info(config, success=True)
+                print(f"\nDeployment information saved to: {deployment_info_log}")
+                
+                # SSH into instance if requested
+                if config.get('ssh_after_deploy'):
+                    ssh_to_instance(config)
+            
+            # Deploy standalone tracker if requested and not integrated
+            elif config.get('deploy_tracker') and not config.get('integrated_tracker'):
+                success = deploy_tracker(config)
+                if not success:
+                    logging.error("Tracker deployment failed!")
+                    deployment_info_log = generate_deployment_info(config, success=False)
+                    print(f"\nDeployment information saved to: {deployment_info_log}")
+                    cleanup_resources(config, interactive=True)
+                    return
+                logging.info("Tracker deployment completed successfully!")
+                deployment_info_log = generate_deployment_info(config, success=True)
+                print(f"\nDeployment information saved to: {deployment_info_log}")
+                
+                # SSH into tracker if requested
+                if config.get('ssh_after_deploy'):
+                    ssh_to_instance(config)
+                    
         except KeyboardInterrupt:
-            print("\nCleanup interrupted. Resources may still exist.")
-            logging.warning("Cleanup interrupted by user. Resources may still exist.")
-    except Exception as e:
-        logging.error(f"Deployment failed with error: {e}")
-        deployment_info_log = generate_deployment_info(config, success=False)
-        print(f"\nDeployment information saved to: {deployment_info_log}")
-        if config.get('debug'):
-            import traceback
-            traceback.print_exc()
-            logging.debug(traceback.format_exc())
+            print("\n\nDeployment interrupted by user")
+            logging.info("Deployment interrupted by user")
+            deployment_info_log = generate_deployment_info(config, success=False)
+            print(f"\nDeployment information saved to: {deployment_info_log}")
+            try:
+                cleanup_resources(config, interactive=True)
+            except KeyboardInterrupt:
+                print("\nCleanup interrupted. Resources may still exist.")
+                logging.warning("Cleanup interrupted by user. Resources may still exist.")
+        except Exception as e:
+            logging.error(f"Deployment failed with error: {e}")
+            deployment_info_log = generate_deployment_info(config, success=False)
+            print(f"\nDeployment information saved to: {deployment_info_log}")
+            if config.get('debug'):
+                import traceback
+                traceback.print_exc()
+                logging.debug(traceback.format_exc())
+            try:
+                cleanup_resources(config, interactive=True)
+            except KeyboardInterrupt:
+                print("\nCleanup interrupted. Resources may still exist.")
+                logging.warning("Cleanup interrupted by user. Resources may still exist.")
+    else:
+        # No arguments - launch the interactive menu
         try:
-            cleanup_resources(config, interactive=True)
+            # Generate a deployment ID first
+            deployment_id = generate_deployment_id()
+            
+            # Set up logging
+            log_file = setup_logging(deployment_id)
+            
+            # Check dependencies
+            check_dependencies()
+            
+            # Launch the menu
+            main_menu()
         except KeyboardInterrupt:
-            print("\nCleanup interrupted. Resources may still exist.")
-            logging.warning("Cleanup interrupted by user. Resources may still exist.")
-
+            print(f"\n\n{COLORS['YELLOW']}Operation interrupted by user.{COLORS['RESET']}")
+            sys.exit(0)
 
 if __name__ == "__main__":
     main()

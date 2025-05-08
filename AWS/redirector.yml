@@ -9,7 +9,7 @@
     - vars.yaml
   vars:
     # Default values
-    ssh_user: "{{ ssh_user | default('ubuntu') }}"  # Changed from 'kali' to 'ubuntu'
+    ssh_user: "{{ ssh_user | default('ubuntu') }}"  # Changed from 'root' to 'ubuntu'
     aws_region: "{{ aws_region | default(aws_region_choices | random) }}"
     instance_type: "{{ aws_instance_type | default('t2.micro') }}"
     deployment_id: "{{ deployment_id | default('') }}"
@@ -205,7 +205,7 @@
         name: "redirector"
         groups: "redirectors"
         ansible_host: "{{ redirector_ip }}"
-        ansible_user: "ubuntu"  # Change this from 'kali' to 'ubuntu'
+        ansible_user: "ubuntu"  # Change this from 'root' to 'ubuntu'
         ansible_ssh_private_key_file: "~/.ssh/{{ redirector_name }}.pem"
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes"
         ansible_python_interpreter: "/usr/bin/python3"
