@@ -18,6 +18,42 @@ from datetime import datetime
 debug_mode = True
 deployment_id = None
 
+# Constants for providers
+PROVIDERS = ["aws", "linode", "flokinet"]
+DEFAULT_SSH_USER = {
+    "aws": "root",
+    "linode": "root",
+    "flokinet": "root"
+}
+
+# Directory names - maintain correct case for each provider
+PROVIDER_DIRS = {
+    "aws": "AWS",
+    "linode": "Linode",
+    "flokinet": "FlokiNET"
+}
+
+# Then fix the select_provider function
+def select_provider():
+    """Let the user select a cloud provider"""
+    print("\nAvailable cloud providers:")
+    for i, provider in enumerate(PROVIDERS, 1):
+        print(f"  {i}. {provider.capitalize()}")
+    
+    while True:
+        try:
+            provider_choice = input("\nSelect a provider (1-3 or 99 to cancel): ")
+            if provider_choice == "99":
+                return None
+            
+            provider_choice = int(provider_choice)
+            if 1 <= provider_choice <= len(PROVIDERS):
+                return PROVIDERS[provider_choice - 1]
+            else:
+                print(f"{COLORS['RED']}Please enter a number between 1 and {len(PROVIDERS)}{COLORS['RESET']}")
+        except ValueError:
+            print(f"{COLORS['RED']}Please enter a valid number{COLORS['RESET']}")
+
 # Color codes for terminal output
 COLORS = {
     "RESET": "\033[0m",
@@ -53,8 +89,12 @@ def print_banner():
 
 def main_menu():
     """Display the main menu and handle user selection"""
-    global debug_mode
+    global debug_mode, deployment_id
+    
     while True:
+        # Reset deployment ID for each new operation from the menu
+        deployment_id = generate_deployment_id()
+        
         clear_screen()
         print_banner()
         print(f"{COLORS['WHITE']}MAIN MENU{COLORS['RESET']}")
@@ -72,7 +112,7 @@ def main_menu():
         print(f"11) Custom Deployment")
         print(f"12) Tools")
         print(f"13) Debug Mode: {COLORS['GREEN'] if debug_mode else COLORS['RED']}{debug_mode}{COLORS['RESET']}")
-        print(f"")
+        print(f"\n")
         print(f"99) Exit")
         
         choice = input("\nSelect an option: ")
@@ -229,21 +269,24 @@ def deploy_tracker():
 
 def custom_deployment():
     """Run the full interactive deployment wizard"""
-    deployment_id = generate_deployment_id()
-    config = interactive_setup(deployment_id)
+    current_deployment_id = generate_deployment_id()
+    config = interactive_setup(current_deployment_id)
     if config:
         execute_deployment(config)
 
 def initialize_deployment():
-    """Initialize global deployment ID"""
-    global deployment_id
-    deployment_id = generate_deployment_id()
-    return deployment_id
+    """Initialize and return a fresh deployment ID"""
+    new_deployment_id = generate_deployment_id()
+    logging.info(f"Initialized new deployment ID: {new_deployment_id}")
+    return new_deployment_id
 
 def gather_common_parameters():
     """Collect common parameters needed for deployments"""
-    global debug_mode, deployment_id
-    config = {'deployment_id': deployment_id}
+    global debug_mode
+    
+    # Generate a fresh deployment ID for this specific deployment
+    current_deployment_id = generate_deployment_id()
+    config = {'deployment_id': current_deployment_id}
     config['debug'] = debug_mode
 
     # Get provider
@@ -317,13 +360,13 @@ def gather_common_parameters():
     config['letsencrypt_email'] = email
     
     # Set SSH key
-    config['ssh_key'] = generate_ssh_key(deployment_id)
+    config['ssh_key'] = generate_ssh_key(current_deployment_id)
     config['ssh_key_path'] = f"{config['ssh_key']}.pub"
     
     # Set consistent resource names based on deployment ID
-    config['redirector_name'] = f"r-{deployment_id}"
-    config['c2_name'] = f"s-{deployment_id}"
-    config['tracker_name'] = f"t-{deployment_id}"
+    config['redirector_name'] = f"r-{current_deployment_id}"
+    config['c2_name'] = f"s-{current_deployment_id}"
+    config['tracker_name'] = f"t-{current_deployment_id}"
     
     # Security options
     print("\nSecurity options:")
@@ -331,27 +374,10 @@ def gather_common_parameters():
     config['secure_memory'] = input("Enable secure memory settings? (y/n) [default: y]: ").lower() != 'n'
     config['zero_logs'] = input("Enable zero-logs configuration? (y/n) [default: y]: ").lower() != 'n'
     
-    return config
-
-def select_provider():
-    """Let the user select a cloud provider"""
-    print("\nAvailable cloud providers:")
-    for i, provider in enumerate(PROVIDERS, 1):
-        print(f"  {i}. {provider.capitalize()}")
+    # Add SSH option that was missing
+    config['ssh_after_deploy'] = input("\nSSH into instance after deployment? (y/n) [default: n]: ").lower() == 'y'
     
-    while True:
-        try:
-            provider_choice = input("\nSelect a provider (1-3 or 99 to cancel): ")
-            if provider_choice == "99":
-                return None
-            
-            provider_choice = int(provider_choice)
-            if 1 <= provider_choice <= len(PROVIDERS):
-                return PROVIDERS[provider_choice - 1]
-            else:
-                print(f"{COLORS['RED']}Please enter a number between 1 and {len(PROVIDERS)}{COLORS['RESET']}")
-        except ValueError:
-            print(f"{COLORS['RED']}Please enter a valid number{COLORS['RESET']}")
+    return config
 
 def get_aws_credentials(provider_vars):
     """Get AWS credentials from user or vars file"""
@@ -484,28 +510,15 @@ def execute_deployment(config):
     
     if success:
         print(f"\n{COLORS['GREEN']}Deployment completed successfully!{COLORS['RESET']}")
+        
+        # Explicitly handle SSH after deployment if requested
+        if config.get('ssh_after_deploy', False):
+            print(f"\n{COLORS['BLUE']}Connecting to instance via SSH...{COLORS['RESET']}")
+            ssh_to_instance(config)
     else:
         print(f"\n{COLORS['RED']}Deployment failed.{COLORS['RESET']}")
     
     input("\nPress Enter to return to menu...")
-
-# Disable Ansible host key checking
-os.environ["ANSIBLE_HOST_KEY_CHECKING"] = "False"
-
-# Constants for providers
-PROVIDERS = ["aws", "linode", "flokinet"]
-DEFAULT_SSH_USER = {
-    "aws": "root",
-    "linode": "root",
-    "flokinet": "root"
-}
-
-# Directory names - maintain correct case for each provider
-PROVIDER_DIRS = {
-    "aws": "AWS",
-    "linode": "Linode",
-    "flokinet": "FlokiNET"
-}
 
 def generate_random_string(length=8):
     """Generate a random string of letters and digits."""
@@ -1253,99 +1266,109 @@ def deploy_infrastructure(config):
     provider = config['provider']
     logging.info(f"Deploying {provider} infrastructure...")
     
-    # Set provider-specific environment variables
-    if provider == "aws":
-        if config.get('aws_access_key'):
-            os.environ['AWS_ACCESS_KEY_ID'] = config['aws_access_key']
-        if config.get('aws_secret_key'):
-            os.environ['AWS_SECRET_ACCESS_KEY'] = config['aws_secret_key']
-    elif provider == "linode":
-        if config.get('linode_token'):
-            os.environ['LINODE_TOKEN'] = config['linode_token']
-    
-    # Set correct ssh_user based on provider
-    if not config.get('ssh_user'):
-        config['ssh_user'] = DEFAULT_SSH_USER.get(provider, 'root')
-    
-    # Handle cross-provider deployment
-    redirector_provider = config.get('redirector_provider', provider)
-    c2_provider = config.get('c2_provider', provider)
-    
-    is_cross_provider = (redirector_provider != c2_provider) or \
-                        (config.get('redirector_region') and config.get('c2_region') and \
-                         config.get('redirector_region') != config.get('c2_region'))
-    
-    if is_cross_provider and not (config.get('redirector_only') or config.get('c2_only')):
-        return deploy_cross_provider(config, redirector_provider, c2_provider)
-    
-    # For FlokiNET, validate required IPs
-    if provider == "flokinet":
-        if not config.get('c2_only') and not config.get('flokinet_redirector_ip') and not config.get('redirector_ip'):
-            logging.error("FlokiNET redirector IP is required")
-            return False
+    try:
+        # Set provider-specific environment variables
+        if provider == "aws":
+            if config.get('aws_access_key'):
+                os.environ['AWS_ACCESS_KEY_ID'] = config['aws_access_key']
+            if config.get('aws_secret_key'):
+                os.environ['AWS_SECRET_ACCESS_KEY'] = config['aws_secret_key']
+        elif provider == "linode":
+            if config.get('linode_token'):
+                os.environ['LINODE_TOKEN'] = config['linode_token']
         
-        if not config.get('redirector_only') and not config.get('flokinet_c2_ip') and not config.get('c2_ip'):
-            logging.error("FlokiNET C2 IP is required")
-            return False
-    
-    # Get correct provider directory
-    provider_dir = PROVIDER_DIRS.get(provider, provider.capitalize())
-    
-    # Deploy redirector if needed
-    if not config.get('c2_only'):
-        redirector_config = config.copy()
-        if config.get('redirector_region'):
-            redirector_config['region'] = config['redirector_region']
-            
-        playbook = f"{provider_dir}/redirector.yml"
-        inventory_path = create_inventory_file(redirector_config, "local")
+        # Set correct ssh_user based on provider
+        if not config.get('ssh_user'):
+            config['ssh_user'] = DEFAULT_SSH_USER.get(provider, 'root')
         
-        logging.info(f"Deploying {provider} redirector using {playbook} in region {redirector_config.get('region', 'default')}")
-        redirector_success, stdout, stderr = run_ansible_playbook(
-            playbook, inventory_path, redirector_config, redirector_config.get('debug', False)
-        )
+        # Handle cross-provider deployment
+        redirector_provider = config.get('redirector_provider', provider)
+        c2_provider = config.get('c2_provider', provider)
         
-        if os.path.exists(inventory_path):
-            os.unlink(inventory_path)
-            
-        if not redirector_success:
-            logging.error(f"{provider} redirector deployment failed")
-            if redirector_config.get('debug'):
-                logging.error(f"Ansible stderr: {stderr}")
-            return False
-            
-        # Extract and save redirector IP for C2 configuration
-        if 'redirector_ip' in redirector_config:
-            config['redirector_ip'] = redirector_config['redirector_ip']
-    
-    # Deploy C2 if needed
-    if not config.get('redirector_only'):
-        c2_config = config.copy()
-        if config.get('c2_region'):
-            c2_config['region'] = config['c2_region']
-            
-        playbook = f"{provider_dir}/c2.yml"
-        inventory_path = create_inventory_file(c2_config, "local")
+        is_cross_provider = (redirector_provider != c2_provider) or \
+                            (config.get('redirector_region') and config.get('c2_region') and \
+                             config.get('redirector_region') != config.get('c2_region'))
         
-        logging.info(f"Deploying {provider} C2 server using {playbook} in region {c2_config.get('region', 'default')}")
-        c2_success, stdout, stderr = run_ansible_playbook(
-            playbook, inventory_path, c2_config, c2_config.get('debug', False)
-        )
+        if is_cross_provider and not (config.get('redirector_only') or config.get('c2_only')):
+            return deploy_cross_provider(config, redirector_provider, c2_provider)
         
-        if os.path.exists(inventory_path):
-            os.unlink(inventory_path)
+        # For FlokiNET, validate required IPs
+        if provider == "flokinet":
+            if not config.get('c2_only') and not config.get('flokinet_redirector_ip') and not config.get('redirector_ip'):
+                logging.error("FlokiNET redirector IP is required")
+                return False
             
-        if not c2_success:
-            logging.error(f"{provider} C2 server deployment failed")
-            if c2_config.get('debug'):
-                logging.error(f"Ansible stderr: {stderr}")
-            return False
+            if not config.get('redirector_only') and not config.get('flokinet_c2_ip') and not config.get('c2_ip'):
+                logging.error("FlokiNET C2 IP is required")
+                return False
+        
+        # Get correct provider directory
+        provider_dir = PROVIDER_DIRS.get(provider, provider.capitalize())
+        
+        # Deploy redirector if needed
+        if not config.get('c2_only'):
+            redirector_config = config.copy()
+            if config.get('redirector_region'):
+                redirector_config['region'] = config['redirector_region']
+                
+            playbook = f"{provider_dir}/redirector.yml"
+            inventory_path = create_inventory_file(redirector_config, "local")
             
-        # Extract and save C2 IP for reference
-        if 'c2_ip' in c2_config:
-            config['c2_ip'] = c2_config['c2_ip']
-    
-    return True
+            logging.info(f"Deploying {provider} redirector using {playbook} in region {redirector_config.get('region', 'default')}")
+            redirector_success, stdout, stderr = run_ansible_playbook(
+                playbook, inventory_path, redirector_config, redirector_config.get('debug', False)
+            )
+            
+            if os.path.exists(inventory_path):
+                os.unlink(inventory_path)
+                
+            if not redirector_success:
+                logging.error(f"{provider} redirector deployment failed")
+                if redirector_config.get('debug'):
+                    logging.error(f"Ansible stderr: {stderr}")
+                return False
+                
+            # Extract and save redirector IP for C2 configuration
+            if 'redirector_ip' in redirector_config:
+                config['redirector_ip'] = redirector_config['redirector_ip']
+        
+        # Deploy C2 if needed
+        if not config.get('redirector_only'):
+            c2_config = config.copy()
+            if config.get('c2_region'):
+                c2_config['region'] = config['c2_region']
+                
+            playbook = f"{provider_dir}/c2.yml"
+            inventory_path = create_inventory_file(c2_config, "local")
+            
+            logging.info(f"Deploying {provider} C2 server using {playbook} in region {c2_config.get('region', 'default')}")
+            c2_success, stdout, stderr = run_ansible_playbook(
+                playbook, inventory_path, c2_config, c2_config.get('debug', False)
+            )
+            
+            if os.path.exists(inventory_path):
+                os.unlink(inventory_path)
+                
+            if not c2_success:
+                logging.error(f"{provider} C2 server deployment failed")
+                if c2_config.get('debug'):
+                    logging.error(f"Ansible stderr: {stderr}")
+                return False
+                
+            # Extract and save C2 IP for reference
+            if 'c2_ip' in c2_config:
+                config['c2_ip'] = c2_config['c2_ip']
+        
+        return True
+    except Exception as e:
+        logging.error(f"Deployment failed with error: {str(e)}")
+        if config.get('debug'):
+            import traceback
+            logging.error(traceback.format_exc())
+        
+        # Clean up any partial resources that were created
+        cleanup_resources(config, interactive=True)
+        return False
 
 def deploy_flokinet_redirector(config):
     """Deploy FlokiNET redirector separately"""
@@ -1601,6 +1624,26 @@ def cleanup_resources(config, interactive=True):
             print("You can clean them up later by running with --teardown")
             return False
     
+    # Clean up SSH keys
+    if 'deployment_id' in config:
+        ssh_key_path = f"~/.ssh/c2deploy_{config['deployment_id']}.pem"
+        expanded_path = os.path.expanduser(ssh_key_path)
+        if os.path.exists(expanded_path):
+            try:
+                os.remove(expanded_path)
+                logging.info(f"Removed SSH key: {ssh_key_path}")
+            except Exception as e:
+                logging.error(f"Failed to remove SSH key {ssh_key_path}: {e}")
+                
+        # Also check for public key
+        pub_key_path = f"{expanded_path}.pub"
+        if os.path.exists(pub_key_path):
+            try:
+                os.remove(pub_key_path)
+                logging.info(f"Removed SSH public key: {pub_key_path}.pub")
+            except Exception as e:
+                logging.error(f"Failed to remove SSH public key {pub_key_path}.pub: {e}")
+    
     # Use Ansible for cleanup with confirmation set to false
     extra_vars = {
         "confirm_cleanup": False,  # Skip confirmation prompt
@@ -1654,6 +1697,7 @@ def cleanup_resources(config, interactive=True):
             logging.error(f"Failed to remove SSH key: {e}")
             
     return True
+
 
 def check_dependencies():
     """Check if required dependencies are installed"""
