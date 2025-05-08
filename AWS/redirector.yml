@@ -148,6 +148,12 @@
         redirector_vpc_id: "{{ vpc_result.vpc.id }}"  # Store for cleanup reference
       when: not (use_shared_infra | bool and infra_state_file.stat.exists | default(false))
 
+    # Set a random shell handler port if not defined
+    - name: Set random shell handler port if not defined
+      set_fact:
+        shell_handler_port: "{{ 4000 + 59000 | random }}"
+      when: shell_handler_port is not defined
+
     # Create security group
     - name: Create security group
       amazon.aws.ec2_security_group:
@@ -161,7 +167,7 @@
               - 22
               - 80
               - 443
-              - "{{ shell_handler_port | default(4444) }}"
+              - "{{ shell_handler_port }}"
             cidr_ip: 0.0.0.0/0
         rules_egress:
           - proto: -1
