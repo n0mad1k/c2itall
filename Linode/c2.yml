@@ -24,15 +24,23 @@
           - linode_token is defined and linode_token != ""
         fail_msg: "Linode API token is required. Set linode_token in vars.yaml or via --linode-token."
 
+    # Replace these tasks at the beginning of the playbook
     - name: Set region for C2 server
       set_fact:
-        c2_region_value: "{{ selected_region | default(region, true) | default(linode_region, true) | default('us-east', true) }}"
-      when: region_choices is not defined or region_choices|length == 0
+        c2_region_value: "{{ selected_region | default(linode_region, true) | default('us-east', true) }}"
 
-    - name: Set random region for C2 server
+    - name: Display region selection information for debugging
+      debug:
+        msg:
+          - "Selected Region: {{ selected_region | default('Not set') }}"
+          - "Linode Region: {{ linode_region | default('Not set') }}"
+          - "Using Region: {{ c2_region_value }}"
+      when: debug | default(false) | bool
+
+    - name: Set random region only if absolutely no region specified
       set_fact:
         c2_region_value: "{{ region_choices | random }}"
-      when: region_choices is defined and region_choices|length > 0 and c2_region_value is not defined
+      when: region_choices is defined and region_choices|length > 0 and not selected_region is defined and not linode_region is defined and not c2_region_value is defined
 
     - name: Create C2 Linode instance
       community.general.linode_v4:

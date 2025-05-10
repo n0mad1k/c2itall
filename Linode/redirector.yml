@@ -20,15 +20,21 @@
           - linode_token is defined and linode_token != ""
         fail_msg: "Linode API token is required. Set linode_token in vars.yaml or via --linode-token."
 
-    - name: Set region for deployment
+    # Update the region selection logic in Linode/redirector.yml
+    - name: Set region for redirector
       set_fact:
-        deployment_region: "{{ selected_region | default(region, true) | default(linode_region, true) | default('us-east', true) }}"
-      when: region_choices is not defined or region_choices|length == 0
+        deployment_region: "{{ selected_region | default(linode_region, true) | default('us-east', true) }}"
 
-    - name: Set random region for deployment
+    - name: Display region selection for redirector
+      debug:
+        msg: "Using region for redirector: {{ deployment_region }}"
+      when: debug | default(false) | bool
+
+    # Only use random region as a last resort
+    - name: Set random region only if no region specified
       set_fact:
         deployment_region: "{{ region_choices | random }}"
-      when: region_choices is defined and region_choices|length > 0 and deployment_region is not defined
+      when: region_choices is defined and region_choices|length > 0 and not selected_region is defined and not linode_region is defined and not deployment_region is defined
 
     - name: Create redirector Linode instance
       community.general.linode_v4:

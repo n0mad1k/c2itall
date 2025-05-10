@@ -1193,19 +1193,15 @@ def create_inventory_file(config, deployment_type):
     return inventory_path
 
 def run_ansible_playbook(playbook, inventory, config, debug=False):
-    """Run an Ansible playbook with the given inventory and config"""
     # Convert config dict to JSON for extra-vars
     extra_vars = {k: v for k, v in config.items() if v is not None and not isinstance(v, (dict, list, tuple))}
     
-    # Handle the region parameter correctly
+    # Ensure consistent region parameter handling
     if 'region' in extra_vars:
         extra_vars['selected_region'] = extra_vars['region']
     elif 'linode_region' in extra_vars:
         extra_vars['selected_region'] = extra_vars['linode_region']
-    
-    # Remove ansible_python_interpreter from extra_vars
-    if 'ansible_python_interpreter' in extra_vars:
-        extra_vars.pop('ansible_python_interpreter')
+        extra_vars['region'] = extra_vars['linode_region']  # Added for consistency
     
     extra_vars_json = json.dumps(extra_vars)
     
