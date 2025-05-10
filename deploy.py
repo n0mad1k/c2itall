@@ -374,8 +374,9 @@ def gather_common_parameters():
     config['secure_memory'] = input("Enable secure memory settings? (y/n) [default: y]: ").lower() != 'n'
     config['zero_logs'] = input("Enable zero-logs configuration? (y/n) [default: y]: ").lower() != 'n'
     
-    # Add SSH option that was missing
-    config['ssh_after_deploy'] = input("\nSSH into instance after deployment? (y/n) [default: y]: ").lower() == 'y'
+    # Fix: SSH option that defaults to 'y' properly
+    ssh_response = input("\nSSH into instance after deployment? (y/n) [default: y]: ").lower()
+    config['ssh_after_deploy'] = ssh_response != 'n'  # Default to True unless they type 'n'
     
     return config
 
@@ -511,20 +512,26 @@ def execute_deployment(config):
     if success:
         print(f"\n{COLORS['GREEN']}Deployment completed successfully!{COLORS['RESET']}")
         
+        # ALWAYS generate deployment information for successful deployments
+        deployment_info_log = generate_deployment_info(config, success=True)
+        print(f"\n{COLORS['CYAN']}Deployment information saved to: {deployment_info_log}{COLORS['RESET']}")
+        
         # Explicitly handle SSH after deployment if requested
-        if config.get('ssh_after_deploy', False):
+        if config.get('ssh_after_deploy', True):  # Default to True if not specified
             print(f"\n{COLORS['BLUE']}Connecting to instance via SSH...{COLORS['RESET']}")
             ssh_to_instance(config)
     else:
         print(f"\n{COLORS['RED']}Deployment failed.{COLORS['RESET']}")
+        deployment_info_log = generate_deployment_info(config, success=False)
+        print(f"\n{COLORS['YELLOW']}Deployment information saved to: {deployment_info_log}{COLORS['RESET']}")
     
     input("\nPress Enter to return to menu...")
     # Clean up shared infrastructure state file if present
     try:
-        state_file = os.path.join(os.getcwd(), 'infrastructure_state.json')
+        state_file = os.path.join(os.getcwd(), f'infrastructure_state_{config["deployment_id"]}.json')
         if os.path.exists(state_file):
             os.remove(state_file)
-            logging.info('Removed shared infrastructure state file')
+            logging.info(f'Removed shared infrastructure state file: {state_file}')
     except Exception as e:
         logging.warning(f'Failed to remove infra state file: {e}')
 
@@ -1503,13 +1510,17 @@ def ssh_to_instance(config):
     logging.info("Connecting to instance via SSH...")
     
     # Determine which IP to use based on deployment type
-    if config.get('deploy_tracker'):
-        ip_key = 'tracker_ip'
-        instance_type = 'tracker'
-    elif config.get('redirector_only'):
+    if config.get('redirector_only', False):
         ip_key = 'redirector_ip'
         instance_type = 'redirector'
+    elif config.get('c2_only', False):
+        ip_key = 'c2_ip'
+        instance_type = 'C2 server'
+    elif config.get('deploy_tracker', False) and not config.get('integrated_tracker', False):
+        ip_key = 'tracker_ip'
+        instance_type = 'tracker'
     else:
+        # Default to C2 server for full deployments
         ip_key = 'c2_ip'
         instance_type = 'C2 server'
     
@@ -1526,18 +1537,35 @@ def ssh_to_instance(config):
     
     if not ip:
         logging.error(f"No IP address found for {instance_type}")
+        print(f"{COLORS['RED']}No IP address found for {instance_type}. Cannot SSH.{COLORS['RESET']}")
         return False
     
     # Get SSH key and user
     ssh_key = config.get('ssh_key')
     if not ssh_key:
         logging.error("No SSH key specified")
+        print(f"{COLORS['RED']}No SSH key specified. Cannot SSH.{COLORS['RESET']}")
         return False
     
-    ssh_user = config.get('ssh_user')
-    if not ssh_user:
-        logging.error("No SSH user specified")
-        return False
+    # Get SSH user based on provider and instance type
+    if config.get('ssh_user'):
+        ssh_user = config.get('ssh_user')
+    elif config['provider'] == 'aws':
+        ssh_user = config.get('ami_ssh_user', 'kali')
+    elif config['provider'] == 'linode':
+        ssh_user = 'root'
+    else:
+        ssh_user = DEFAULT_SSH_USER.get(config['provider'], 'root')
+    
+    # Print SSH connection information
+    print(f"\n{COLORS['CYAN']}SSH Connection Information:{COLORS['RESET']}")
+    print(f"  Host: {ip}")
+    print(f"  User: {ssh_user}")
+    print(f"  Key:  {ssh_key}")
+    print(f"\n{COLORS['YELLOW']}Manual SSH command:{COLORS['RESET']}")
+    print(f"  ssh -i {ssh_key} {ssh_user}@{ip}")
+    
+    print(f"\n{COLORS['BLUE']}Attempting to connect now...{COLORS['RESET']}")
     
     # Build SSH command
     ssh_cmd = [
@@ -1547,15 +1575,12 @@ def ssh_to_instance(config):
         "-o", "UserKnownHostsFile=/dev/null",
         "-o", "IdentitiesOnly=yes",
         "-i", ssh_key,
-        f"{ssh_user}@{ip}",
-        "tmux new"
+        f"{ssh_user}@{ip}"
     ]
     
     # Add port if specified
     if config.get('ssh_port'):
         ssh_cmd.extend(["-p", str(config['ssh_port'])])
-    
-    logging.info(f"SSH command: {' '.join(ssh_cmd)}")
     
     # Execute SSH command
     try:
@@ -1563,9 +1588,11 @@ def ssh_to_instance(config):
         return True
     except subprocess.CalledProcessError as e:
         logging.error(f"SSH connection failed: {e}")
+        print(f"{COLORS['RED']}SSH connection failed: {e}{COLORS['RESET']}")
         return False
     except KeyboardInterrupt:
         logging.info("SSH connection interrupted by user")
+        print(f"\n{COLORS['YELLOW']}SSH connection interrupted by user{COLORS['RESET']}")
         return True
 
 def cleanup_resources(config, interactive=True):
@@ -1904,7 +1931,16 @@ def generate_deployment_info(config, success=True):
     info.append("SERVER INFORMATION")
     info.append("-----------------")
     ssh_key = config.get('ssh_key', 'N/A')
-    ssh_user = config.get('ssh_user', 'root')
+    
+    # Determine SSH user based on provider
+    if config.get('ssh_user'):
+        ssh_user = config.get('ssh_user')
+    elif config.get('provider') == 'aws':
+        ssh_user = config.get('ami_ssh_user', 'kali')
+    elif config.get('provider') == 'linode':
+        ssh_user = 'root'
+    else:
+        ssh_user = DEFAULT_SSH_USER.get(config.get('provider', 'aws'), 'root')
     
     if not config.get('c2_only'):
         redirector_ip = config.get('redirector_ip', 'N/A')
@@ -2033,9 +2069,9 @@ def generate_deployment_info(config, success=True):
     info.append("---------------")
     info.append(f"python3 deploy.py --provider {config.get('provider', 'PROVIDER')} --c2-name {config.get('c2_name', 'C2_NAME')} --redirector-name {config.get('redirector_name', 'REDIRECTOR_NAME')} --teardown")
     if config.get('provider') == 'linode':
-        info.append(f"Additional parameters: --linode-token YOUR_TOKEN --c2-name {config.get('c2_name', 'C2_NAME')} --redirector-name {config.get('redirector_name', 'REDIRECTOR_NAME')}")
+        info.append(f"Additional parameters: --linode-token YOUR_TOKEN")
     elif config.get('provider') == 'aws':
-        info.append(f"Additional parameters: --aws-key YOUR_KEY --aws-secret YOUR_SECRET --c2-name {config.get('c2_name', 'C2_NAME')} --redirector-name {config.get('redirector_name', 'REDIRECTOR_NAME')}")
+        info.append(f"Additional parameters: --aws-key YOUR_KEY --aws-secret YOUR_SECRET")
     
     # Write to file
     with open(log_file, 'w') as f:

@@ -161,7 +161,7 @@
     group: "{{ ansible_user }}"
     mode: '0644'
   vars:
-    gophish_admin_port: 8088
+    gophish_admin_port: "{{ gophish_admin_port }}"
     domain: "{{ domain }}"
 
 - name: Set proper ownership for Tools directory

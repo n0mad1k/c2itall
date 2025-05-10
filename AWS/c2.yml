@@ -262,11 +262,29 @@
         ansible_ssh_private_key_file: "~/.ssh/c2deploy_{{ deployment_id }}.pem"
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes"
         ansible_python_interpreter: "/usr/bin/python3"
+        # Add these lines to pass all required variables:
+        smtp_auth_user: "{{ smtp_auth_user }}"
+        smtp_auth_pass: "{{ smtp_auth_pass }}"
+        gophish_admin_port: "{{ gophish_admin_port }}"
+        domain: "{{ domain }}"
+        redirector_subdomain: "{{ redirector_subdomain }}"
+        letsencrypt_email: "{{ letsencrypt_email }}"
+        havoc_teamserver_port: "{{ havoc_teamserver_port | default(40056) }}"
+        havoc_http_port: "{{ havoc_http_port | default(8080) }}"
+        havoc_https_port: "{{ havoc_https_port | default(443) }}"
+        zero_logs: "{{ zero_logs | default(true) }}"
+        secure_memory: "{{ secure_memory | default(true) }}"
+        disable_history: "{{ disable_history | default(true) }}"
+        setup_integrated_tracker: "{{ setup_integrated_tracker | default(false) }}"
+        tracker_domain: "{{ tracker_domain | default('track.' + domain) | default('') }}"
 
 # Configure C2 server with a proper structure
 - name: Configure C2 server
   hosts: c2servers
   become: yes
+  gather_facts: true
+  vars_files:
+    - vars.yaml  # Add this line to load the variables
   vars:
     redirector_ip: "{{ hostvars['localhost']['redirector_ip'] | default('127.0.0.1') }}"
     c2_subdomain: "{{ c2_subdomain | default('mail') }}"
