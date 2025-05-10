@@ -128,5 +128,4 @@
           - "-------------------------------"
           - "Redirector IP: {{ ansible_host }}"
           - "Redirector Domain: {{ redirector_subdomain }}.{{ domain }} (Update DNS A record)"
-          - "Shell Handler Port: {{ shell_handler_port }}"
       when: not disable_summary | default(false)

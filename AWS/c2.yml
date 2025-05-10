@@ -9,7 +9,7 @@
     - vars.yaml
   vars:
     # Default values
-    ssh_user: "{{ ssh_user | default('root') }}"
+    ssh_user: "{{ ssh_user | default('kali') }}"
     aws_region: "{{ aws_region | default(aws_region_choices | random) }}"
     instance_type: "{{ aws_instance_type | default('t2.medium') }}"
     deployment_id: "{{ deployment_id | default('') }}"
@@ -17,6 +17,10 @@
     # Check for shared infrastructure
     # Only use shared when C2 and redirector are in the same region
     use_shared_infra: "{{ not (c2_region is defined and redirector_region is defined and c2_region != redirector_region) and not c2_only | default(false) | bool and not redirector_only | default(false) | bool }}"
+    # AMI map comes from vars.yaml - add fallback for safety
+    kali_ami_map_fallback:
+      us-east-1: "ami-061b17d332829ab1c"
+      us-east-2: "ami-061b17d332829ab1c"  # Fallback to us-east-1 AMI
 
   tasks:
     - name: Validate AWS credentials
@@ -29,13 +33,13 @@
     # Load shared infrastructure state if available
     - name: Check for shared infrastructure state
       stat:
-        path: "infrastructure_state.json"
+        path: "infrastructure_state_{{ deployment_id }}.json"
       register: infra_state_file
       when: use_shared_infra | bool
       
     - name: Load shared infrastructure state
       include_vars:
-        file: "infrastructure_state.json"
+        file: "infrastructure_state_{{ deployment_id }}.json"
         name: shared_infra
       when: use_shared_infra | bool and infra_state_file.stat.exists | default(false)
       
@@ -48,16 +52,31 @@
       set_fact:
         aws_c2_region: "{{ c2_region | default(aws_region) }}"
       when: not (use_shared_infra | bool and infra_state_file.stat.exists | default(false))
-      
-    - name: Set AMI ID for selected region
+
+    - name: Check if ami_map is provided in vars.yaml
+      debug:
+        msg: "ami_map is {{ 'defined' if ami_map is defined else 'NOT defined' }} in vars.yaml"
+
+    - name: Set AMI ID for selected region (from vars.yaml)
       set_fact:
-        ami_id: "{{ ami_map[aws_c2_region] }}"
-      when: ami_map is defined and aws_c2_region in ami_map
+        ami_id: "{{ ami_map[aws_c2_region] | default(ami_map.us-east-1) }}"
+      when: ami_map is defined and ami_map
+
+    - name: Set AMI ID for selected region (fallback)
+      set_fact:
+        ami_id: "{{ kali_ami_map_fallback[aws_c2_region] | default(kali_ami_map_fallback['us-east-1']) }}"
+      when: ami_id is not defined or ami_id == ""
+
+    - name: Ensure we have a valid AMI ID
+      assert:
+        that:
+          - ami_id is defined and ami_id != ""
+        fail_msg: "Could not determine a valid AMI ID for region {{ aws_c2_region }}. Please add it to ami_map in vars.yaml."
 
     # Add AMI username mapping - improved with better detection
     - name: Determine correct SSH user for the AMI
       set_fact:
-        ami_ssh_user: "{{ 'root' if (ami_id is defined and ami_id is search('-root-')) or (ami_id is defined and ami_id == 'ami-061b17d332829ab1c') else 'ubuntu' }}"
+        ami_ssh_user: "{{ 'kali' if (ami_id is defined and ami_id is search('-kali-')) or (ami_id is defined and ami_id == 'ami-061b17d332829ab1c') else 'ubuntu' }}"
 
     - name: Display AMI and user information for debugging
       debug:

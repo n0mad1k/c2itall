@@ -21,7 +21,7 @@ deployment_id = None
 # Constants for providers
 PROVIDERS = ["aws", "linode", "flokinet"]
 DEFAULT_SSH_USER = {
-    "aws": "root",
+    "aws": "kali",
     "linode": "root",
     "flokinet": "root"
 }
@@ -375,7 +375,7 @@ def gather_common_parameters():
     config['zero_logs'] = input("Enable zero-logs configuration? (y/n) [default: y]: ").lower() != 'n'
     
     # Add SSH option that was missing
-    config['ssh_after_deploy'] = input("\nSSH into instance after deployment? (y/n) [default: n]: ").lower() == 'y'
+    config['ssh_after_deploy'] = input("\nSSH into instance after deployment? (y/n) [default: y]: ").lower() == 'y'
     
     return config
 
@@ -519,6 +519,14 @@ def execute_deployment(config):
         print(f"\n{COLORS['RED']}Deployment failed.{COLORS['RESET']}")
     
     input("\nPress Enter to return to menu...")
+    # Clean up shared infrastructure state file if present
+    try:
+        state_file = os.path.join(os.getcwd(), 'infrastructure_state.json')
+        if os.path.exists(state_file):
+            os.remove(state_file)
+            logging.info('Removed shared infrastructure state file')
+    except Exception as e:
+        logging.warning(f'Failed to remove infra state file: {e}')
 
 def generate_random_string(length=8):
     """Generate a random string of letters and digits."""
@@ -526,8 +534,11 @@ def generate_random_string(length=8):
 
 def generate_deployment_id():
     """Generate a consistent deployment ID for all resources in this deployment"""
-    rand_suffix = generate_random_string(6)
-    return f"{rand_suffix}"
+    global deployment_id
+    if not deployment_id:
+        rand_suffix = generate_random_string(6)
+        deployment_id = f"{rand_suffix}"
+    return deployment_id
 
 def setup_logging(deployment_id=None):
     """Set up logging for the deployment"""
@@ -864,7 +875,7 @@ def interactive_setup(deployment_id=None):
         config['tracker_create_pixel'] = input("Create tracking pixel? (y/n) [default: y]: ").lower() != 'n'
     
     # Post-deployment options
-    config['ssh_after_deploy'] = input("\nSSH into instance after deployment? (y/n) [default: n]: ").lower() == 'y'
+    config['ssh_after_deploy'] = input("\nSSH into instance after deployment? (y/n) [default: y]: ").lower() == 'y'
     
     # Debug mode
     config['debug'] = input("Enable debug mode? (y/n) [default: n]: ").lower() == 'y'
@@ -1326,6 +1337,8 @@ def deploy_infrastructure(config):
                 logging.error(f"{provider} redirector deployment failed")
                 if redirector_config.get('debug'):
                     logging.error(f"Ansible stderr: {stderr}")
+# Run cleanup before returning
+                cleanup_resources(config, interactive=True)
                 return False
                 
             # Extract and save redirector IP for C2 configuration
@@ -1353,6 +1366,8 @@ def deploy_infrastructure(config):
                 logging.error(f"{provider} C2 server deployment failed")
                 if c2_config.get('debug'):
                     logging.error(f"Ansible stderr: {stderr}")
+# Run cleanup before returning
+                cleanup_resources(config, interactive=True)
                 return False
                 
             # Extract and save C2 IP for reference
@@ -1367,7 +1382,8 @@ def deploy_infrastructure(config):
             logging.error(traceback.format_exc())
         
         # Clean up any partial resources that were created
-        cleanup_resources(config, interactive=True)
+# Force interactive to False to ensure cleanup runs without prompting when there's an exception
+        cleanup_resources(config, interactive=False)
         return False
 
 def deploy_flokinet_redirector(config):
@@ -2212,7 +2228,7 @@ def main():
             if args.provider == "linode":
                 config['ssh_user'] = "root"
             elif args.provider == "aws":
-                config['ssh_user'] = "root"
+                config['ssh_user'] = "kali"
             else:
                 if hasattr(args, 'ssh_user'):
                     config['ssh_user'] = args.ssh_user or vars_data.get('ssh_user') or DEFAULT_SSH_USER.get(args.provider)

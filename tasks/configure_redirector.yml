@@ -97,10 +97,12 @@
     replace: 'C2_HOST="{{ c2_ip }}"'
 
 - name: Configure shell handler script with listening port
-  replace:
-    path: /root/Tools/shell-handler/persistent-listener.sh
-    regexp: 'LISTEN_PORT=4444'
-    replace: 'LISTEN_PORT={{ shell_handler_port }}'
+  template:
+    src: "../files/havoc_shell_handler.sh"
+    dest: "/root/Tools/shell_handler.sh"
+    mode: 0755
+  vars:
+    listen_port: "{{ shell_handler_port | default(8083) }}"
 
 - name: Create shell handler service
   template:

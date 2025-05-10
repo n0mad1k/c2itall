@@ -14,7 +14,8 @@
     instance_type: "{{ aws_instance_type | default('t2.micro') }}"
     deployment_id: "{{ deployment_id | default('') }}"
     redirector_name: "{{ redirector_name | default('r-' + deployment_id) }}"
-    shell_handler_port: "{{ shell_handler_port | default(4000 + 60000 | random) }}"
+    # Calculate effective port: use shell_handler_port from vars or default to 8083
+    effective_listen_port: "{{ shell_handler_port | default(8083) }}"
     # Check for shared infrastructure
     # Only use shared when C2 and redirector are in the same region
     use_shared_infra: "{{ not (c2_region is defined and redirector_region is defined and c2_region != redirector_region) and not c2_only | default(false) | bool and not redirector_only | default(false) | bool }}"
@@ -43,16 +44,37 @@
     # Load shared infrastructure state if available
     - name: Check for shared infrastructure state
       stat:
-        path: "infrastructure_state.json"
+        path: "infrastructure_state_{{ deployment_id }}.json"
       register: infra_state_file
       when: use_shared_infra | bool
       
     - name: Load shared infrastructure state
       include_vars:
-        file: "infrastructure_state.json"
+        file: "infrastructure_state_{{ deployment_id }}.json"
         name: shared_infra
       when: use_shared_infra | bool and infra_state_file.stat.exists | default(false)
-      
+
+    # After loading shared infrastructure state
+    - name: Validate shared VPC exists
+      amazon.aws.ec2_vpc_net_info:
+        region: "{{ shared_infra.region }}"
+        vpc_ids:
+          - "{{ shared_infra.vpc_id }}"
+      register: vpc_check
+      when: use_shared_infra | bool and infra_state_file.stat.exists | default(false)
+      ignore_errors: yes
+
+    - name: Delete stale infrastructure state file
+      file:
+        path: "infrastructure_state.json"
+        state: absent
+      when: use_shared_infra | bool and vpc_check.vpcs is defined and vpc_check.vpcs | length == 0
+
+    - name: Disable shared infrastructure when VPC doesn't exist
+      set_fact:
+        use_shared_infra: false
+      when: use_shared_infra | bool and vpc_check.vpcs is defined and vpc_check.vpcs | length == 0
+
     - name: Set region for redirector from shared infra
       set_fact:
         aws_redirector_region: "{{ shared_infra.region | default(aws_region) }}"
@@ -148,12 +170,6 @@
         redirector_vpc_id: "{{ vpc_result.vpc.id }}"  # Store for cleanup reference
       when: not (use_shared_infra | bool and infra_state_file.stat.exists | default(false))
 
-    # Set a random shell handler port if not defined
-    - name: Set random shell handler port if not defined
-      set_fact:
-        shell_handler_port: "{{ 4000 + 59000 | random }}"
-      when: shell_handler_port is not defined
-
     # Create security group
     - name: Create security group
       amazon.aws.ec2_security_group:
@@ -167,13 +183,27 @@
               - 22
               - 80
               - 443
-              - "{{ shell_handler_port }}"
+              - "{{ effective_listen_port }}"
             cidr_ip: 0.0.0.0/0
         rules_egress:
           - proto: -1
             cidr_ip: 0.0.0.0/0
         state: present
       register: security_group
+
+   # Save infrastructure state for reuse
+    - name: Save infrastructure state for reuse
+      copy:
+        content: |
+          {
+            "vpc_id": "{{ vpc_id }}",
+            "subnet_id": "{{ subnet_id }}",
+            "security_group_id": "{{ security_group.group_id }}",
+            "region": "{{ aws_redirector_region }}",
+            "deployment_id": "{{ deployment_id }}"
+          }
+        dest: "infrastructure_state_{{ deployment_id }}.json"
+      when: not (use_shared_infra | bool and infra_state_file.stat.exists | default(false))
 
     # Launch the redirector
     - name: Launch redirector instance
@@ -215,6 +245,7 @@
         ansible_ssh_private_key_file: "~/.ssh/{{ redirector_name }}.pem"
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes"
         ansible_python_interpreter: "/usr/bin/python3"
+        shell_handler_port: "{{ effective_listen_port }}"
 
 # Rest of the playbook for configuring the redirector
 - name: Configure redirector
@@ -225,11 +256,20 @@
     - vars.yaml
   vars:
     c2_ip: "{{ hostvars['localhost']['c2_ip'] | default('127.0.0.1') }}"
+    shell_handler_port: "{{ hostvars['localhost']['effective_listen_port'] }}"
     
   # Include the rest of your redirector configuration tasks here
   tasks:    
     - name: Include common redirector configuration tasks
       include_tasks: "../tasks/configure_redirector.yml"
+      
+    - name: Configure shell handler script with listening port
+      template:
+        src: "../files/havoc_shell_handler.sh"
+        dest: "/root/Tools/shell_handler.sh"
+        mode: 0755
+      vars:
+        listen_port: "{{ effective_listen_port }}"
       
     - name: Print deployment summary
       debug:
