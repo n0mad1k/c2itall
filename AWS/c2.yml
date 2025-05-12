@@ -181,7 +181,7 @@
               - 443
               - "{{ havoc_teamserver_port | default(40056) }}"
               - "{{ havoc_http_port | default(8080) }}"
-              - "{{ gophish_admin_port | default(3333) }}"
+              - "{{ gophish_admin_port }}"
             cidr_ip: 0.0.0.0/0
         rules_egress:
           - proto: -1

@@ -547,14 +547,16 @@ def generate_deployment_id():
         deployment_id = f"{rand_suffix}"
     return deployment_id
 
-def setup_logging(deployment_id=None):
-    """Set up logging for the deployment"""
+def setup_logging(deployment_id=None, operation_type="deployment"):
+    """Set up logging for the deployment or teardown"""
     log_dir = "logs"
     os.makedirs(log_dir, exist_ok=True)
     
-    # ALWAYS use the provided deployment_id - don't generate a new one
-    # This is the key change to ensure consistency
-    log_file = os.path.join(log_dir, f"deployment_{deployment_id}.log")
+    # Create distinct log files for deployment vs teardown operations
+    if operation_type == "teardown":
+        log_file = os.path.join(log_dir, f"teardown_{deployment_id}.log")
+    else:
+        log_file = os.path.join(log_dir, f"deployment_{deployment_id}.log")
     
     # Configure file handler to log DEBUG and above
     logging.basicConfig(
@@ -570,19 +572,22 @@ def setup_logging(deployment_id=None):
     console.setFormatter(formatter)
     logging.getLogger('').addHandler(console)
     
-    logging.info("Deployment started")
+    logging.info(f"{operation_type.capitalize()} operation started")
     logging.info(f"Deployment ID: {deployment_id}")
     return log_file
 
 def parse_arguments():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(
-        description='C2itAll - Red Team Infrastructure Setup',
+        description='C2ingRed - Red Team Infrastructure Setup',
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
     # Provider selection
     parser.add_argument('-p', '--provider', choices=PROVIDERS, default=None, help='Provider to use for deployment')
+    
+    # Add deployment-id as a top-level argument
+    parser.add_argument('--deployment-id', help='Deployment ID for resource identification and teardown')
     
     # AWS-specific arguments
     parser.add_argument('--aws-key', help='AWS access key')
@@ -603,8 +608,8 @@ def parse_arguments():
     parser.add_argument('--ssh-user', help='SSH username (default: provider-specific)')
     parser.add_argument('--size', help='Size of the instance (default: provider-specific)')
     parser.add_argument('--region', help='Generic region parameter')
-    parser.add_argument('--redirector-name', help='Name for the redirector instance (default: random)')
-    parser.add_argument('--c2-name', help='Name for the C2 instance (default: random)')
+    parser.add_argument('--redirector-name', help='Name for the redirector instance (default: based on deployment-id)')
+    parser.add_argument('--c2-name', help='Name for the C2 instance (default: based on deployment-id)')
     parser.add_argument('--redirector-subdomain', default='cdn', help='Subdomain for the redirector (default: cdn)')
     parser.add_argument('--c2-subdomain', default='mail', help='Subdomain for the C2 server (default: mail)')
     parser.add_argument('--redirector-provider', choices=PROVIDERS, help='Provider to use for redirector (if different from primary provider)')
@@ -613,39 +618,59 @@ def parse_arguments():
     parser.add_argument('--c2-region', help='Region for C2 deployment (can be different from redirector)')
     
     # Common arguments
-    parser.add_argument('--teardown', action='store_true', help='Tear down existing infrastructure')
-    parser.add_argument('--redirector-only', action='store_true', help='Deploy only the redirector')
-    parser.add_argument('--c2-only', action='store_true', help='Deploy only the C2 server')
-    parser.add_argument('--debug', action='store_true', help='Enable debug mode for verbose output')
     parser.add_argument('--domain', help='Domain name for the C2 infrastructure')
     parser.add_argument('--letsencrypt-email', help='Email for Let\'s Encrypt certificate')
     
-    # OPSEC settings
-    parser.add_argument('--disable-history', action='store_true', help='Disable command history on the servers')
-    parser.add_argument('--secure-memory', action='store_true', help='Enable secure memory settings')
-    parser.add_argument('--zero-logs', action='store_true', help='Enable zero-logs configuration')
+    # Teardown and cleanup options
+    teardown_group = parser.add_argument_group('Teardown Options')
+    teardown_group.add_argument('--teardown', action='store_true', help='Tear down existing infrastructure')
+    teardown_group.add_argument('--force', action='store_true', help='Force teardown without confirmation')
     
-    # Post-deployment options
-    parser.add_argument('--ssh-after-deploy', action='store_true', help='SSH into the instance after deployment')
-    parser.add_argument('--copy-ssh-key', action='store_true', help='Copy SSH key to the server for passwordless login')
+    # Deployment type options
+    deployment_group = parser.add_argument_group('Deployment Type')
+    deployment_group.add_argument('--redirector-only', action='store_true', help='Deploy only the redirector')
+    deployment_group.add_argument('--c2-only', action='store_true', help='Deploy only the C2 server')
     
-    # Test options
+    # Debug and testing
+    parser.add_argument('--debug', action='store_true', help='Enable debug mode for verbose output')
     parser.add_argument('--run-tests', action='store_true', help='Run deployment tests')
     
+    # OPSEC settings
+    opsec_group = parser.add_argument_group('OPSEC Settings')
+    opsec_group.add_argument('--disable-history', action='store_true', help='Disable command history on the servers')
+    opsec_group.add_argument('--secure-memory', action='store_true', help='Enable secure memory settings')
+    opsec_group.add_argument('--zero-logs', action='store_true', help='Enable zero-logs configuration')
+    opsec_group.add_argument('--randomize-ports', action='store_true', help='Randomize service ports for better OPSEC')
+    
+    # Post-deployment options
+    post_group = parser.add_argument_group('Post-Deployment')
+    post_group.add_argument('--ssh-after-deploy', action='store_true', help='SSH into the instance after deployment')
+    post_group.add_argument('--copy-ssh-key', action='store_true', help='Copy SSH key to the server for passwordless login')
+    
     # Tracker deployment options
-    parser.add_argument('--deploy-tracker', action='store_true', help='Deploy phishing email tracking server')
-    parser.add_argument('--integrated-tracker', action='store_true', help='Deploy tracker on C2 server instead of separate instance')
-    parser.add_argument('--tracker-domain', help='Domain name for the tracker server')
-    parser.add_argument('--tracker-email', help='Email for Let\'s Encrypt certificate for tracker')
-    parser.add_argument('--tracker-name', help='Name for tracker instance (default: random)')
-    parser.add_argument('--tracker-ipinfo-token', help='IPinfo.io API token for geolocation')
-    parser.add_argument('--tracker-setup-ssl', action='store_true', help='Set up SSL for tracker')
-    parser.add_argument('--tracker-create-pixel', action='store_true', help='Create tracking pixel')
+    tracker_group = parser.add_argument_group('Email Tracker')
+    tracker_group.add_argument('--deploy-tracker', action='store_true', help='Deploy phishing email tracking server')
+    tracker_group.add_argument('--integrated-tracker', action='store_true', help='Deploy tracker on C2 server instead of separate instance')
+    tracker_group.add_argument('--tracker-domain', help='Domain name for the tracker server')
+    tracker_group.add_argument('--tracker-email', help='Email for Let\'s Encrypt certificate for tracker')
+    tracker_group.add_argument('--tracker-name', help='Name for tracker instance (default: based on deployment-id)')
+    tracker_group.add_argument('--tracker-ipinfo-token', help='IPinfo.io API token for geolocation')
+    tracker_group.add_argument('--tracker-setup-ssl', action='store_true', help='Set up SSL for tracker')
     
     # Interactive mode
     parser.add_argument('--interactive', action='store_true', help='Run in interactive wizard mode')
     
-    return parser.parse_args()
+    args = parser.parse_args()
+    
+    # Validate teardown requirements
+    if args.teardown and (not args.provider or not args.deployment_id):
+        parser.error("--teardown requires both --provider and --deployment-id to be specified")
+    
+    # Override provider if --flokinet is specified
+    if args.flokinet:
+        args.provider = "flokinet"
+    
+    return args
 
 
 def interactive_setup(deployment_id=None):
@@ -1563,7 +1588,7 @@ def ssh_to_instance(config):
     print(f"  User: {ssh_user}")
     print(f"  Key:  {ssh_key}")
     print(f"\n{COLORS['YELLOW']}Manual SSH command:{COLORS['RESET']}")
-    print(f"  ssh -i {ssh_key} {ssh_user}@{ip}")
+    print(f"  ssh -i {ssh_key} {ssh_user}@{ip} -t tmux")
     
     print(f"\n{COLORS['BLUE']}Attempting to connect now...{COLORS['RESET']}")
     
@@ -1775,55 +1800,203 @@ def check_dependencies():
             sys.exit(1)
 
 def teardown_infrastructure(config):
-    """Tear down existing infrastructure"""
+    """Tear down existing infrastructure with just provider and deployment_id"""
     provider = config['provider']
-    provider_dir = PROVIDER_DIRS.get(provider, provider.upper())
-    logging.info(f"Tearing down {provider} infrastructure...")
+    deployment_id = config['deployment_id']
+    
+    # Ensure we have the correct provider directory
+    provider_dir = PROVIDER_DIRS.get(provider, provider.capitalize())
+    logging.info(f"Tearing down {provider} infrastructure for deployment ID {deployment_id}...")
+    
+    # Load credentials from vars.yaml if not provided
+    vars_file = f"{provider_dir}/vars.yaml"
+    vars_data = {}
+    if os.path.exists(vars_file):
+        try:
+            with open(vars_file, 'r') as f:
+                vars_data = yaml.safe_load(f) or {}
+            logging.info(f"Loaded configuration from {vars_file}")
+        except Exception as e:
+            logging.warning(f"Failed to load {vars_file}: {e}")
     
     # Set provider-specific environment variables
     if provider == "aws":
         if config.get('aws_access_key'):
             os.environ['AWS_ACCESS_KEY_ID'] = config['aws_access_key']
+        elif vars_data.get('aws_access_key'):
+            os.environ['AWS_ACCESS_KEY_ID'] = vars_data['aws_access_key']
+            config['aws_access_key'] = vars_data['aws_access_key']
+            
         if config.get('aws_secret_key'):
             os.environ['AWS_SECRET_ACCESS_KEY'] = config['aws_secret_key']
+        elif vars_data.get('aws_secret_key'):
+            os.environ['AWS_SECRET_ACCESS_KEY'] = vars_data['aws_secret_key']
+            config['aws_secret_key'] = vars_data['aws_secret_key']
+            
+        # Set AWS region if not specified
+        if not config.get('aws_region') and vars_data.get('aws_region_choices'):
+            config['aws_region'] = vars_data.get('aws_region', vars_data['aws_region_choices'][0])
+    
     elif provider == "linode":
         if config.get('linode_token'):
             os.environ['LINODE_TOKEN'] = config['linode_token']
+        elif vars_data.get('linode_token'):
+            os.environ['LINODE_TOKEN'] = vars_data['linode_token']
+            config['linode_token'] = vars_data['linode_token']
+    
+    # Set default resource names based on deployment ID
+    config['redirector_name'] = f"r-{deployment_id}"
+    config['c2_name'] = f"s-{deployment_id}"
+    config['tracker_name'] = f"t-{deployment_id}"
+    
+    # CRITICAL FIX: Force these parameters to ensure proper teardown
+    config['confirm_cleanup'] = "false"  # String value as Ansible expects
+    config['force'] = True
+    
+    print(f"\n{COLORS['YELLOW']}Teardown Operation{COLORS['RESET']}")
+    print(f"{COLORS['YELLOW']}============================={COLORS['RESET']}")
+    print(f"Provider:      {provider}")
+    print(f"Deployment ID: {deployment_id}")
+    print(f"Resources:")
+    print(f"  - Redirector: {config['redirector_name']}")
+    print(f"  - C2 Server:  {config['c2_name']}")
+    print(f"  - Tracker:    {config['tracker_name']}")
+    print(f"{COLORS['YELLOW']}============================={COLORS['RESET']}")
+    
+    # Quick confirmation outside of Ansible playbook
+    user_confirm = input(f"\n{COLORS['YELLOW']}Proceed with teardown? (yes/no): {COLORS['RESET']}")
+    if user_confirm.lower() != 'yes':
+        print(f"\n{COLORS['RED']}Teardown cancelled.{COLORS['RESET']}")
+        return False
     
     # Run cleanup playbook
     playbook = f"{provider_dir}/cleanup.yml"
     if os.path.exists(playbook):
-        # Set confirm_cleanup to false to skip confirmation in playbook
-        # This needs to be a plain string "false" instead of a boolean
-        config['confirm_cleanup'] = "false"
-        
-        # Create inventory for local execution
+        logging.info(f"Running cleanup playbook: {playbook}")
         inventory_path = create_inventory_file(config, "local")
         
+        # Create a temporary JSON file with all variables to ensure proper passing
+        fd, tmp_vars_file = tempfile.mkstemp(suffix='.json')
+        os.close(fd)
+        
         try:
-            success, stdout, stderr = run_ansible_playbook(
-                playbook, inventory_path, config, config.get('debug', False)
+            # Write all config variables to the temp file
+            with open(tmp_vars_file, 'w') as f:
+                json.dump(config, f)
+            
+            # Build environment variables specific to each provider
+            env = os.environ.copy()
+            if provider == "aws":
+                env["AWS_ACCESS_KEY_ID"] = config['aws_access_key']
+                env["AWS_SECRET_ACCESS_KEY"] = config['aws_secret_key']
+                env["AWS_DEFAULT_REGION"] = config.get('aws_region', 'us-east-1')
+            elif provider == "linode":
+                env["LINODE_TOKEN"] = config['linode_token']
+            
+            # Build extra ansible command line options for clarity
+            extra_cmd = []
+            if provider == "aws":
+                extra_cmd.extend([
+                    "--extra-vars", f"aws_access_key={config['aws_access_key']}",
+                    "--extra-vars", f"aws_secret_key={config['aws_secret_key']}",
+                    "--extra-vars", f"aws_region={config.get('aws_region', 'us-east-1')}",
+                ])
+            elif provider == "linode":
+                extra_cmd.extend([
+                    "--extra-vars", f"linode_token={config['linode_token']}",
+                ])
+            
+            # Always add these critical variables for teardown
+            extra_cmd.extend([
+                "--extra-vars", "confirm_cleanup=false",
+                "--extra-vars", "force=true",
+            ])
+            
+            # Run the playbook with the complete set of variables
+            cmd = [
+                "ansible-playbook",
+                "-i", inventory_path,
+                playbook,
+                "-e", f"@{tmp_vars_file}",
+            ] + extra_cmd
+            
+            # Log the command (with sanitized credentials)
+            sanitized_cmd = []
+            for i, part in enumerate(cmd):
+                if (i > 0 and cmd[i-1] in ["--extra-vars", "-e"] and 
+                    ("secret" in part.lower() or "token" in part.lower() or "key" in part.lower())):
+                    sanitized_cmd.append("[REDACTED]")
+                else:
+                    sanitized_cmd.append(part)
+                    
+            print(f"\n{COLORS['CYAN']}Running teardown command: {' '.join(sanitized_cmd)}{COLORS['RESET']}")
+            logging.info(f"Running teardown command: {' '.join(sanitized_cmd)}")
+            
+            # Execute the command
+            result = subprocess.run(
+                cmd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
             )
             
-            if success:
-                logging.info(f"Successfully tore down {provider} infrastructure")
+            # Process the results
+            if result.returncode == 0:
+                print(f"\n{COLORS['GREEN']}Teardown completed successfully!{COLORS['RESET']}")
+                logging.info(f"Successfully tore down {provider} infrastructure for deployment ID {deployment_id}")
+                
+                # Clean up SSH key files
+                ssh_key_path = f"~/.ssh/c2deploy_{deployment_id}.pem"
+                expanded_path = os.path.expanduser(ssh_key_path)
+                if os.path.exists(expanded_path):
+                    try:
+                        os.remove(expanded_path)
+                        logging.info(f"Removed SSH key: {ssh_key_path}")
+                    except Exception as e:
+                        logging.error(f"Failed to remove SSH key {ssh_key_path}: {e}")
+                        
+                # Also check for public key
+                pub_key_path = f"{expanded_path}.pub"
+                if os.path.exists(pub_key_path):
+                    try:
+                        os.remove(pub_key_path)
+                        logging.info(f"Removed SSH public key: {pub_key_path}")
+                    except Exception as e:
+                        logging.error(f"Failed to remove SSH public key {pub_key_path}: {e}")
+                
+                # Remove infrastructure state file
+                state_file = f"infrastructure_state_{deployment_id}.json"
+                if os.path.exists(state_file):
+                    try:
+                        os.remove(state_file)
+                        logging.info(f"Removed infrastructure state file: {state_file}")
+                    except Exception as e:
+                        logging.error(f"Failed to remove state file {state_file}: {e}")
+                        
+                return True
             else:
-                logging.error(f"Failed to tear down {provider} infrastructure")
-                logging.error(stderr)
-            
-            # Clean up inventory
-            if os.path.exists(inventory_path):
-                os.unlink(inventory_path)
-            
-            return success
+                print(f"\n{COLORS['RED']}Teardown failed with return code {result.returncode}.{COLORS['RESET']}")
+                print(f"\n{COLORS['YELLOW']}STDOUT:{COLORS['RESET']}\n{result.stdout}")
+                print(f"\n{COLORS['YELLOW']}STDERR:{COLORS['RESET']}\n{result.stderr}")
+                logging.error(f"Teardown failed with return code {result.returncode}")
+                logging.error(f"STDOUT: {result.stdout}")
+                logging.error(f"STDERR: {result.stderr}")
+                return False
+                
         except Exception as e:
-            logging.error(f"Teardown failed: {e}")
-            # Clean up inventory
+            print(f"\n{COLORS['RED']}Error during teardown: {str(e)}{COLORS['RESET']}")
+            logging.error(f"Teardown failed with error: {str(e)}")
+            return False
+        finally:
+            # Clean up temporary files
+            if os.path.exists(tmp_vars_file):
+                os.unlink(tmp_vars_file)
             if os.path.exists(inventory_path):
                 os.unlink(inventory_path)
-            return False
     else:
-        logging.error(f"No cleanup playbook found at {playbook}")
+        print(f"\n{COLORS['RED']}Cleanup playbook not found at {playbook}{COLORS['RESET']}")
+        logging.error(f"Cleanup playbook not found at {playbook}")
         return False
 
 def deploy_tracker(config):
@@ -2141,22 +2314,53 @@ def main():
         args = parse_arguments()
         
         # Generate a deployment ID FIRST - before any other operations
-        deployment_id = generate_deployment_id()
+        if hasattr(args, 'deployment_id') and args.deployment_id:
+            deployment_id = args.deployment_id
+        else:
+            deployment_id = generate_deployment_id()
         
         # Set up logging with our consistent deployment ID
-        log_file = setup_logging(deployment_id)
+        log_file = setup_logging(deployment_id, "deployment")
+        
+        # Set debug mode from args
+        if hasattr(args, 'debug') and args.debug:
+            debug_mode = True
+            os.environ["ANSIBLE_VERBOSITY"] = "3"
         
         # Check dependencies
         check_dependencies()
         
-        # Validate deployment mode
-        if hasattr(args, 'redirector_only') and hasattr(args, 'c2_only') and args.redirector_only and args.c2_only:
-            logging.error("Cannot specify both --redirector-only and --c2-only")
-            return
-        
         # Check if this is a teardown operation
         if hasattr(args, 'teardown') and args.teardown:
-            teardown_infrastructure(vars(args))
+            # Initialize a minimal config for teardown
+            config = {
+                'provider': args.provider,
+                'deployment_id': args.deployment_id,
+                'debug': True,  # Force debug mode for teardown
+                'force': True   # Force deletion without confirmation inside playbooks
+            }
+            
+            # Set up logging specifically for teardown operation
+            log_file = setup_logging(args.deployment_id, "teardown")
+            
+            # Add provider-specific credentials if provided
+            if args.provider == "aws":
+                if hasattr(args, 'aws_key') and args.aws_key:
+                    config['aws_access_key'] = args.aws_key
+                if hasattr(args, 'aws_secret') and args.aws_secret:
+                    config['aws_secret_key'] = args.aws_secret
+                if hasattr(args, 'aws_region') and args.aws_region:
+                    config['aws_region'] = args.aws_region
+            elif args.provider == "linode":
+                if hasattr(args, 'linode_token') and args.linode_token:
+                    config['linode_token'] = args.linode_token
+                if hasattr(args, 'linode_region') and args.linode_region:
+                    config['linode_region'] = args.linode_region
+            
+            # Execute teardown and return
+            success = teardown_infrastructure(config)
+            if not success:
+                sys.exit(1)
             return
         
         # Check if this is a test operation
@@ -2167,6 +2371,11 @@ def main():
         # Override provider if --flokinet is specified
         if hasattr(args, 'flokinet') and args.flokinet:
             args.provider = "flokinet"
+        
+        # Validate deployment mode
+        if hasattr(args, 'redirector_only') and hasattr(args, 'c2_only') and args.redirector_only and args.c2_only:
+            logging.error("Cannot specify both --redirector-only and --c2-only")
+            return
         
         # Load variables from provider-specific vars.yaml if provider is specified
         vars_data = {}
@@ -2292,12 +2501,17 @@ def main():
                 config['secure_memory'] = args.secure_memory if args.secure_memory is not None else vars_data.get('secure_memory', True)
             if hasattr(args, 'zero_logs'):
                 config['zero_logs'] = args.zero_logs if args.zero_logs is not None else vars_data.get('zero_logs', True)
+            if hasattr(args, 'randomize_ports'):
+                config['randomize_ports'] = args.randomize_ports if args.randomize_ports is not None else vars_data.get('randomize_ports', False)
             
             # Other settings from vars_data
             config['gophish_admin_port'] = vars_data.get('gophish_admin_port', str(random.randint(2000, 9000)))
             config['smtp_auth_user'] = vars_data.get('smtp_auth_user', f"user{random.randint(1000, 9999)}")
             config['smtp_auth_pass'] = vars_data.get('smtp_auth_pass', ''.join(random.choices(string.ascii_letters + string.digits, k=20)))
             config['shell_handler_port'] = vars_data.get('shell_handler_port', str(random.randint(4000, 65000)))
+            config['havoc_teamserver_port'] = vars_data.get('havoc_teamserver_port', '40056')
+            config['havoc_http_port'] = vars_data.get('havoc_http_port', '8080')
+            config['havoc_https_port'] = vars_data.get('havoc_https_port', '443')
             
             # Tracker options
             if hasattr(args, 'deploy_tracker'):
@@ -2313,8 +2527,6 @@ def main():
                         config['tracker_ipinfo_token'] = args.tracker_ipinfo_token
                     if hasattr(args, 'tracker_setup_ssl'):
                         config['tracker_setup_ssl'] = args.tracker_setup_ssl
-                    if hasattr(args, 'tracker_create_pixel'):
-                        config['tracker_create_pixel'] = args.tracker_create_pixel
                     
                     # Set the integrated tracker flag for deployment
                     if args.integrated_tracker:
@@ -2410,7 +2622,7 @@ def main():
             deployment_id = generate_deployment_id()
             
             # Set up logging
-            log_file = setup_logging(deployment_id)
+            log_file = setup_logging(deployment_id, "deployment")
             
             # Check dependencies
             check_dependencies()
