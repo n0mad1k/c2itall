@@ -89,12 +89,9 @@ def print_banner():
 
 def main_menu():
     """Display the main menu and handle user selection"""
-    global debug_mode, deployment_id
+    global debug_mode
     
     while True:
-        # Reset deployment ID for each new operation from the menu
-        deployment_id = generate_deployment_id()
-        
         clear_screen()
         print_banner()
         print(f"{COLORS['WHITE']}MAIN MENU{COLORS['RESET']}")
@@ -213,6 +210,7 @@ def deploy_full_c2():
     config['deploy_tracker'] = True
     config['integrated_tracker'] = False
     
+    # Deployment ID will be generated in execute_deployment
     execute_deployment(config)
 
 def deploy_basic_c2():
@@ -226,6 +224,7 @@ def deploy_basic_c2():
     config['deploy_tracker'] = False
     config['integrated_tracker'] = False
     
+    # Deployment ID will be generated in execute_deployment
     execute_deployment(config)
 
 def deploy_c2_server():
@@ -239,6 +238,7 @@ def deploy_c2_server():
     config['deploy_tracker'] = False
     config['integrated_tracker'] = False
     
+    # Deployment ID will be generated in execute_deployment
     execute_deployment(config)
 
 def deploy_https_redirector():
@@ -269,8 +269,7 @@ def deploy_tracker():
 
 def custom_deployment():
     """Run the full interactive deployment wizard"""
-    current_deployment_id = generate_deployment_id()
-    config = interactive_setup(current_deployment_id)
+    config = interactive_setup()
     if config:
         execute_deployment(config)
 
@@ -284,9 +283,8 @@ def gather_common_parameters():
     """Collect common parameters needed for deployments"""
     global debug_mode
     
-    # Generate a fresh deployment ID for this specific deployment
-    current_deployment_id = generate_deployment_id()
-    config = {'deployment_id': current_deployment_id}
+    # We'll generate deployment ID when executing deployment, not here
+    config = {}
     config['debug'] = debug_mode
 
     # Get provider
@@ -358,15 +356,6 @@ def gather_common_parameters():
     default_email = f"admin@{domain}"
     email = input(f"\nEnter email for Let's Encrypt [default: {default_email}]: ") or default_email
     config['letsencrypt_email'] = email
-    
-    # Set SSH key
-    config['ssh_key'] = generate_ssh_key(current_deployment_id)
-    config['ssh_key_path'] = f"{config['ssh_key']}.pub"
-    
-    # Set consistent resource names based on deployment ID
-    config['redirector_name'] = f"r-{current_deployment_id}"
-    config['c2_name'] = f"s-{current_deployment_id}"
-    config['tracker_name'] = f"t-{current_deployment_id}"
     
     # Security options
     print("\nSecurity options:")
@@ -495,6 +484,22 @@ def execute_deployment(config):
     print_banner()
     print(f"\n{COLORS['GREEN']}Starting deployment with the following configuration:{COLORS['RESET']}")
     
+    # Ensure we have a deployment ID before proceeding
+    if 'deployment_id' not in config or not config['deployment_id']:
+        config['deployment_id'] = generate_random_string(6)
+        # Set up logging for this deployment
+        log_file = setup_logging(config['deployment_id'], "deployment")
+        
+        # Create consistent resource names now that we have an ID
+        config['redirector_name'] = f"r-{config['deployment_id']}"
+        config['c2_name'] = f"s-{config['deployment_id']}"
+        config['tracker_name'] = f"t-{config['deployment_id']}"
+        
+        # Generate SSH key with the deployment ID if not provided
+        if not config.get('ssh_key'):
+            config['ssh_key'] = generate_ssh_key(config['deployment_id'])
+            config['ssh_key_path'] = f"{config['ssh_key']}.pub"
+    
     # Print configuration (excluding sensitive data)
     for key, value in config.items():
         if key not in ['aws_secret_key', 'linode_token', 'smtp_auth_pass']:
@@ -541,11 +546,8 @@ def generate_random_string(length=8):
 
 def generate_deployment_id():
     """Generate a consistent deployment ID for all resources in this deployment"""
-    global deployment_id
-    if not deployment_id:
-        rand_suffix = generate_random_string(6)
-        deployment_id = f"{rand_suffix}"
-    return deployment_id
+    rand_suffix = generate_random_string(6)
+    return f"{rand_suffix}"
 
 def setup_logging(deployment_id=None, operation_type="deployment"):
     """Set up logging for the deployment or teardown"""
@@ -562,7 +564,8 @@ def setup_logging(deployment_id=None, operation_type="deployment"):
     logging.basicConfig(
         filename=log_file,
         level=logging.DEBUG,
-        format='%(asctime)s - %(levelname)s - %(message)s'
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        force=True  # Force reconfiguration
     )
     
     # Add console handler for INFO level and above
@@ -1302,6 +1305,12 @@ def run_ansible_playbook(playbook, inventory, config, debug=False):
 
 def deploy_infrastructure(config):
     """Deploy infrastructure based on provider and configuration"""
+    # Ensure we have a deployment_id
+    if 'deployment_id' not in config or not config['deployment_id']:
+        config['deployment_id'] = generate_random_string(6)
+        # Set up logging for this deployment
+        log_file = setup_logging(config['deployment_id'], "deployment")
+    
     provider = config['provider']
     logging.info(f"Deploying {provider} infrastructure...")
     
@@ -1365,7 +1374,7 @@ def deploy_infrastructure(config):
                 logging.error(f"{provider} redirector deployment failed")
                 if redirector_config.get('debug'):
                     logging.error(f"Ansible stderr: {stderr}")
-# Run cleanup before returning
+                # Run cleanup before returning
                 cleanup_resources(config, interactive=True)
                 return False
                 
@@ -1394,7 +1403,7 @@ def deploy_infrastructure(config):
                 logging.error(f"{provider} C2 server deployment failed")
                 if c2_config.get('debug'):
                     logging.error(f"Ansible stderr: {stderr}")
-# Run cleanup before returning
+                # Run cleanup before returning
                 cleanup_resources(config, interactive=True)
                 return False
                 
@@ -1410,7 +1419,7 @@ def deploy_infrastructure(config):
             logging.error(traceback.format_exc())
         
         # Clean up any partial resources that were created
-# Force interactive to False to ensure cleanup runs without prompting when there's an exception
+        # Force interactive to False to ensure cleanup runs without prompting when there's an exception
         cleanup_resources(config, interactive=False)
         return False
 
@@ -1531,7 +1540,7 @@ def run_tests(config):
 
 
 def ssh_to_instance(config):
-    """SSH into the deployed instance"""
+    """SSH into the deployed instance with improved user detection and error handling"""
     logging.info("Connecting to instance via SSH...")
     
     # Determine which IP to use based on deployment type
@@ -1549,16 +1558,8 @@ def ssh_to_instance(config):
         ip_key = 'c2_ip'
         instance_type = 'C2 server'
     
-    # Use provider-specific IP if available
-    if config['provider'] == 'flokinet':
-        if config.get('redirector_only') and config.get('flokinet_redirector_ip'):
-            ip = config['flokinet_redirector_ip']
-        elif config.get('c2_only') and config.get('flokinet_c2_ip'):
-            ip = config['flokinet_c2_ip']
-        else:
-            ip = config.get(ip_key)
-    else:
-        ip = config.get(ip_key)
+    # Use provider-specific IP
+    ip = config.get(ip_key)
     
     if not ip:
         logging.error(f"No IP address found for {instance_type}")
@@ -1572,53 +1573,56 @@ def ssh_to_instance(config):
         print(f"{COLORS['RED']}No SSH key specified. Cannot SSH.{COLORS['RESET']}")
         return False
     
-    # Get SSH user based on provider and instance type
+    # Fix key permissions
+    os.chmod(ssh_key, 0o600)
+    
+    # Try multiple possible usernames
     if config.get('ssh_user'):
-        ssh_user = config.get('ssh_user')
+        ssh_users = [config.get('ssh_user')]
     elif config['provider'] == 'aws':
-        ssh_user = config.get('ami_ssh_user', 'kali')
+        # For AWS, try multiple common usernames
+        ssh_users = ['kali', 'ec2-user', 'ubuntu', 'root']
     elif config['provider'] == 'linode':
-        ssh_user = 'root'
+        ssh_users = ['root']
     else:
-        ssh_user = DEFAULT_SSH_USER.get(config['provider'], 'root')
+        ssh_users = [DEFAULT_SSH_USER.get(config['provider'], 'root')]
     
     # Print SSH connection information
     print(f"\n{COLORS['CYAN']}SSH Connection Information:{COLORS['RESET']}")
     print(f"  Host: {ip}")
-    print(f"  User: {ssh_user}")
     print(f"  Key:  {ssh_key}")
-    print(f"\n{COLORS['YELLOW']}Manual SSH command:{COLORS['RESET']}")
-    print(f"  ssh -i {ssh_key} {ssh_user}@{ip} -t tmux")
+    print(f"  Will try users: {', '.join(ssh_users)}")
     
-    print(f"\n{COLORS['BLUE']}Attempting to connect now...{COLORS['RESET']}")
+    # Try each SSH user until one works
+    for ssh_user in ssh_users:
+        print(f"\n{COLORS['YELLOW']}Trying SSH with user: {ssh_user}{COLORS['RESET']}")
+        print(f"  Manual SSH command: ssh -i {ssh_key} {ssh_user}@{ip} -t tmux")
+        
+        # Build SSH command
+        ssh_cmd = [
+            "ssh",
+            "-t",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "IdentitiesOnly=yes",
+            "-o", "ConnectTimeout=10",
+            "-i", ssh_key,
+            f"{ssh_user}@{ip}"
+        ]
+        
+        # Execute SSH command with timeout
+        try:
+            subprocess.run(ssh_cmd, timeout=60)
+            return True
+        except subprocess.TimeoutExpired:
+            print(f"{COLORS['YELLOW']}Connection with user {ssh_user} timed out, trying next user...{COLORS['RESET']}")
+            continue
+        except Exception as e:
+            print(f"{COLORS['YELLOW']}Connection with user {ssh_user} failed: {e}{COLORS['RESET']}")
+            continue
     
-    # Build SSH command
-    ssh_cmd = [
-        "ssh",
-        "-t",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
-        "-o", "IdentitiesOnly=yes",
-        "-i", ssh_key,
-        f"{ssh_user}@{ip}"
-    ]
-    
-    # Add port if specified
-    if config.get('ssh_port'):
-        ssh_cmd.extend(["-p", str(config['ssh_port'])])
-    
-    # Execute SSH command
-    try:
-        subprocess.run(ssh_cmd)
-        return True
-    except subprocess.CalledProcessError as e:
-        logging.error(f"SSH connection failed: {e}")
-        print(f"{COLORS['RED']}SSH connection failed: {e}{COLORS['RESET']}")
-        return False
-    except KeyboardInterrupt:
-        logging.info("SSH connection interrupted by user")
-        print(f"\n{COLORS['YELLOW']}SSH connection interrupted by user{COLORS['RESET']}")
-        return True
+    print(f"{COLORS['RED']}Failed to connect with any user. Check instance security group and key.{COLORS['RESET']}")
+    return False
 
 def cleanup_resources(config, interactive=True):
     """Clean up resources if deployment fails"""
@@ -1852,7 +1856,14 @@ def teardown_infrastructure(config):
     # CRITICAL FIX: Force these parameters to ensure proper teardown
     config['confirm_cleanup'] = "false"  # String value as Ansible expects
     config['force'] = True
-    
+        
+    if provider == "aws":
+        # Ensure VPC-related attributes exist to prevent task failures
+        if 'remaining_vpcs' not in config:
+            config['remaining_vpcs'] = {'vpcs': []}
+        elif isinstance(config['remaining_vpcs'], dict) and 'vpcs' not in config['remaining_vpcs']:
+            config['remaining_vpcs']['vpcs'] = []
+
     print(f"\n{COLORS['YELLOW']}Teardown Operation{COLORS['RESET']}")
     print(f"{COLORS['YELLOW']}============================={COLORS['RESET']}")
     print(f"Provider:      {provider}")
@@ -2152,6 +2163,9 @@ def generate_deployment_info(config, success=True):
     info.append("--------------")
     info.append(f"SSH Key: {ssh_key}")
     info.append(f"SSH User: {ssh_user}")
+    info.append(f"SSH Command for Redirector: ssh -t -o "StrictHostKeyChecking=no" -o "UserKnownHostsFile=/dev/null" -o "IdentitiesOnly=yes" -o "ConnectTimeout=10" -i {ssh_key} {ssh_user}@{config.get('redirector_ip', 'N/A')}")
+    info.append(f"SSH Command for C2: ssh -t -o "StrictHostKeyChecking=no" -o "UserKnownHostsFile=/dev/null" -o "IdentitiesOnly=yes" -o "ConnectTimeout=10" -i {ssh_key} {ssh_user}@{config.get('c2_ip', 'N/A')}")
+    info.append(f"SSH Command for Tracker: ssh -t -o "StrictHostKeyChecking=no" -o "UserKnownHostsFile=/dev/null" -o "IdentitiesOnly=yes" -o "ConnectTimeout=10" -i {ssh_key} {ssh_user}@{config.get('tracker_ip', 'N/A')}")
     if config.get('ssh_port'):
         info.append(f"SSH Port: {config.get('ssh_port')}")
     info.append("")
@@ -2240,7 +2254,7 @@ def generate_deployment_info(config, success=True):
     info.append("")
     info.append("CLEANUP COMMAND")
     info.append("---------------")
-    info.append(f"python3 deploy.py --provider {config.get('provider', 'PROVIDER')} --c2-name {config.get('c2_name', 'C2_NAME')} --redirector-name {config.get('redirector_name', 'REDIRECTOR_NAME')} --teardown")
+    info.append(f"python3 deploy.py --teardown --provider {config.get('provider', 'PROVIDER')} --deployment-id {deployment_id}")
     if config.get('provider') == 'linode':
         info.append(f"Additional parameters: --linode-token YOUR_TOKEN")
     elif config.get('provider') == 'aws':
@@ -2304,9 +2318,6 @@ def deploy_cross_provider(config, redirector_provider, c2_provider):
 def main():
     """Main function to run the deployment"""
     global debug_mode, deployment_id
-    
-    # Initialize the global deployment ID
-    deployment_id = generate_deployment_id()
     
     # Check if any command-line arguments were provided
     if len(sys.argv) > 1:
@@ -2392,7 +2403,7 @@ def main():
         
         # Handle the interactive flag
         if hasattr(args, 'interactive') and args.interactive:
-            config = interactive_setup(deployment_id)  # Pass the deployment_id here
+            config = interactive_setup()  # Don't pass deployment_id here anymore
         else:
             # Build configuration by combining args and vars_data
             config = {}
@@ -2405,24 +2416,18 @@ def main():
             if hasattr(args, 'provider'):
                 config['provider'] = args.provider
             
-            # Store the deployment ID
-            config['deployment_id'] = deployment_id  # Use our consistent deployment ID
+            # Store the deployment ID only if explicitly specified
+            if hasattr(args, 'deployment_id') and args.deployment_id:
+                config['deployment_id'] = args.deployment_id
 
-            # Use consistent deployment ID for all resource names
-            if hasattr(args, 'redirector_name'):
-                config['redirector_name'] = args.redirector_name or f"r-{deployment_id}"
-            else:
-                config['redirector_name'] = f"r-{deployment_id}"
-                
-            if hasattr(args, 'c2_name'):
-                config['c2_name'] = args.c2_name or f"s-{deployment_id}"
-            else:
-                config['c2_name'] = f"s-{deployment_id}"
-                
-            if hasattr(args, 'tracker_name'):
-                config['tracker_name'] = args.tracker_name or f"t-{deployment_id}"
-            else:
-                config['tracker_name'] = f"t-{deployment_id}"
+            # Use consistent deployment ID for all resource names only if set
+            if 'deployment_id' in config and config['deployment_id']:
+                if hasattr(args, 'redirector_name'):
+                    config['redirector_name'] = args.redirector_name or f"r-{config['deployment_id']}"
+                if hasattr(args, 'c2_name'):
+                    config['c2_name'] = args.c2_name or f"s-{config['deployment_id']}"
+                if hasattr(args, 'tracker_name'):
+                    config['tracker_name'] = args.tracker_name or f"t-{config['deployment_id']}"
             
             # Subdomain settings - ensure these are explicitly set
             if hasattr(args, 'redirector_subdomain'):
@@ -2477,11 +2482,7 @@ def main():
             # ONLY generate an SSH key if needed - not for teardown operations
             if hasattr(args, 'ssh_key'):
                 config['ssh_key'] = os.path.expanduser(args.ssh_key)
-            else:
-                # Generate a key if no key is provided and we're not in teardown mode
-                if not hasattr(args, 'teardown') or not args.teardown:
-                    config['ssh_key'] = generate_ssh_key(deployment_id)  # Use the same deployment ID
-                 
+            
             # Deployment options
             if hasattr(args, 'redirector_only'):
                 config['redirector_only'] = args.redirector_only
@@ -2539,22 +2540,6 @@ def main():
             # Run tests
             if hasattr(args, 'run_tests'):
                 config['run_tests'] = args.run_tests
-            
-            # Make sure we have the public key path if we're generating one
-            if config.get('ssh_key') and config['ssh_key'].startswith(os.path.expanduser("~/.ssh/c2deploy_")):
-                config['ssh_key_path'] = f"{config['ssh_key']}.pub"
-            elif config.get('ssh_key'):
-                config['ssh_key_path'] = f"{config['ssh_key']}.pub"
-                # Check if the public key exists
-                if not os.path.exists(config['ssh_key_path']):
-                    # Try alternative extension
-                    alt_path = f"{config['ssh_key']}.pub"
-                    if os.path.exists(alt_path):
-                        config['ssh_key_path'] = alt_path
-                    elif not hasattr(args, 'teardown'):  # Only generate new key if not in teardown mode
-                        logging.warning(f"Public key not found at {config['ssh_key_path']}. Generating a new key.")
-                        config['ssh_key'] = generate_ssh_key(deployment_id)  # Use the same deployment ID
-                        config['ssh_key_path'] = f"{config['ssh_key']}.pub"
         
         # Run deployment
         try:
@@ -2618,12 +2603,6 @@ def main():
     else:
         # No arguments - launch the interactive menu
         try:
-            # Generate a deployment ID first
-            deployment_id = generate_deployment_id()
-            
-            # Set up logging
-            log_file = setup_logging(deployment_id, "deployment")
-            
             # Check dependencies
             check_dependencies()
             
