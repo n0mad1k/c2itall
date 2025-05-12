@@ -1258,9 +1258,11 @@ def run_ansible_playbook(playbook, inventory, config, debug=False):
         "--extra-vars", "ansible_facts_callback=json"  # Get facts in JSON format
     ]
     
-    # Add verbosity if debug mode is enabled
+    # Add verbosity if debug mode is enabled - IMPORTANT CHANGE HERE
     if debug:
         cmd.append("-vvv")
+        # Set ANSIBLE_STDOUT_CALLBACK for human-readable output
+        env["ANSIBLE_STDOUT_CALLBACK"] = "debug"
     else:
         cmd.append("-v")
     
@@ -1270,38 +1272,77 @@ def run_ansible_playbook(playbook, inventory, config, debug=False):
     else:
         logging.info(f"Running Ansible playbook: {playbook}")
     
-    # Run the command
+    # Run the command - MODIFIED TO DISPLAY OUTPUT IN REAL-TIME
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             cmd, 
-            check=True, 
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE, 
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
+            bufsize=1,  # Line buffered
             env=env
         )
         
+        # Stream output in real-time
+        stdout_output = []
+        stderr_output = []
+        
+        # Create separate threads to read stdout and stderr
+        def read_output(pipe, output_list, is_stdout=True):
+            prefix = COLORS['GREEN'] if is_stdout else COLORS['RED']
+            for line in iter(pipe.readline, ''):
+                output_list.append(line)
+                # Only print if debug mode is on or if it's an important message
+                if debug or ('TASK' in line or 'PLAY' in line or 'changed=' in line or 'ok=' in line or 'failed=' in line):
+                    print(f"{prefix}{line.rstrip()}{COLORS['RESET']}")
+            pipe.close()
+        
+        from threading import Thread
+        stdout_thread = Thread(target=read_output, args=(process.stdout, stdout_output, True))
+        stderr_thread = Thread(target=read_output, args=(process.stderr, stderr_output, False))
+        
+        stdout_thread.daemon = True
+        stderr_thread.daemon = True
+        stdout_thread.start()
+        stderr_thread.start()
+        
+        # Wait for process to complete
+        return_code = process.wait()
+        
+        # Wait for output threads to complete
+        stdout_thread.join()
+        stderr_thread.join()
+        
+        # Join the output
+        stdout_result = ''.join(stdout_output)
+        stderr_result = ''.join(stderr_output)
+        
         # Extract IP addresses from output
-        if "C2 Server IP:" in result.stdout:
-            ip_match = re.search(r"C2 Server IP: ([0-9.]+)", result.stdout)
+        if "C2 Server IP:" in stdout_result:
+            ip_match = re.search(r"C2 Server IP: ([0-9.]+)", stdout_result)
             if ip_match:
                 config['c2_ip'] = ip_match.group(1)
                 logging.info(f"Extracted C2 IP: {config['c2_ip']}")
                 
-        if "Redirector IP:" in result.stdout:
-            ip_match = re.search(r"Redirector IP: ([0-9.]+)", result.stdout)
+        if "Redirector IP:" in stdout_result:
+            ip_match = re.search(r"Redirector IP: ([0-9.]+)", stdout_result)
             if ip_match:
                 config['redirector_ip'] = ip_match.group(1)
                 logging.info(f"Extracted Redirector IP: {config['redirector_ip']}")
         
-        logging.info(f"Playbook {playbook} executed successfully")
-        return True, result.stdout, result.stderr
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Playbook {playbook} failed with exit code {e.returncode}")
+        if return_code == 0:
+            logging.info(f"Playbook {playbook} executed successfully")
+            return True, stdout_result, stderr_result
+        else:
+            logging.error(f"Playbook {playbook} failed with exit code {return_code}")
+            return False, stdout_result, stderr_result
+    
+    except Exception as e:
+        logging.error(f"Error running playbook {playbook}: {e}")
         if debug:
-            logging.error(f"Command stdout: {e.stdout}")
-            logging.error(f"Command stderr: {e.stderr}")
-        return False, e.stdout, e.stderr
+            import traceback
+            logging.error(traceback.format_exc())
+        return False, "", str(e)
 
 def deploy_infrastructure(config):
     """Deploy infrastructure based on provider and configuration"""
@@ -1540,7 +1581,7 @@ def run_tests(config):
 
 
 def ssh_to_instance(config):
-    """SSH into the deployed instance with improved user detection and error handling"""
+    """SSH into the deployed instance with improved AWS key handling"""
     logging.info("Connecting to instance via SSH...")
     
     # Determine which IP to use based on deployment type
@@ -1569,6 +1610,14 @@ def ssh_to_instance(config):
     # Get SSH key and user
     ssh_key = config.get('ssh_key')
     if not ssh_key:
+        # For AWS, check for deployment_id specific keys with .pem extension
+        if config.get('provider') == 'aws' and config.get('deployment_id'):
+            potential_key = os.path.expanduser(f"~/.ssh/c2deploy_{config.get('deployment_id')}.pem")
+            if os.path.exists(potential_key):
+                ssh_key = potential_key
+                logging.info(f"Found AWS key at {ssh_key}")
+    
+    if not ssh_key:
         logging.error("No SSH key specified")
         print(f"{COLORS['RED']}No SSH key specified. Cannot SSH.{COLORS['RESET']}")
         return False
@@ -1596,7 +1645,7 @@ def ssh_to_instance(config):
     # Try each SSH user until one works
     for ssh_user in ssh_users:
         print(f"\n{COLORS['YELLOW']}Trying SSH with user: {ssh_user}{COLORS['RESET']}")
-        print(f"  Manual SSH command: ssh -i {ssh_key} {ssh_user}@{ip} -t tmux")
+        print(f"  Manual SSH command: ssh -i {ssh_key} {ssh_user}@{ip}")
         
         # Build SSH command
         ssh_cmd = [
@@ -1812,6 +1861,30 @@ def teardown_infrastructure(config):
     provider_dir = PROVIDER_DIRS.get(provider, provider.capitalize())
     logging.info(f"Tearing down {provider} infrastructure for deployment ID {deployment_id}...")
     
+    # Check for infrastructure state file first
+    infra_state_file = f"infrastructure_state_{deployment_id}.json"
+    infra_data = {}
+    
+    if os.path.exists(infra_state_file):
+        try:
+            with open(infra_state_file, 'r') as f:
+                infra_data = json.load(f)
+                logging.info(f"Loaded infrastructure state from {infra_state_file}")
+                
+            # Use the region from the state file
+            if 'region' in infra_data:
+                if provider == "aws":
+                    config['aws_region'] = infra_data['region']
+                    logging.info(f"Using region from state file: {infra_data['region']}")
+                elif provider == "linode":
+                    config['linode_region'] = infra_data['region']
+                    config['region'] = infra_data['region']
+                    logging.info(f"Using region from state file: {infra_data['region']}")
+        except Exception as e:
+            logging.warning(f"Failed to load infrastructure state file: {e}")
+    else:
+        logging.warning(f"No infrastructure state file found: {infra_state_file}")
+        
     # Load credentials from vars.yaml if not provided
     vars_file = f"{provider_dir}/vars.yaml"
     vars_data = {}
@@ -1836,38 +1909,20 @@ def teardown_infrastructure(config):
         elif vars_data.get('aws_secret_key'):
             os.environ['AWS_SECRET_ACCESS_KEY'] = vars_data['aws_secret_key']
             config['aws_secret_key'] = vars_data['aws_secret_key']
-            
-        # Set AWS region if not specified
-        if not config.get('aws_region') and vars_data.get('aws_region_choices'):
-            config['aws_region'] = vars_data.get('aws_region', vars_data['aws_region_choices'][0])
-    
-    elif provider == "linode":
-        if config.get('linode_token'):
-            os.environ['LINODE_TOKEN'] = config['linode_token']
-        elif vars_data.get('linode_token'):
-            os.environ['LINODE_TOKEN'] = vars_data['linode_token']
-            config['linode_token'] = vars_data['linode_token']
     
     # Set default resource names based on deployment ID
     config['redirector_name'] = f"r-{deployment_id}"
     config['c2_name'] = f"s-{deployment_id}"
     config['tracker_name'] = f"t-{deployment_id}"
     
-    # CRITICAL FIX: Force these parameters to ensure proper teardown
-    config['confirm_cleanup'] = "false"  # String value as Ansible expects
-    config['force'] = True
-        
-    if provider == "aws":
-        # Ensure VPC-related attributes exist to prevent task failures
-        if 'remaining_vpcs' not in config:
-            config['remaining_vpcs'] = {'vpcs': []}
-        elif isinstance(config['remaining_vpcs'], dict) and 'vpcs' not in config['remaining_vpcs']:
-            config['remaining_vpcs']['vpcs'] = []
-
     print(f"\n{COLORS['YELLOW']}Teardown Operation{COLORS['RESET']}")
     print(f"{COLORS['YELLOW']}============================={COLORS['RESET']}")
     print(f"Provider:      {provider}")
     print(f"Deployment ID: {deployment_id}")
+    if provider == "aws":
+        print(f"Region:        {config.get('aws_region', 'Unknown')}")
+    else:
+        print(f"Region:        {config.get('region', 'Unknown')}")
     print(f"Resources:")
     print(f"  - Redirector: {config['redirector_name']}")
     print(f"  - C2 Server:  {config['c2_name']}")
@@ -1883,131 +1938,88 @@ def teardown_infrastructure(config):
     # Run cleanup playbook
     playbook = f"{provider_dir}/cleanup.yml"
     if os.path.exists(playbook):
-        logging.info(f"Running cleanup playbook: {playbook}")
-        inventory_path = create_inventory_file(config, "local")
+        # Create inventory file
+        fd, inventory_path = tempfile.mkstemp(prefix="inventory_teardown_", suffix=".ini")
+        with os.fdopen(fd, 'w') as f:
+            f.write("[local]\nlocalhost ansible_connection=local\n")
+            
+        # Build the command with all necessary variables
+        cmd = [
+            "ansible-playbook",
+            "-i", inventory_path,
+            playbook,
+            "-e", f"deployment_id={deployment_id}",
+            "-e", "confirm_cleanup=false",
+            "-e", "force=true",
+            "-e", f"redirector_name=r-{deployment_id}",
+            "-e", f"c2_name=s-{deployment_id}",
+            "-e", f"tracker_name=t-{deployment_id}",
+            "-e", "cleanup_redirector=true",
+            "-e", "cleanup_c2=true",
+            "-e", "cleanup_tracker=true"
+        ]
         
-        # Create a temporary JSON file with all variables to ensure proper passing
-        fd, tmp_vars_file = tempfile.mkstemp(suffix='.json')
-        os.close(fd)
-        
-        try:
-            # Write all config variables to the temp file
-            with open(tmp_vars_file, 'w') as f:
-                json.dump(config, f)
-            
-            # Build environment variables specific to each provider
-            env = os.environ.copy()
-            if provider == "aws":
-                env["AWS_ACCESS_KEY_ID"] = config['aws_access_key']
-                env["AWS_SECRET_ACCESS_KEY"] = config['aws_secret_key']
-                env["AWS_DEFAULT_REGION"] = config.get('aws_region', 'us-east-1')
-            elif provider == "linode":
-                env["LINODE_TOKEN"] = config['linode_token']
-            
-            # Build extra ansible command line options for clarity
-            extra_cmd = []
-            if provider == "aws":
-                extra_cmd.extend([
-                    "--extra-vars", f"aws_access_key={config['aws_access_key']}",
-                    "--extra-vars", f"aws_secret_key={config['aws_secret_key']}",
-                    "--extra-vars", f"aws_region={config.get('aws_region', 'us-east-1')}",
-                ])
-            elif provider == "linode":
-                extra_cmd.extend([
-                    "--extra-vars", f"linode_token={config['linode_token']}",
-                ])
-            
-            # Always add these critical variables for teardown
-            extra_cmd.extend([
-                "--extra-vars", "confirm_cleanup=false",
-                "--extra-vars", "force=true",
+        # Add region information
+        if provider == "aws":
+            cmd.extend([
+                "-e", f"aws_access_key={config.get('aws_access_key', '')}",
+                "-e", f"aws_secret_key={config.get('aws_secret_key', '')}",
+                "-e", f"aws_region={config.get('aws_region', 'us-east-1')}"
+            ])
+        elif provider == "linode":
+            cmd.extend([
+                "-e", f"linode_token={config.get('linode_token', '')}",
+                "-e", f"region={config.get('region', '')}"
             ])
             
-            # Run the playbook with the complete set of variables
-            cmd = [
-                "ansible-playbook",
-                "-i", inventory_path,
-                playbook,
-                "-e", f"@{tmp_vars_file}",
-            ] + extra_cmd
+        # Add infra data from state file if available
+        if infra_data:
+            for key, value in infra_data.items():
+                cmd.extend(["-e", f"{key}={value}"])
+        
+        # Add verbosity
+        if debug_mode:
+            cmd.append("-vvv")
             
-            # Log the command (with sanitized credentials)
-            sanitized_cmd = []
-            for i, part in enumerate(cmd):
-                if (i > 0 and cmd[i-1] in ["--extra-vars", "-e"] and 
-                    ("secret" in part.lower() or "token" in part.lower() or "key" in part.lower())):
-                    sanitized_cmd.append("[REDACTED]")
-                else:
-                    sanitized_cmd.append(part)
-                    
-            print(f"\n{COLORS['CYAN']}Running teardown command: {' '.join(sanitized_cmd)}{COLORS['RESET']}")
-            logging.info(f"Running teardown command: {' '.join(sanitized_cmd)}")
+        try:
+            logging.info(f"Running teardown command: {' '.join(cmd)}")
             
-            # Execute the command
-            result = subprocess.run(
+            # Use subprocess.Popen for real-time output
+            process = subprocess.Popen(
                 cmd,
-                env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True
+                text=True,
+                bufsize=1  # Line buffered
             )
             
-            # Process the results
-            if result.returncode == 0:
+            # Stream output in real-time
+            for line in iter(process.stdout.readline, ''):
+                print(line.rstrip())
+            
+            # Wait for completion
+            return_code = process.wait()
+            
+            if return_code == 0:
                 print(f"\n{COLORS['GREEN']}Teardown completed successfully!{COLORS['RESET']}")
-                logging.info(f"Successfully tore down {provider} infrastructure for deployment ID {deployment_id}")
-                
-                # Clean up SSH key files
-                ssh_key_path = f"~/.ssh/c2deploy_{deployment_id}.pem"
-                expanded_path = os.path.expanduser(ssh_key_path)
-                if os.path.exists(expanded_path):
-                    try:
-                        os.remove(expanded_path)
-                        logging.info(f"Removed SSH key: {ssh_key_path}")
-                    except Exception as e:
-                        logging.error(f"Failed to remove SSH key {ssh_key_path}: {e}")
-                        
-                # Also check for public key
-                pub_key_path = f"{expanded_path}.pub"
-                if os.path.exists(pub_key_path):
-                    try:
-                        os.remove(pub_key_path)
-                        logging.info(f"Removed SSH public key: {pub_key_path}")
-                    except Exception as e:
-                        logging.error(f"Failed to remove SSH public key {pub_key_path}: {e}")
-                
-                # Remove infrastructure state file
-                state_file = f"infrastructure_state_{deployment_id}.json"
-                if os.path.exists(state_file):
-                    try:
-                        os.remove(state_file)
-                        logging.info(f"Removed infrastructure state file: {state_file}")
-                    except Exception as e:
-                        logging.error(f"Failed to remove state file {state_file}: {e}")
-                        
                 return True
             else:
-                print(f"\n{COLORS['RED']}Teardown failed with return code {result.returncode}.{COLORS['RESET']}")
-                print(f"\n{COLORS['YELLOW']}STDOUT:{COLORS['RESET']}\n{result.stdout}")
-                print(f"\n{COLORS['YELLOW']}STDERR:{COLORS['RESET']}\n{result.stderr}")
-                logging.error(f"Teardown failed with return code {result.returncode}")
-                logging.error(f"STDOUT: {result.stdout}")
-                logging.error(f"STDERR: {result.stderr}")
+                # Get any remaining error output
+                stderr = process.stderr.read()
+                print(f"\n{COLORS['RED']}Teardown failed with return code {return_code}{COLORS['RESET']}")
+                if stderr:
+                    print(f"\n{COLORS['RED']}Error output:{COLORS['RESET']}\n{stderr}")
                 return False
                 
         except Exception as e:
-            print(f"\n{COLORS['RED']}Error during teardown: {str(e)}{COLORS['RESET']}")
-            logging.error(f"Teardown failed with error: {str(e)}")
+            logging.error(f"Error running teardown command: {e}")
+            print(f"\n{COLORS['RED']}Failed to execute teardown: {e}{COLORS['RESET']}")
             return False
         finally:
-            # Clean up temporary files
-            if os.path.exists(tmp_vars_file):
-                os.unlink(tmp_vars_file)
             if os.path.exists(inventory_path):
                 os.unlink(inventory_path)
     else:
         print(f"\n{COLORS['RED']}Cleanup playbook not found at {playbook}{COLORS['RESET']}")
-        logging.error(f"Cleanup playbook not found at {playbook}")
         return False
 
 def deploy_tracker(config):
@@ -2161,11 +2173,38 @@ def generate_deployment_info(config, success=True):
     # SSH Information
     info.append("SSH INFORMATION")
     info.append("--------------")
+    # Determine correct SSH key path based on provider
+    if config.get('provider') == "aws":
+        # AWS uses .pem extension and c2deploy_[deployment_id].pem naming
+        ssh_key = f"~/.ssh/c2deploy_{deployment_id}.pem"
+    else:
+        # Use the standard key path if defined
+        ssh_key = config.get('ssh_key', f"~/.ssh/c2deploy_{deployment_id}")
+
     info.append(f"SSH Key: {ssh_key}")
+
+    # Determine SSH user based on provider
+    if config.get('ssh_user'):
+        ssh_user = config.get('ssh_user')
+    elif config.get('provider') == 'aws':
+        ssh_user = config.get('ami_ssh_user', 'kali')
+    elif config.get('provider') == 'linode':
+        ssh_user = 'root'
+    else:
+        ssh_user = DEFAULT_SSH_USER.get(config.get('provider', 'aws'), 'root')
+
     info.append(f"SSH User: {ssh_user}")
-    info.append(f"SSH Command for Redirector: ssh -t -o 'StrictHostKeyChecking=no' -o 'UserKnownHostsFile=/dev/null' -o 'IdentitiesOnly=yes' -o 'ConnectTimeout=10' -i {ssh_key} {ssh_user}@{config.get('redirector_ip', 'N/A')}")
-    info.append(f"SSH Command for C2: ssh -t -o 'StrictHostKeyChecking=no' -o 'UserKnownHostsFile=/dev/null' -o 'IdentitiesOnly=yes' -o 'ConnectTimeout=10' -i {ssh_key} {ssh_user}@{config.get('c2_ip', 'N/A')}")
-    info.append(f"SSH Command for Tracker: ssh -t -o 'StrictHostKeyChecking=no' -o 'UserKnownHostsFile=/dev/null' -o 'IdentitiesOnly=yes' -o 'ConnectTimeout=10' -i {ssh_key} {ssh_user}@{config.get('tracker_ip', 'N/A')}")
+
+    # Add correct SSH commands for each server type
+    if not config.get('redirector_only'):
+        info.append(f"SSH Command for C2: ssh -t -o 'StrictHostKeyChecking=no' -o 'UserKnownHostsFile=/dev/null' -o 'IdentitiesOnly=yes' -i {ssh_key} {ssh_user}@{config.get('c2_ip', 'N/A')}")
+
+    if not config.get('c2_only'):
+        info.append(f"SSH Command for Redirector: ssh -t -o 'StrictHostKeyChecking=no' -o 'UserKnownHostsFile=/dev/null' -o 'IdentitiesOnly=yes' -i {ssh_key} {ssh_user}@{config.get('redirector_ip', 'N/A')}")
+
+    if config.get('deploy_tracker') and not config.get('integrated_tracker'):
+        info.append(f"SSH Command for Tracker: ssh -t -o 'StrictHostKeyChecking=no' -o 'UserKnownHostsFile=/dev/null' -o 'IdentitiesOnly=yes' -i {ssh_key} {ssh_user}@{config.get('tracker_ip', 'N/A')}")
+
     if config.get('ssh_port'):
         info.append(f"SSH Port: {config.get('ssh_port')}")
     info.append("")
