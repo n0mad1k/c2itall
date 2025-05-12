@@ -2163,9 +2163,9 @@ def generate_deployment_info(config, success=True):
     info.append("--------------")
     info.append(f"SSH Key: {ssh_key}")
     info.append(f"SSH User: {ssh_user}")
-    info.append(f"SSH Command for Redirector: ssh -t -o "StrictHostKeyChecking=no" -o "UserKnownHostsFile=/dev/null" -o "IdentitiesOnly=yes" -o "ConnectTimeout=10" -i {ssh_key} {ssh_user}@{config.get('redirector_ip', 'N/A')}")
-    info.append(f"SSH Command for C2: ssh -t -o "StrictHostKeyChecking=no" -o "UserKnownHostsFile=/dev/null" -o "IdentitiesOnly=yes" -o "ConnectTimeout=10" -i {ssh_key} {ssh_user}@{config.get('c2_ip', 'N/A')}")
-    info.append(f"SSH Command for Tracker: ssh -t -o "StrictHostKeyChecking=no" -o "UserKnownHostsFile=/dev/null" -o "IdentitiesOnly=yes" -o "ConnectTimeout=10" -i {ssh_key} {ssh_user}@{config.get('tracker_ip', 'N/A')}")
+    info.append(f"SSH Command for Redirector: ssh -t -o 'StrictHostKeyChecking=no' -o 'UserKnownHostsFile=/dev/null' -o 'IdentitiesOnly=yes' -o 'ConnectTimeout=10' -i {ssh_key} {ssh_user}@{config.get('redirector_ip', 'N/A')}")
+    info.append(f"SSH Command for C2: ssh -t -o 'StrictHostKeyChecking=no' -o 'UserKnownHostsFile=/dev/null' -o 'IdentitiesOnly=yes' -o 'ConnectTimeout=10' -i {ssh_key} {ssh_user}@{config.get('c2_ip', 'N/A')}")
+    info.append(f"SSH Command for Tracker: ssh -t -o 'StrictHostKeyChecking=no' -o 'UserKnownHostsFile=/dev/null' -o 'IdentitiesOnly=yes' -o 'ConnectTimeout=10' -i {ssh_key} {ssh_user}@{config.get('tracker_ip', 'N/A')}")
     if config.get('ssh_port'):
         info.append(f"SSH Port: {config.get('ssh_port')}")
     info.append("")
