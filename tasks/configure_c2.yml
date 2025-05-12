@@ -290,6 +290,9 @@
     c2_ip: "{{ ansible_host }}"
     redirector_domain: "{{ redirector_subdomain }}.{{ domain }}"
 
+- name: Include traffic flow configuration
+  include_tasks: "../tasks/traffic_flow_config.yml"
+
 - name: Set up cron job for log cleaning if zero-logs enabled
   cron:
     name: "Clean logs"

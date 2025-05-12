@@ -170,17 +170,20 @@
         redirector_vpc_id: "{{ vpc_result.vpc.id }}"  # Store for cleanup reference
       when: not (use_shared_infra | bool and infra_state_file.stat.exists | default(false))
 
-    # Create security group
-    - name: Create security group
+    - name: Create security group for redirector
       amazon.aws.ec2_security_group:
         name: "{{ redirector_name }}-sg"
         description: "Security group for redirector {{ redirector_name }}"
         vpc_id: "{{ vpc_id }}"
         region: "{{ aws_redirector_region }}"
         rules:
+          # Management access only from operator IP
+          - proto: tcp
+            ports: 22
+            cidr_ip: "{{ operator_ip }}/32"
+          # Public-facing services are open to internet
           - proto: tcp
             ports:
-              - 22
               - 80
               - 443
               - "{{ effective_listen_port }}"

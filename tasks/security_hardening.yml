@@ -32,19 +32,67 @@
     direction: incoming
   ignore_errors: yes
 
-- name: Allow required ports through firewall
-  ufw:
-    rule: allow
-    port: "{{ item }}"
-    proto: tcp
-  loop:
-    - "22"
-    - "80"
-    - "443"
-    - "{{ havoc_teamserver_port | default('40056') }}"
-    - "{{ havoc_http_port | default('8080') }}"
-    - "{{ gophish_admin_port | default('3333') }}"
-  ignore_errors: yes
+- name: Configure UFW for C2 server
+  block:
+    - name: Reset UFW to default deny
+      ufw:
+        state: enabled
+        policy: deny
+        direction: incoming
+
+    - name: Allow SSH only from operator IP
+      ufw:
+        rule: allow
+        port: "22"
+        src: "{{ operator_ip }}"
+        proto: tcp
+
+    - name: Allow Havoc Teamserver only from operator IP
+      ufw:
+        rule: allow
+        port: "{{ havoc_teamserver_port | default('40056') }}"
+        src: "{{ operator_ip }}"
+        proto: tcp
+
+    - name: Allow traffic only from redirector
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        src: "{{ redirector_ip }}"
+        proto: tcp
+      loop:
+        - "80"
+        - "443"
+        - "{{ havoc_http_port | default('8080') }}"
+        - "{{ havoc_https_port | default('443') }}" 
+        - "{{ gophish_admin_port }}"
+  when: "'c2servers' in group_names"
+
+- name: Configure UFW for redirector
+  block:
+    - name: Reset UFW to default deny
+      ufw:
+        state: enabled
+        policy: deny
+        direction: incoming
+
+    - name: Allow SSH only from operator IP
+      ufw:
+        rule: allow
+        port: "22"
+        src: "{{ operator_ip }}"
+        proto: tcp
+
+    - name: Allow public services from anywhere
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop:
+        - "80"
+        - "443"
+        - "{{ shell_handler_port | default('4444') }}"
+  when: "'redirectors' in group_names"
 
 - name: Set up fail2ban SSH jail
   copy:

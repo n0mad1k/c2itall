@@ -1,0 +1,94 @@
+---
+# Common task for configuring proper traffic flow between infrastructure components
+
+- name: Determine server role in infrastructure
+  set_fact:
+    server_role: >-
+      {% if inventory_hostname in groups['c2servers'] | default([]) %}c2{% 
+      elif inventory_hostname in groups['redirectors'] | default([]) %}redirector{% 
+      elif inventory_hostname in groups['logservers'] | default([]) %}logserver{% 
+      elif inventory_hostname in groups['payloadservers'] | default([]) %}payloadserver{% 
+      elif inventory_hostname in groups['phishingservers'] | default([]) %}phishingserver{% 
+      elif inventory_hostname in groups['sharedrives'] | default([]) %}sharedrive{% 
+      else %}unknown{% endif %}
+
+- name: Configure C2 server routing
+  block:
+    - name: Allow SSH only from operator IP
+      ufw:
+        rule: allow
+        port: 22
+        src: "{{ operator_ip }}"
+        proto: tcp
+    
+    - name: Allow teamserver access only from operator IP
+      ufw:
+        rule: allow
+        port: "{{ havoc_teamserver_port | default('40056') }}"
+        src: "{{ operator_ip }}"
+        proto: tcp
+    
+    - name: Configure required flows for each connected component
+      ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        src: "{{ item.ip }}"
+        proto: tcp
+      loop:
+        - { ip: "{{ redirector_ip }}", port: "80" }
+        - { ip: "{{ redirector_ip }}", port: "443" }
+        - { ip: "{{ redirector_ip }}", port: "{{ havoc_http_port | default('8080') }}" }
+        - { ip: "{{ redirector_ip }}", port: "{{ havoc_https_port | default('443') }}" }
+        - { ip: "{{ logserver_ip | default(omit) }}", port: "5144" }  # Logstash port
+        - { ip: "{{ payloadserver_ip | default(omit) }}", port: "8888" }  # Payload sync port
+      when: item.ip != omit
+      
+  when: server_role == 'c2'
+
+- name: Configure redirector routing
+  block:
+    - name: Allow SSH only from operator IP
+      ufw:
+        rule: allow
+        port: 22
+        src: "{{ operator_ip }}"
+        proto: tcp
+        
+    - name: Allow public web access
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop:
+        - 80
+        - 443
+        
+    - name: Allow shell handler access
+      ufw:
+        rule: allow
+        port: "{{ shell_handler_port | default('4444') }}"
+        proto: tcp
+  when: server_role == 'redirector'
+
+- name: Configure logging server routing
+  block:
+    - name: Allow SSH only from operator IP
+      ufw:
+        rule: allow
+        port: 22
+        src: "{{ operator_ip }}"
+        proto: tcp
+        
+    - name: Allow log ingestion from infrastructure
+      ufw:
+        rule: allow
+        port: 5144  # Logstash port
+        src: "{{ item }}"
+        proto: tcp
+      loop:
+        - "{{ c2_ip }}"
+        - "{{ redirector_ip }}"
+        - "{{ payloadserver_ip | default(omit) }}"
+        - "{{ phishingserver_ip | default(omit) }}"
+      when: item != omit
+  when: server_role == 'logserver'

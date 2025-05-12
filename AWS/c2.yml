@@ -166,21 +166,29 @@
         c2_vpc_id: "{{ vpc_result.vpc.id }}"  # Store for cleanup reference
       when: not (use_shared_infra | bool and infra_state_file.stat.exists | default(false))
 
-    # Create security group
-    - name: Create security group
+    - name: Create security group for C2 server
       amazon.aws.ec2_security_group:
         name: "{{ c2_name }}-sg"
-        description: "Security group for C2 {{ c2_name }}"
+        description: "Secured C2 server {{ c2_name }}"
         vpc_id: "{{ vpc_id }}"
         region: "{{ aws_c2_region }}"
         rules:
+          # Management access only from operator IP
+          - proto: tcp
+            ports: 22
+            cidr_ip: "{{ operator_ip }}/32"
+          - proto: tcp
+            ports: "{{ havoc_teamserver_port | default(40056) }}"
+            cidr_ip: "{{ operator_ip }}/32"
+          # Allow traffic only from redirector
           - proto: tcp
             ports:
-              - 22
-              - "{{ havoc_teamserver_port | default(40056) }}"
+              - 80
+              - 443
               - "{{ havoc_http_port | default(8080) }}"
+              - "{{ havoc_https_port | default(443) }}"
               - "{{ gophish_admin_port }}"
-            cidr_ip: 0.0.0.0/0
+            cidr_ip: "{{ redirector_ip }}/32"
         rules_egress:
           - proto: -1
             cidr_ip: 0.0.0.0/0
