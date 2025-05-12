@@ -1167,13 +1167,18 @@ def create_consistent_resource_names(config):
     config['c2_name'] = f"s-{deployment_id}"
     config['tracker_name'] = f"t-{deployment_id}"
     
-    # Ensure SSH key follows same pattern
+    # Ensure SSH key follows same pattern with provider-specific extension
     if not config.get('ssh_key'):
-        config['ssh_key'] = os.path.expanduser(f"~/.ssh/c2deploy_{deployment_id}")
+        if config.get('provider') == 'aws':
+            config['ssh_key'] = os.path.expanduser(f"~/.ssh/c2deploy_{deployment_id}.pem")
+        else:
+            config['ssh_key'] = os.path.expanduser(f"~/.ssh/c2deploy_{deployment_id}")
     
     # Set consistent public key path
     if config.get('ssh_key'):
-        config['ssh_key_path'] = f"{config['ssh_key']}.pub"
+        if config.get('provider') == 'aws' and not config['ssh_key'].endswith('.pem'):
+            config['ssh_key'] = f"{config['ssh_key']}.pem"
+        config['ssh_key_path'] = f"{config['ssh_key'].replace('.pem', '')}.pub"
         
     # Set other resource names with the same deployment ID
     config['vpc_name'] = f"vpc-{deployment_id}"
@@ -1607,15 +1612,21 @@ def ssh_to_instance(config):
         print(f"{COLORS['RED']}No IP address found for {instance_type}. Cannot SSH.{COLORS['RESET']}")
         return False
     
-    # Get SSH key and user
+    # Get SSH key and user - with AWS-specific handling
     ssh_key = config.get('ssh_key')
-    if not ssh_key:
-        # For AWS, check for deployment_id specific keys with .pem extension
-        if config.get('provider') == 'aws' and config.get('deployment_id'):
-            potential_key = os.path.expanduser(f"~/.ssh/c2deploy_{config.get('deployment_id')}.pem")
-            if os.path.exists(potential_key):
-                ssh_key = potential_key
-                logging.info(f"Found AWS key at {ssh_key}")
+    if config.get('provider') == 'aws':
+        # For AWS, always look for the .pem extension key
+        deployment_id = config.get('deployment_id', '')
+        aws_key_path = os.path.expanduser(f"~/.ssh/c2deploy_{deployment_id}.pem")
+        if os.path.exists(aws_key_path):
+            ssh_key = aws_key_path
+            logging.info(f"Using AWS key at {ssh_key}")
+        else:
+            # Try adding .pem to existing key path if it exists
+            potential_pem_key = f"{ssh_key}.pem" if ssh_key else ""
+            if potential_pem_key and os.path.exists(potential_pem_key):
+                ssh_key = potential_pem_key
+                logging.info(f"Found AWS key with .pem extension: {ssh_key}")
     
     if not ssh_key:
         logging.error("No SSH key specified")
