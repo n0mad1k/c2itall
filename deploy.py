@@ -508,10 +508,30 @@ def execute_deployment(config):
         config['c2_name'] = f"s-{config['deployment_id']}"
         config['tracker_name'] = f"t-{config['deployment_id']}"
         
-        # Generate SSH key with the deployment ID if not provided
-        if not config.get('ssh_key'):
-            config['ssh_key'] = generate_ssh_key(config['deployment_id'])
-            config['ssh_key_path'] = f"{config['ssh_key']}.pub"
+    # Generate SSH key with the deployment ID if not provided
+    # For all providers, we use a local key that's imported to the cloud
+    ssh_key_path = os.path.expanduser(f"~/.ssh/c2deploy_{config['deployment_id']}")
+    ssh_key_pub_path = f"{ssh_key_path}.pub"
+    
+    # Check if key exists, generate if it doesn't
+    if not os.path.exists(ssh_key_path):
+        print(f"\n{COLORS['BLUE']}Generating SSH key for deployment...{COLORS['RESET']}")
+        try:
+            subprocess.run([
+                "ssh-keygen", "-t", "rsa", "-b", "4096", 
+                "-f", ssh_key_path, "-q", "-N", ""
+            ], check=True)
+            os.chmod(ssh_key_path, 0o600)
+            print(f"{COLORS['GREEN']}SSH key generated at {ssh_key_path}{COLORS['RESET']}")
+        except subprocess.CalledProcessError as e:
+            print(f"{COLORS['RED']}Failed to generate SSH key: {e}{COLORS['RESET']}")
+            input("\nPress Enter to return to menu...")
+            return
+    
+    # Set consistent paths for providers
+    config['ssh_key_path'] = ssh_key_pub_path
+    if config['provider'] == 'aws':
+        config['aws_ssh_key_name'] = f"c2deploy_{config['deployment_id']}"
     
     # Print configuration (excluding sensitive data)
     for key, value in config.items():
@@ -1609,7 +1629,7 @@ def run_tests(config):
 
 
 def ssh_to_instance(config):
-    """SSH into the deployed instance with improved AWS key handling"""
+    """SSH into the deployed instance with improved key handling"""
     logging.info("Connecting to instance via SSH...")
     
     # Determine which IP to use based on deployment type
@@ -1635,78 +1655,62 @@ def ssh_to_instance(config):
         print(f"{COLORS['RED']}No IP address found for {instance_type}. Cannot SSH.{COLORS['RESET']}")
         return False
     
-    # Get SSH key and user - with AWS-specific handling
-    ssh_key = config.get('ssh_key')
-    if config.get('provider') == 'aws':
-        # For AWS, always look for the .pem extension key
-        deployment_id = config.get('deployment_id', '')
-        aws_key_path = os.path.expanduser(f"~/.ssh/c2deploy_{deployment_id}.pem")
-        if os.path.exists(aws_key_path):
-            ssh_key = aws_key_path
-            logging.info(f"Using AWS key at {ssh_key}")
-        else:
-            # Try adding .pem to existing key path if it exists
-            potential_pem_key = f"{ssh_key}.pem" if ssh_key else ""
-            if potential_pem_key and os.path.exists(potential_pem_key):
-                ssh_key = potential_pem_key
-                logging.info(f"Found AWS key with .pem extension: {ssh_key}")
+    # Get the correct SSH key and user based on provider and deployment ID
+    deployment_id = config.get('deployment_id')
+    ssh_key = os.path.expanduser(f"~/.ssh/c2deploy_{deployment_id}")
     
-    if not ssh_key:
-        logging.error("No SSH key specified")
-        print(f"{COLORS['RED']}No SSH key specified. Cannot SSH.{COLORS['RESET']}")
+    # Handle specific provider variations
+    if config.get('provider') == 'aws':
+        # AWS-specific key handling - check with .pem suffix
+        pem_key = f"{ssh_key}.pem"
+        if os.path.exists(pem_key):
+            ssh_key = pem_key
+    
+    if not os.path.exists(ssh_key):
+        logging.error(f"SSH key not found at {ssh_key}")
+        print(f"{COLORS['RED']}SSH key not found at {ssh_key}. Cannot SSH.{COLORS['RESET']}")
         return False
     
     # Fix key permissions
     os.chmod(ssh_key, 0o600)
     
-    # Try multiple possible usernames
+    # Determine the correct username based on provider and instance type
     if config.get('ssh_user'):
-        ssh_users = [config.get('ssh_user')]
+        ssh_user = config.get('ssh_user')
     elif config['provider'] == 'aws':
-        # For AWS, try multiple common usernames
-        ssh_users = ['kali']
+        ssh_user = config.get('ami_ssh_user', 'kali')
     elif config['provider'] == 'linode':
-        ssh_users = ['root']
+        ssh_user = 'root'
     else:
-        ssh_users = [DEFAULT_SSH_USER.get(config['provider'], 'root')]
+        ssh_user = DEFAULT_SSH_USER.get(config['provider'], 'root')
     
     # Print SSH connection information
     print(f"\n{COLORS['CYAN']}SSH Connection Information:{COLORS['RESET']}")
     print(f"  Host: {ip}")
+    print(f"  User: {ssh_user}")
     print(f"  Key:  {ssh_key}")
-    print(f"  Will try users: {', '.join(ssh_users)}")
+    print(f"  Manual command: ssh -i {ssh_key} {ssh_user}@{ip}")
     
-    # Try each SSH user until one works
-    for ssh_user in ssh_users:
-        print(f"\n{COLORS['YELLOW']}Trying SSH with user: {ssh_user}{COLORS['RESET']}")
-        print(f"  Manual SSH command: ssh -i {ssh_key} {ssh_user}@{ip}")
-        
-        # Build SSH command
-        ssh_cmd = [
-            "ssh",
-            "-t",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "IdentitiesOnly=yes",
-            "-o", "ConnectTimeout=10",
-            "-i", ssh_key,
-            f"{ssh_user}@{ip}",
-            "tmux"
-        ]
-        
-        # Execute SSH command with timeout
-        try:
-            subprocess.run(ssh_cmd, timeout=60)
-            return True
-        except subprocess.TimeoutExpired:
-            print(f"{COLORS['YELLOW']}Connection with user {ssh_user} timed out, trying next user...{COLORS['RESET']}")
-            continue
-        except Exception as e:
-            print(f"{COLORS['YELLOW']}Connection with user {ssh_user} failed: {e}{COLORS['RESET']}")
-            continue
+    # Build SSH command
+    ssh_cmd = [
+        "ssh",
+        "-t",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "IdentitiesOnly=yes",
+        "-o", "ConnectTimeout=10",
+        "-i", ssh_key,
+        f"{ssh_user}@{ip}",
+        "tmux"
+    ]
     
-    print(f"{COLORS['RED']}Failed to connect with any user. Check instance security group and key.{COLORS['RESET']}")
-    return False
+    # Execute SSH command
+    try:
+        subprocess.run(ssh_cmd)
+        return True
+    except Exception as e:
+        print(f"{COLORS['RED']}SSH connection failed: {e}{COLORS['RESET']}")
+        return False
 
 def cleanup_resources(config, interactive=True):
     """Clean up resources if deployment fails"""
