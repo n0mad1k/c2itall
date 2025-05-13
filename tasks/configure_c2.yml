@@ -301,6 +301,42 @@
     job: "/root/Tools/clean-logs.sh > /dev/null 2>&1"
   when: zero_logs | bool
 
+- name: Ensure SSH key for redirector access is available
+  block:
+    - name: Copy deployment SSH key to C2 for redirector access (AWS)
+      copy:
+        src: "~/.ssh/c2deploy_{{ deployment_id }}.pem"
+        dest: "/root/.ssh/redirector_key"
+        mode: '0600'
+        owner: root
+        group: root
+      when: provider == "aws"
+      
+    - name: Copy deployment SSH key to C2 for redirector access (non-AWS)
+      copy:
+        src: "{{ ssh_key_path | replace('.pub', '') }}"
+        dest: "/root/.ssh/redirector_key"
+        mode: '0600'
+        owner: root
+        group: root
+      when: provider != "aws"
+      
+    - name: Create SSH config for redirector access
+      blockinfile:
+        path: /root/.ssh/config
+        create: yes
+        mode: '0600'
+        owner: root
+        group: root
+        marker: "# {mark} ANSIBLE MANAGED REDIRECTOR CONFIG"
+        block: |
+          Host redirector
+              HostName {{ redirector_ip }}
+              User {{ ssh_user | default('root') }}
+              IdentityFile /root/.ssh/redirector_key
+              StrictHostKeyChecking no
+  when: not redirector_only | bool and redirector_ip is defined
+
 # Include integrated tracker tasks if requested
 - name: Include integrated tracker setup
   include_tasks: "configure_integrated_tracker.yml"

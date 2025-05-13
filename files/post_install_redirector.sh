@@ -91,6 +91,7 @@ start_services() {
     systemctl start nginx
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}NGINX started successfully${NC}"
+        systemctl enable nginx
     else
         echo -e "${RED}Failed to start NGINX${NC}"
     fi
@@ -99,6 +100,7 @@ start_services() {
     systemctl start shell-handler
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}Shell handler started successfully${NC}"
+        systemctl enable shell-handler
     else
         echo -e "${RED}Failed to start shell handler${NC}"
     fi
@@ -115,7 +117,7 @@ show_port_info() {
     
     # Display nginx listening ports
     echo -e "\n${BLUE}NGINX Listening Ports:${NC}"
-    netstat -tlpn | grep nginx
+    netstat -tulnp | grep nginx
 }
 
 # Main execution
