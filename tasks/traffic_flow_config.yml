@@ -12,7 +12,19 @@
       elif inventory_hostname in groups['sharedrives'] | default([]) %}sharedrive{% 
       else %}unknown{% endif %}
 
-- name: Configure C2 server routing
+# Determine if we're using AWS provider
+- name: Determine if using AWS provider
+  set_fact:
+    is_aws_provider: "{{ provider | default('unknown') == 'aws' }}"
+
+# Skip firewall configuration for AWS instances
+- name: Skip firewall configuration for AWS instances
+  debug:
+    msg: "Skipping host-based firewall configuration for AWS instance. Security Groups are handling this at the infrastructure level."
+  when: is_aws_provider
+
+# UFW Configuration Block (non-AWS only)
+- name: Configure C2 server routing with UFW
   block:
     - name: Allow SSH only from operator IP
       ufw:
@@ -39,13 +51,15 @@
         - { ip: "{{ redirector_ip }}", port: "443" }
         - { ip: "{{ redirector_ip }}", port: "{{ havoc_http_port | default('8080') }}" }
         - { ip: "{{ redirector_ip }}", port: "{{ havoc_https_port | default('443') }}" }
-        - { ip: "{{ logserver_ip | default(omit) }}", port: "5144" }  # Logstash port
-        - { ip: "{{ payloadserver_ip | default(omit) }}", port: "8888" }  # Payload sync port
+        - { ip: "{{ logserver_ip | default(omit) }}", port: "5144" }
+        - { ip: "{{ payloadserver_ip | default(omit) }}", port: "8888" }
       when: item.ip != omit
-      
-  when: server_role == 'c2'
+  when: 
+    - server_role == 'c2'
+    - not is_aws_provider
 
-- name: Configure redirector routing
+# Rest of the original file for non-AWS providers only
+- name: Configure redirector routing with UFW
   block:
     - name: Allow SSH only from operator IP
       ufw:
@@ -68,7 +82,9 @@
         rule: allow
         port: "{{ shell_handler_port | default('4444') }}"
         proto: tcp
-  when: server_role == 'redirector'
+  when: 
+    - server_role == 'redirector'
+    - not is_aws_provider
 
 - name: Configure logging server routing
   block:
@@ -91,4 +107,6 @@
         - "{{ payloadserver_ip | default(omit) }}"
         - "{{ phishingserver_ip | default(omit) }}"
       when: item != omit
-  when: server_role == 'logserver'
+  when: 
+    - server_role == 'logserver'
+    - not is_aws_provider

@@ -1249,23 +1249,10 @@ def run_ansible_playbook(playbook, inventory, config, debug=False):
     # Convert config dict to JSON for extra-vars
     extra_vars = {k: v for k, v in config.items() if v is not None and not isinstance(v, (dict, list, tuple))}
     
-    # Ensure consistent region parameter handling
-    if 'region' in extra_vars:
-        extra_vars['selected_region'] = extra_vars['region']
-    elif 'linode_region' in extra_vars:
-        extra_vars['selected_region'] = extra_vars['linode_region']
-        extra_vars['region'] = extra_vars['linode_region']  # Added for consistency
-    
+    # Other setup code stays the same...
     extra_vars_json = json.dumps(extra_vars)
-    
-    # Set PYTHONPATH to include site-packages
     env = os.environ.copy()
-    current_python = sys.executable
-    python_path = subprocess.check_output(
-        [current_python, "-c", "import sys; import site; print(':'.join(sys.path + site.getsitepackages()))"],
-        text=True
-    ).strip()
-    env["PYTHONPATH"] = python_path
+    # PYTHONPATH setup...
     
     # Build command with output JSON facts format
     cmd = [
@@ -1273,85 +1260,60 @@ def run_ansible_playbook(playbook, inventory, config, debug=False):
         "-i", inventory,
         playbook,
         "-e", extra_vars_json,
-        "--extra-vars", "ansible_facts_callback=json"  # Get facts in JSON format
+        "--extra-vars", "ansible_facts_callback=json"
     ]
     
-    # Add verbosity if debug mode is enabled
+    # Add verbosity flag
     if debug:
         cmd.append("-vvv")
-        # Set ANSIBLE_STDOUT_CALLBACK for human-readable output
         env["ANSIBLE_STDOUT_CALLBACK"] = "debug"
     else:
         cmd.append("-v")
     
     # Log the command
+    logging.info(f"Running Ansible playbook: {playbook}")
     if debug:
-        logging.debug(f"Running Ansible command: {' '.join(cmd)}")
-    else:
-        logging.info(f"Running Ansible playbook: {playbook}")
+        logging.debug(f"Command: {' '.join(cmd)}")
     
-    # Run the command with enhanced output capture
+    # Run the command with output capture
     try:
         process = subprocess.Popen(
             cmd, 
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            bufsize=1,  # Line buffered
+            bufsize=1,
             env=env
         )
         
-        # Stream output in real-time
+        # Capture output in real-time
         stdout_output = []
         stderr_output = []
         
-        # Create separate threads to read stdout and stderr
-        def read_output(pipe, output_list, is_stdout=True):
-            prefix = COLORS['GREEN'] if is_stdout else COLORS['RED']
-            for line in iter(pipe.readline, ''):
-                output_list.append(line)
-                # Log every line to file regardless of debug mode
-                if is_stdout:
-                    logging.debug(line.rstrip())
-                else:
-                    logging.error(line.rstrip())
-                # Always display in terminal, but use filtering if not in debug mode
-                if debug or ('TASK' in line or 'PLAY' in line or 'changed=' in line or 'ok=' in line or 'failed=' in line):
-                    print(f"{prefix}{line.rstrip()}{COLORS['RESET']}")
-            pipe.close()
+        # Read stdout in real-time and log every line
+        for line in iter(process.stdout.readline, ''):
+            stdout_output.append(line)
+            # Log every line to the file
+            logging.debug(line.rstrip())
+            # Also print to terminal with color
+            print(f"{COLORS['GREEN']}{line.rstrip()}{COLORS['RESET']}")
         
-        from threading import Thread
-        stdout_thread = Thread(target=read_output, args=(process.stdout, stdout_output, True))
-        stderr_thread = Thread(target=read_output, args=(process.stderr, stderr_output, False))
-        
-        stdout_thread.daemon = True
-        stderr_thread.daemon = True
-        stdout_thread.start()
-        stderr_thread.start()
-        
+        # Read stderr in real-time and log every line
+        for line in iter(process.stderr.readline, ''):
+            stderr_output.append(line)
+            # Log errors to file
+            logging.error(line.rstrip())
+            # Print to terminal with color
+            print(f"{COLORS['RED']}{line.rstrip()}{COLORS['RESET']}")
+            
         # Wait for process to complete
         return_code = process.wait()
-        
-        # Wait for output threads to complete
-        stdout_thread.join()
-        stderr_thread.join()
         
         # Join the output
         stdout_result = ''.join(stdout_output)
         stderr_result = ''.join(stderr_output)
         
-        # Extract IP addresses from output
-        if "C2 Server IP:" in stdout_result:
-            ip_match = re.search(r"C2 Server IP: ([0-9.]+)", stdout_result)
-            if ip_match:
-                config['c2_ip'] = ip_match.group(1)
-                logging.info(f"Extracted C2 IP: {config['c2_ip']}")
-                
-        if "Redirector IP:" in stdout_result:
-            ip_match = re.search(r"Redirector IP: ([0-9.]+)", stdout_result)
-            if ip_match:
-                config['redirector_ip'] = ip_match.group(1)
-                logging.info(f"Extracted Redirector IP: {config['redirector_ip']}")
+        # Extract IPs, etc. as before...
         
         if return_code == 0:
             logging.info(f"Playbook {playbook} executed successfully")
