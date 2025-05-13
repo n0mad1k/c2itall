@@ -169,6 +169,39 @@
         c2_vpc_id: "{{ vpc_result.vpc.id }}"  # Store for cleanup reference
       when: not (use_shared_infra | bool and infra_state_file.stat.exists | default(false))
 
+    - name: Set default redirector_ip for C2-only deployments
+      set_fact:
+        redirector_ip: "{{ operator_ip }}"
+      when: c2_only | default(false) | bool and redirector_ip is not defined
+
+    - name: Load redirector_ip from infrastructure state 
+      block:
+        - name: Check if infrastructure state file exists
+          stat:
+            path: "infrastructure_state_{{ deployment_id }}.json"
+          register: infra_state_check
+        
+        - name: Load infrastructure state
+          include_vars:
+            file: "infrastructure_state_{{ deployment_id }}.json"
+            name: infra_state
+          when: infra_state_check.stat.exists
+        
+        - name: Set redirector IP from infrastructure state
+          set_fact:
+            redirector_ip: "{{ infra_state.redirector_ip | default(operator_ip) }}"
+          when: infra_state_check.stat.exists and infra_state.redirector_ip is defined
+        
+        - name: Debug redirector IP
+          debug:
+            msg: "Using redirector IP: {{ redirector_ip | default('undefined') }}"
+      when: redirector_ip is undefined
+
+    - name: Default to operator IP if redirector IP is still undefined
+      set_fact:
+        redirector_ip: "{{ operator_ip }}"
+      when: redirector_ip is undefined
+
     - name: Create security group for C2 server
       amazon.aws.ec2_security_group:
         name: "{{ c2_name }}-sg"

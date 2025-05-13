@@ -1404,9 +1404,17 @@ def deploy_infrastructure(config):
                 cleanup_resources(config, interactive=True)
                 return False
                 
-            # Extract and save redirector IP for C2 configuration
+            # Extract redirector IP from output
             if 'redirector_ip' in redirector_config:
                 config['redirector_ip'] = redirector_config['redirector_ip']
+            elif stdout:
+                # Try to extract redirector IP from stdout
+                import re
+                ip_pattern = re.compile(r'Redirector IP: (\d+\.\d+\.\d+\.\d+)')
+                ip_match = ip_pattern.search(stdout)
+                if ip_match:
+                    config['redirector_ip'] = ip_match.group(1)
+                    logging.info(f"Extracted redirector IP from output: {config['redirector_ip']}")
         
         # Deploy C2 if needed
         if not config.get('redirector_only'):
@@ -1432,10 +1440,45 @@ def deploy_infrastructure(config):
                 # Run cleanup before returning
                 cleanup_resources(config, interactive=True)
                 return False
-                
-            # Extract and save C2 IP for reference
+            
+            # Extract and save C2 IP from output
             if 'c2_ip' in c2_config:
                 config['c2_ip'] = c2_config['c2_ip']
+            elif stdout:
+                # Try to extract C2 IP from stdout
+                import re
+                ip_pattern = re.compile(r'C2 IP: (\d+\.\d+\.\d+\.\d+)')
+                ip_match = ip_pattern.search(stdout)
+                if ip_match:
+                    config['c2_ip'] = ip_match.group(1)
+                    logging.info(f"Extracted C2 IP from output: {config['c2_ip']}")
+                
+                # Also check for debugging output patterns
+                debug_pattern = re.compile(r'C2 Server IP: (\d+\.\d+\.\d+\.\d+)')
+                debug_match = debug_pattern.search(stdout)
+                if debug_match and not config.get('c2_ip'):
+                    config['c2_ip'] = debug_match.group(1)
+                    logging.info(f"Extracted C2 IP from deployment summary: {config['c2_ip']}")
+            
+            # Write deployment info to a state file for reference
+            if config.get('c2_ip') or config.get('redirector_ip'):
+                state_data = {
+                    "deployment_id": config.get('deployment_id'),
+                    "c2_ip": config.get('c2_ip', ''),
+                    "redirector_ip": config.get('redirector_ip', ''),
+                    "provider": provider,
+                    "deployment_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                }
+                state_file = f"deployment_state_{config.get('deployment_id')}.json"
+                with open(state_file, 'w') as f:
+                    json.dump(state_data, f, indent=2)
+                logging.info(f"Saved deployment state to {state_file}")
+        
+        # Verbose info about IPs for debugging
+        if config.get('c2_ip'):
+            logging.info(f"C2 server deployed with IP: {config['c2_ip']}")
+        if config.get('redirector_ip'):
+            logging.info(f"Redirector deployed with IP: {config['redirector_ip']}")
         
         return True
     except Exception as e:

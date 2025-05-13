@@ -389,33 +389,20 @@
           - "VPC resources deleted: {{ vpc_check.vpcs | length == 0 }}"
       when: not disable_summary | default(false)
 
-    # STEP 14: Delete key pairs
-    - name: Find key pairs by name patterns
-      amazon.aws.ec2_key:
-        name: "{{ item }}"
+    # STEP 14: Delete key pairs - more reliable implementation
+    - name: Find key pairs related to deployment
+      amazon.aws.ec2_key_info:
         region: "{{ aws_region }}"
-        state: present
-      register: keys_check
-      ignore_errors: yes
-      with_items:
-        - "{{ redirector_name }}"
-        - "{{ c2_name }}"
-        - "{{ tracker_name }}"
-        
-    - name: Delete key pairs
+      register: all_key_pairs
+
+    - name: Delete deployment related key pairs
       amazon.aws.ec2_key:
-        name: "{{ item.invocation.module_args.name }}"
+        name: "{{ item.key_name }}"
         region: "{{ aws_region }}"
         state: absent
-      loop: "{{ keys_check.results }}"
-      when: keys_check.results | length > 0 and item.failed is not defined and item.key is defined
-      register: deleted_keys
+      loop: "{{ all_key_pairs.key_pairs | selectattr('key_name', 'search', deployment_id) | list }}"
+      when: all_key_pairs.key_pairs | length > 0
       
-    - name: Count deleted keys
-      set_fact:
-        cleanup_summary: "{{ cleanup_summary | combine({
-          'keypairs_deleted': (deleted_keys.results | default([]) | selectattr('changed', 'defined') | selectattr('changed') | list | length)}) }}"
-        
     # Add this after your existing key pair finding task
     - name: Find c2deploy key pairs
       amazon.aws.ec2_key:
