@@ -1276,7 +1276,7 @@ def run_ansible_playbook(playbook, inventory, config, debug=False):
         "--extra-vars", "ansible_facts_callback=json"  # Get facts in JSON format
     ]
     
-    # Add verbosity if debug mode is enabled - IMPORTANT CHANGE HERE
+    # Add verbosity if debug mode is enabled
     if debug:
         cmd.append("-vvv")
         # Set ANSIBLE_STDOUT_CALLBACK for human-readable output
@@ -1290,7 +1290,7 @@ def run_ansible_playbook(playbook, inventory, config, debug=False):
     else:
         logging.info(f"Running Ansible playbook: {playbook}")
     
-    # Run the command - MODIFIED TO DISPLAY OUTPUT IN REAL-TIME
+    # Run the command with enhanced output capture
     try:
         process = subprocess.Popen(
             cmd, 
@@ -1310,7 +1310,12 @@ def run_ansible_playbook(playbook, inventory, config, debug=False):
             prefix = COLORS['GREEN'] if is_stdout else COLORS['RED']
             for line in iter(pipe.readline, ''):
                 output_list.append(line)
-                # Only print if debug mode is on or if it's an important message
+                # Log every line to file regardless of debug mode
+                if is_stdout:
+                    logging.debug(line.rstrip())
+                else:
+                    logging.error(line.rstrip())
+                # Always display in terminal, but use filtering if not in debug mode
                 if debug or ('TASK' in line or 'PLAY' in line or 'changed=' in line or 'ok=' in line or 'failed=' in line):
                     print(f"{prefix}{line.rstrip()}{COLORS['RESET']}")
             pipe.close()

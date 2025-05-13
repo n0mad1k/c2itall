@@ -20,6 +20,7 @@
       - netcat-openbsd
       - secure-delete
       - jq
+      - php-fpm
     state: present
     update_cache: yes
 

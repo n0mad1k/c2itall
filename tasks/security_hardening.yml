@@ -9,11 +9,10 @@
   retries: 5
   delay: 5
 
-- name: Install security packages
+- name: Install security packages (non-UFW)
   apt:
     name:
       - fail2ban
-      - ufw
       - unattended-upgrades
       - debsums
       - aide
@@ -25,75 +24,157 @@
   retries: 3
   delay: 5
 
-- name: Configure UFW default policies
-  ufw:
-    state: enabled
-    policy: deny
-    direction: incoming
-  ignore_errors: yes
+# Skip UFW for AWS, use it for other providers
+- name: Determine if using AWS provider
+  set_fact:
+    is_aws_provider: "{{ provider | default('unknown') == 'aws' }}"
 
-- name: Configure UFW for C2 server
+# Only install and configure UFW for non-AWS providers
+- name: Check if UFW is installed
+  command: which ufw
+  register: ufw_check
+  failed_when: false
+  changed_when: false
+  when: not is_aws_provider
+
+- name: Install UFW if not present (non-AWS)
+  apt:
+    name: ufw
+    state: present
+    update_cache: yes
+  register: ufw_install
+  until: ufw_install is success
+  retries: 3
+  delay: 5
+  when: not is_aws_provider and ufw_check.rc != 0
+
+- name: Configure UFW for non-AWS deployments
   block:
-    - name: Reset UFW to default deny
+    - name: Configure UFW default policies
       ufw:
         state: enabled
         policy: deny
         direction: incoming
+      ignore_errors: yes
 
-    - name: Allow SSH only from operator IP
-      ufw:
-        rule: allow
-        port: "22"
-        src: "{{ operator_ip }}"
-        proto: tcp
+    - name: Configure UFW for C2 server
+      block:
+        - name: Reset UFW to default deny
+          ufw:
+            state: enabled
+            policy: deny
+            direction: incoming
 
-    - name: Allow Havoc Teamserver only from operator IP
-      ufw:
-        rule: allow
-        port: "{{ havoc_teamserver_port | default('40056') }}"
-        src: "{{ operator_ip }}"
-        proto: tcp
+        - name: Allow SSH only from operator IP
+          ufw:
+            rule: allow
+            port: "22"
+            src: "{{ operator_ip }}"
+            proto: tcp
 
-    - name: Allow traffic only from redirector
-      ufw:
-        rule: allow
-        port: "{{ item }}"
-        src: "{{ redirector_ip }}"
-        proto: tcp
-      loop:
-        - "80"
-        - "443"
-        - "{{ havoc_http_port | default('8080') }}"
-        - "{{ havoc_https_port | default('443') }}" 
-        - "{{ gophish_admin_port }}"
-  when: "'c2servers' in group_names"
+        - name: Allow Havoc Teamserver only from operator IP
+          ufw:
+            rule: allow
+            port: "{{ havoc_teamserver_port | default('40056') }}"
+            src: "{{ operator_ip }}"
+            proto: tcp
 
-- name: Configure UFW for redirector
+        - name: Allow traffic only from redirector
+          ufw:
+            rule: allow
+            port: "{{ item }}"
+            src: "{{ redirector_ip }}"
+            proto: tcp
+          loop:
+            - "80"
+            - "443"
+            - "{{ havoc_http_port | default('8080') }}"
+            - "{{ havoc_https_port | default('443') }}" 
+            - "{{ gophish_admin_port }}"
+      when: "'c2servers' in group_names"
+
+    - name: Configure UFW for redirector
+      block:
+        - name: Reset UFW to default deny
+          ufw:
+            state: enabled
+            policy: deny
+            direction: incoming
+
+        - name: Allow SSH only from operator IP
+          ufw:
+            rule: allow
+            port: "22"
+            src: "{{ operator_ip }}"
+            proto: tcp
+
+        - name: Allow public services from anywhere
+          ufw:
+            rule: allow
+            port: "{{ item }}"
+            proto: tcp
+          loop:
+            - "80"
+            - "443"
+            - "{{ shell_handler_port | default('4444') }}"
+      when: "'redirectors' in group_names"
+  # Only run UFW block if not AWS and UFW is available/installed
+  when: not is_aws_provider and (ufw_check.rc == 0 or ufw_install is success)
+
+# Configure iptables fallback if UFW isn't available (non-AWS only)
+- name: Configure basic iptables rules if UFW unavailable
   block:
-    - name: Reset UFW to default deny
-      ufw:
-        state: enabled
-        policy: deny
-        direction: incoming
+    - name: Set up basic iptables rules for C2 server
+      shell: |
+        iptables -F
+        iptables -P INPUT DROP
+        iptables -P FORWARD DROP
+        iptables -P OUTPUT ACCEPT
+        # Allow established connections
+        iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+        # Allow SSH from operator
+        iptables -A INPUT -p tcp --dport 22 -s {{ operator_ip }} -j ACCEPT
+        # Allow Havoc teamserver from operator
+        iptables -A INPUT -p tcp --dport {{ havoc_teamserver_port | default(40056) }} -s {{ operator_ip }} -j ACCEPT
+        # Allow traffic from redirector
+        iptables -A INPUT -p tcp --dport 80 -s {{ redirector_ip }} -j ACCEPT
+        iptables -A INPUT -p tcp --dport 443 -s {{ redirector_ip }} -j ACCEPT
+        iptables -A INPUT -p tcp --dport {{ havoc_http_port | default(8080) }} -s {{ redirector_ip }} -j ACCEPT
+        iptables -A INPUT -p tcp --dport {{ havoc_https_port | default(443) }} -s {{ redirector_ip }} -j ACCEPT
+        iptables -A INPUT -p tcp --dport {{ gophish_admin_port }} -s {{ redirector_ip }} -j ACCEPT
+      when: "'c2servers' in group_names"
+  when: not is_aws_provider and (ufw_check.rc != 0 and (ufw_install is undefined or ufw_install is failed))
 
-    - name: Allow SSH only from operator IP
-      ufw:
-        rule: allow
-        port: "22"
-        src: "{{ operator_ip }}"
-        proto: tcp
+# SSH Hardening - applies to all providers
+- name: Harden SSH configuration
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    state: present
+  loop:
+    - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
+    - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
+    - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
+    - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 3' }
+    - { regexp: '^#?AllowTcpForwarding', line: 'AllowTcpForwarding yes' }
+    - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval 300' }
+    - { regexp: '^#?ClientAliveCountMax', line: 'ClientAliveCountMax 2' }
+  register: ssh_config_updated
 
-    - name: Allow public services from anywhere
-      ufw:
-        rule: allow
-        port: "{{ item }}"
-        proto: tcp
-      loop:
-        - "80"
-        - "443"
-        - "{{ shell_handler_port | default('4444') }}"
-  when: "'redirectors' in group_names"
+- name: Configure system resource limits
+  pam_limits:
+    domain: "*"
+    limit_type: "{{ item.limit_type }}"
+    limit_item: "{{ item.limit_item }}"
+    value: "{{ item.value }}"
+  loop:
+    - { limit_type: soft, limit_item: nofile, value: 65535 }
+    - { limit_type: hard, limit_item: nofile, value: 65535 }
+    - { limit_type: soft, limit_item: nproc, value: 4096 }
+    - { limit_type: hard, limit_item: nproc, value: 4096 }
 
+# Set up fail2ban - applies to all providers
 - name: Set up fail2ban SSH jail
   copy:
     dest: /etc/fail2ban/jail.d/sshd.conf
@@ -143,35 +224,6 @@
       echo "Log cleaning completed at $(date)"
     mode: '0700'
   when: zero_logs | default(false) | bool
-
-# SSH Hardening
-- name: Harden SSH configuration
-  lineinfile:
-    path: /etc/ssh/sshd_config
-    regexp: "{{ item.regexp }}"
-    line: "{{ item.line }}"
-    state: present
-  loop:
-    - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
-    - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
-    - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
-    - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 3' }
-    - { regexp: '^#?AllowTcpForwarding', line: 'AllowTcpForwarding yes' }
-    - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval 300' }
-    - { regexp: '^#?ClientAliveCountMax', line: 'ClientAliveCountMax 2' }
-  register: ssh_config_updated
-
-- name: Configure system resource limits
-  pam_limits:
-    domain: "*"
-    limit_type: "{{ item.limit_type }}"
-    limit_item: "{{ item.limit_item }}"
-    value: "{{ item.value }}"
-  loop:
-    - { limit_type: soft, limit_item: nofile, value: 65535 }
-    - { limit_type: hard, limit_item: nofile, value: 65535 }
-    - { limit_type: soft, limit_item: nproc, value: 4096 }
-    - { limit_type: hard, limit_item: nproc, value: 4096 }
 
 # Service restart handlers
 - name: Restart SSH service if configuration changed

