@@ -9,7 +9,7 @@
     - vars.yaml
   vars:
     # Default values
-    ssh_user: "{{ ssh_user | default('ubuntu') }}"  # Changed from 'root' to 'ubuntu'
+    ssh_user: "{{ ssh_user | default('ubuntu') }}"
     aws_region: "{{ aws_region | default(aws_region_choices | random) }}"
     instance_type: "{{ aws_instance_type | default('t2.micro') }}"
     deployment_id: "{{ deployment_id | default('') }}"
@@ -41,18 +41,25 @@
           - aws_secret_key is defined and aws_secret_key != ""
         fail_msg: "AWS credentials are required"
 
-    # Load shared infrastructure state if available
+    # Set region for redirector - fix for noop task error
+    - name: Set region for redirector
+      set_fact:
+        aws_redirector_region: "{{ redirector_region | default(aws_region) }}"
+
+    # Load shared infrastructure state if available - fixed implementation
     - name: Check for shared infrastructure state
-      stat:
-        path: "infrastructure_state_{{ deployment_id }}.json"
-      register: infra_state_file
+      block:
+        - name: Check if state file exists
+          stat:
+            path: "infrastructure_state_{{ deployment_id }}.json"
+          register: infra_state_file
+        
+        - name: Include vars if file exists
+          include_vars:
+            file: "infrastructure_state_{{ deployment_id }}.json"
+            name: shared_infra
+          when: infra_state_file.stat.exists | default(false)
       when: use_shared_infra | bool
-      
-    - name: Load shared infrastructure state
-      include_vars:
-        file: "infrastructure_state_{{ deployment_id }}.json"
-        name: shared_infra
-      when: use_shared_infra | bool and infra_state_file.stat.exists | default(false)
 
     # After loading shared infrastructure state
     - name: Validate shared VPC exists
@@ -75,16 +82,11 @@
         use_shared_infra: false
       when: use_shared_infra | bool and vpc_check.vpcs is defined and vpc_check.vpcs | length == 0
 
-    - name: Set region for redirector from shared infra
+    - name: Set region variables from shared infra
       set_fact:
         aws_redirector_region: "{{ shared_infra.region | default(aws_region) }}"
       when: use_shared_infra | bool and infra_state_file.stat.exists | default(false)
         
-    - name: Set default region for redirector
-      set_fact:
-        aws_redirector_region: "{{ redirector_region | default(aws_region) }}"
-      when: not (use_shared_infra | bool and infra_state_file.stat.exists | default(false))
-      
     - name: Set AMI ID for selected region
       set_fact:
         ami_id: "{{ ubuntu_ami_map[aws_redirector_region] | default(ubuntu_ami_map['us-east-1']) }}"
@@ -194,7 +196,7 @@
         state: present
       register: security_group
 
-   # Save infrastructure state for reuse
+    # Save infrastructure state for reuse
     - name: Save infrastructure state for reuse
       copy:
         content: |
@@ -231,6 +233,16 @@
         redirector_ip: "{{ redirector_instance.instances[0].public_ip_address }}"
         redirector_instance_id: "{{ redirector_instance.instances[0].instance_id }}"
 
+    - name: Wait for instance initialization
+      pause:
+        seconds: 120
+      when: redirector_instance.changed
+
+    - name: Set correct permissions on SSH key
+      file:
+        path: "~/.ssh/{{ redirector_name }}.pem"
+        mode: "0600"
+
     - name: Wait for redirector SSH to be available
       wait_for:
         host: "{{ redirector_ip }}"
@@ -244,7 +256,7 @@
         name: "redirector"
         groups: "redirectors"
         ansible_host: "{{ redirector_ip }}"
-        ansible_user: "ubuntu"  # Change this from 'root' to 'ubuntu'
+        ansible_user: "ubuntu"
         ansible_ssh_private_key_file: "~/.ssh/{{ redirector_name }}.pem"
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes"
         ansible_python_interpreter: "/usr/bin/python3"

@@ -14,9 +14,12 @@
     instance_type: "{{ aws_instance_type | default('t2.medium') }}"
     deployment_id: "{{ deployment_id | default('') }}"
     c2_name: "{{ c2_name | default('s-' + deployment_id) }}"
-    # Check for shared infrastructure
-    # Only use shared when C2 and redirector are in the same region
-    use_shared_infra: "{{ not (c2_region is defined and redirector_region is defined and c2_region != redirector_region) and not c2_only | default(false) | bool and not redirector_only | default(false) | bool }}"
+    # Define split_regions - only true when regions are explicitly different
+    split_regions: "{{ c2_region is defined and redirector_region is defined and c2_region != redirector_region }}"
+    # Only use shared infra when NOT doing split-region deployment
+    use_shared_infra: "{{ not split_regions and not c2_only | default(false) | bool and not redirector_only | default(false) | bool }}"
+    # Set correct region variable
+    aws_c2_region: "{{ c2_region | default(aws_region) }}"
     # AMI map comes from vars.yaml - add fallback for safety
     kali_ami_map_fallback:
       us-east-1: "ami-061b17d332829ab1c"
@@ -249,6 +252,22 @@
         timeout: 300
         state: started
 
+    - name: Test SSH and prepare remote environment
+      block:
+        - name: Ensure .ansible directory exists with proper permissions
+          shell: |
+            ssh -i ~/.ssh/c2deploy_{{ deployment_id }}.pem -o StrictHostKeyChecking=no {{ ami_ssh_user }}@{{ c2_ip }} "sudo mkdir -p /root/.ansible/tmp && sudo chmod 0700 /root/.ansible/tmp && sudo chown {{ ami_ssh_user }}:{{ ami_ssh_user }} /root/.ansible/tmp"
+          register: ssh_prep
+          until: ssh_prep is success
+          retries: 5
+          delay: 15
+          ignore_errors: yes
+          delegate_to: localhost
+        
+        - name: Display SSH preparation results
+          debug:
+            msg: "SSH preparation completed: {{ ssh_prep.stdout | default('No output') }}"
+
     # Test SSH connection directly to verify key is working
     - name: Test SSH connection to verify key
       shell: "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i ~/.ssh/c2deploy_{{ deployment_id }}.pem {{ ami_ssh_user }}@{{ c2_ip }} 'echo SSH CONNECTION SUCCESSFUL'"
@@ -288,6 +307,7 @@
 - name: Configure C2 server
   hosts: c2servers
   become: yes
+  become_user: root
   gather_facts: true
   vars_files:
     - vars.yaml  # Add this line to load the variables

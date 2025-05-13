@@ -2,6 +2,12 @@
 # Common task for installing offensive security tools
 # Shared across all providers
 
+- name: Force tools directory to root regardless of user
+  set_fact:
+    home_dir: "/root"
+    tools_dir: "/root/Tools"
+  when: provider == "aws"
+
 - name: Determine home directory path
   set_fact:
     home_dir: "{{ (ansible_user == 'root') | ternary('/root', '/home/' + ansible_user) }}"
