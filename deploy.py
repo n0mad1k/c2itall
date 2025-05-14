@@ -2289,7 +2289,7 @@ def generate_deployment_info(config, success=True):
 
     # Add correct SSH commands for each server type
     if not config.get('redirector_only'):
-        info.append(f"SSH Command for C2: ssh -t -o 'StrictHostKeyChecking=no' -o 'UserKnownHostsFile=/dev/null' -o 'IdentitiesOnly=yes' -i {ssh_key} {ssh_user}@{config.get('c2_ip', 'N/A')}")
+        info.append(f"SSH Command for C2: ssh -t -o 'StrictHostKeyChecking=no' -o 'UserKnownHostsFile=/dev/null' -o 'IdentitiesOnly=yes' -i {ssh_key} ubuntu@{config.get('c2_ip', 'N/A')}")
 
     if not config.get('c2_only'):
         info.append(f"SSH Command for Redirector: ssh -t -o 'StrictHostKeyChecking=no' -o 'UserKnownHostsFile=/dev/null' -o 'IdentitiesOnly=yes' -i {ssh_key} {ssh_user}@{config.get('redirector_ip', 'N/A')}")

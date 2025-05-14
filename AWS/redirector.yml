@@ -158,6 +158,39 @@
         redirector_vpc_id: "{{ vpc_result.vpc.id }}"  # Store for cleanup reference
       when: not (use_shared_infra | bool and infra_state_file.stat.exists | default(false))
 
+    - name: Set default c2_ip for redirector-only deployments
+      set_fact:
+        c2_ip: "{{ operator_ip }}"
+      when: redirector_only | default(false) | bool and c2_ip is not defined
+
+    - name: Load c2_ip from infrastructure state 
+      block:
+        - name: Check if infrastructure state file exists
+          stat:
+            path: "infrastructure_state_{{ deployment_id }}.json"
+          register: infra_state_check
+        
+        - name: Load infrastructure state
+          include_vars:
+            file: "infrastructure_state_{{ deployment_id }}.json"
+            name: infra_state
+          when: infra_state_check.stat.exists
+        
+        - name: Set c2 IP from infrastructure state
+          set_fact:
+            c2_ip: "{{ infra_state.c2_ip | default(operator_ip) }}"
+          when: infra_state_check.stat.exists and infra_state.c2_ip is defined
+        
+        - name: Debug c2 IP
+          debug:
+            msg: "Using c2 IP: {{ c2_ip | default('undefined') }}"
+      when: c2_ip is undefined
+
+    - name: Default to operator IP if c2 IP is still undefined
+      set_fact:
+        c2_ip: "{{ operator_ip }}"
+      when: c2_ip is undefined
+
     - name: Create security group for redirector
       amazon.aws.ec2_security_group:
         name: "{{ redirector_name }}-sg"
@@ -196,60 +229,84 @@
         dest: "infrastructure_state_{{ deployment_id }}.json"
       when: not (use_shared_infra | bool and infra_state_file.stat.exists | default(false))
 
-    # Generate or import SSH key for the deployment
+    # Generate or import SSH key for the deployment - FIXED KEY HANDLING
     - name: Check if deployment SSH key already exists locally
       stat:
         path: "~/.ssh/c2deploy_{{ deployment_id }}.pem"
       register: ssh_key_file
-          
-    - name: Ensure proper permissions on SSH key
-      file:
-        path: "~/.ssh/c2deploy_{{ deployment_id }}"
-        mode: '0600'
+      
+    - name: Generate SSH key pair if it doesn't exist
+      block:
+        - name: Create SSH key pair
+          command: ssh-keygen -t rsa -b 2048 -f ~/.ssh/c2deploy_{{ deployment_id }} -N ""
+          args:
+            creates: "~/.ssh/c2deploy_{{ deployment_id }}"
+        
+        - name: Rename private key to .pem format
+          command: mv ~/.ssh/c2deploy_{{ deployment_id }} ~/.ssh/c2deploy_{{ deployment_id }}.pem
+          args:
+            creates: "~/.ssh/c2deploy_{{ deployment_id }}.pem"
+            removes: "~/.ssh/c2deploy_{{ deployment_id }}"
       when: not ssh_key_file.stat.exists
 
+    - name: Ensure proper permissions on SSH key
+      file:
+        path: "~/.ssh/c2deploy_{{ deployment_id }}.pem"
+        mode: '0600'
+        state: file
+      
+    # Check if key pair exists in AWS
     - name: Check if key pair exists in AWS
       amazon.aws.ec2_key_info:
-        region: "{{ aws_c2_region }}"
+        region: "{{ aws_redirector_region }}"
         filters:
           key-name: "c2deploy_{{ deployment_id }}"
       register: existing_key_pair
 
+    # Import SSH key to AWS - FIXED CONDITION
     - name: Import SSH key to AWS
       amazon.aws.ec2_key:
         name: "c2deploy_{{ deployment_id }}"
         key_material: "{{ lookup('file', '~/.ssh/c2deploy_{{ deployment_id }}.pub') }}"
-        region: "{{ aws_c2_region }}"
+        region: "{{ aws_redirector_region }}"
         state: present
-      when: existing_key_pair.key_pairs | length == 0
+      when: existing_key_pair.keypairs | length == 0
 
-    # Launch the C2 server - use the consistent key pair name
-    - name: Launch C2 instance
+    # Launch the redirector instance
+    - name: Launch redirector instance
       amazon.aws.ec2_instance:
-        name: "{{ c2_name }}"
-        key_name: "c2deploy_{{ deployment_id }}"  # Use the imported key
-        instance_type: "{{ instance_type | default('t2.medium') }}"
+        name: "{{ redirector_name }}"
+        key_name: "c2deploy_{{ deployment_id }}"
+        instance_type: "{{ instance_type | default('t2.micro') }}"
         vpc_subnet_id: "{{ subnet_id }}"
         security_groups:
           - "{{ security_group.group_id }}"
         image_id: "{{ ami_id }}"
-        region: "{{ aws_c2_region }}"
+        region: "{{ aws_redirector_region }}"
         state: present
         wait: yes
         volumes:
           - device_name: "/dev/xvda"
             ebs:
-              volume_size: 100
+              volume_size: 20
               delete_on_termination: true
         tags:
-          Name: "{{ c2_name }}"
+          Name: "{{ redirector_name }}"
           deployment_id: "{{ deployment_id }}"
-      register: c2_instance
+      register: redirector_instance
 
     - name: Set redirector_ip for later use
       set_fact:
         redirector_ip: "{{ redirector_instance.instances[0].public_ip_address }}"
         redirector_instance_id: "{{ redirector_instance.instances[0].instance_id }}"
+
+    - name: Display redirector instance details for debugging
+      debug:
+        msg:
+          - "Redirector IP: {{ redirector_ip }}"
+          - "Redirector Instance ID: {{ redirector_instance_id }}"
+          - "SSH User to use: {{ ssh_user }}"
+          - "SSH Key path: ~/.ssh/c2deploy_{{ deployment_id }}.pem"
 
     - name: Wait for instance initialization
       pause:
@@ -258,7 +315,7 @@
 
     - name: Set correct permissions on SSH key
       file:
-        path: "~/.ssh/{{ redirector_name }}.pem"
+        path: "~/.ssh/c2deploy_{{ deployment_id }}.pem"
         mode: "0600"
 
     - name: Wait for redirector SSH to be available
@@ -275,10 +332,18 @@
         groups: "redirectors"
         ansible_host: "{{ redirector_ip }}"
         ansible_user: "ubuntu"
-        ansible_ssh_private_key_file: "~/.ssh/{{ redirector_name }}.pem"
+        ansible_ssh_private_key_file: "~/.ssh/c2deploy_{{ deployment_id }}.pem"
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes"
         ansible_python_interpreter: "/usr/bin/python3"
         shell_handler_port: "{{ effective_listen_port }}"
+        # Add necessary variables for redirector configuration
+        c2_ip: "{{ c2_ip }}"
+        domain: "{{ domain }}"
+        redirector_subdomain: "{{ redirector_subdomain }}"
+        havoc_teamserver_port: "{{ havoc_teamserver_port | default(40056) }}"
+        havoc_http_port: "{{ havoc_http_port | default(8080) }}"
+        havoc_https_port: "{{ havoc_https_port | default(443) }}"
+        zero_logs: "{{ zero_logs | default(true) }}"
 
 # Rest of the playbook for configuring the redirector
 - name: Configure redirector
@@ -311,5 +376,5 @@
           - "-----------------------------"
           - "Redirector IP: {{ ansible_host }}"
           - "Redirector Domain: {{ redirector_subdomain | default('cdn') }}.{{ domain }} (Update DNS A record)"
-          - "SSH Key: ~/.ssh/{{ hostvars['localhost']['redirector_name'] }}.pem"
+          - "SSH Key: ~/.ssh/c2deploy_{{ hostvars['localhost']['deployment_id'] }}.pem"
       when: not disable_summary | default(false)

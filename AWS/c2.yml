@@ -197,12 +197,10 @@
           # Management access only from operator IP
           - proto: tcp
             ports: 22
-            cidr_ip: "{{ operator_ip }}"
-            proto: tcp
+            cidr_ip: "{{ operator_ip }}/32"
           - proto: tcp
             ports: "{{ havoc_teamserver_port | default(40056) }}"
-            cidr_ip: "{{ operator_ip }}"
-            proto: tcp
+            cidr_ip: "{{ operator_ip }}/32"
           # Allow traffic only from redirector
           - proto: tcp
             ports:
@@ -212,24 +210,37 @@
               - "{{ havoc_https_port | default(443) }}"
               - "{{ gophish_admin_port }}"
             cidr_ip: "{{ redirector_ip }}/32"
-            proto: tcp
         rules_egress:
           - proto: -1
             cidr_ip: 0.0.0.0/0
         state: present
       register: security_group
 
-    # Generate or import SSH key for the deployment
+    # Generate or import SSH key for the deployment - FIXED KEY HANDLING
     - name: Check if deployment SSH key already exists locally
       stat:
         path: "~/.ssh/c2deploy_{{ deployment_id }}.pem"
       register: ssh_key_file
 
+    - name: Generate key pair if it doesn't exist
+      block:
+        - name: Create SSH key pair
+          command: ssh-keygen -t rsa -b 2048 -f ~/.ssh/c2deploy_{{ deployment_id }} -N ""
+          args:
+            creates: "~/.ssh/c2deploy_{{ deployment_id }}"
+        
+        - name: Rename private key to .pem format
+          command: mv ~/.ssh/c2deploy_{{ deployment_id }} ~/.ssh/c2deploy_{{ deployment_id }}.pem
+          args:
+            creates: "~/.ssh/c2deploy_{{ deployment_id }}.pem" 
+            removes: "~/.ssh/c2deploy_{{ deployment_id }}"
+      when: not ssh_key_file.stat.exists
+
     - name: Ensure proper permissions on SSH key
       file:
-        path: "~/.ssh/c2deploy_{{ deployment_id }}"
+        path: "~/.ssh/c2deploy_{{ deployment_id }}.pem"
         mode: '0600'
-      when: not ssh_key_file.stat.exists
+        state: file
 
     - name: Check if key pair exists in AWS
       amazon.aws.ec2_key_info:
@@ -244,7 +255,7 @@
         key_material: "{{ lookup('file', '~/.ssh/c2deploy_{{ deployment_id }}.pub') }}"
         region: "{{ aws_c2_region }}"
         state: present
-      when: existing_key_pair.key_pairs | length == 0
+      when: existing_key_pair.keypairs | length == 0
 
     # Launch the C2 server - use the consistent key pair name
     - name: Launch C2 instance
@@ -431,7 +442,67 @@
 
     - name: Include common mail server configuration tasks
       include_tasks: "../tasks/configure_mail.yml"
-      
+
+    - name: Set up SSH access to redirector
+      block:
+        - name: Ensure /root/.ssh directory exists on C2 server
+          file:
+            path: /root/.ssh
+            state: directory
+            mode: '0700'
+            owner: root
+            group: root
+
+        - name: Copy private SSH key to C2 server for redirector access
+          copy:
+            src: "{{ playbook_dir }}/../.ssh/c2deploy_{{ hostvars['localhost']['deployment_id'] }}.pem"
+            dest: "/root/.ssh/c2deploy_{{ hostvars['localhost']['deployment_id'] }}.pem"
+            mode: '0600'
+            owner: root
+            group: root
+          register: key_copy
+          ignore_errors: yes
+
+        - name: If direct path fails, try home directory location
+          copy:
+            src: "~/.ssh/c2deploy_{{ hostvars['localhost']['deployment_id'] }}.pem"
+            dest: "/root/.ssh/c2deploy_{{ hostvars['localhost']['deployment_id'] }}.pem"
+            mode: '0600'
+            owner: root
+            group: root
+          when: key_copy is failed
+
+        - name: Create SSH config file to use key automatically
+          copy:
+            dest: "/root/.ssh/config"
+            content: |
+              Host redirector
+                HostName {{ hostvars['localhost']['redirector_ip'] }}
+                User ubuntu
+                IdentityFile /root/.ssh/c2deploy_{{ hostvars['localhost']['deployment_id'] }}.pem
+                StrictHostKeyChecking no
+                UserKnownHostsFile /dev/null
+            mode: '0600'
+            owner: root
+            group: root
+
+        - name: Create alias for easy redirector access
+          lineinfile:
+            path: /root/.bashrc
+            line: 'alias redirector="ssh -i /root/.ssh/c2deploy_{{ hostvars["localhost"]["deployment_id"] }}.pem ubuntu@{{ hostvars["localhost"]["redirector_ip"] }}"'
+            state: present
+
+        - name: Test SSH from C2 to redirector
+          shell: |
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /root/.ssh/c2deploy_{{ hostvars['localhost']['deployment_id'] }}.pem ubuntu@{{ hostvars['localhost']['redirector_ip'] }} "echo 'SSH CONNECTION SUCCESSFUL FROM C2'"
+          register: ssh_test_result
+          changed_when: false
+          ignore_errors: yes
+
+        - name: Display SSH test result
+          debug:
+            msg: "{{ ssh_test_result.stdout if ssh_test_result.rc == 0 else 'SSH connection failed: ' + ssh_test_result.stderr }}"
+
     - name: Print deployment summary
       debug:
         msg:

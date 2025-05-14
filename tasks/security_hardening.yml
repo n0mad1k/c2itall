@@ -242,3 +242,49 @@
     name: fail2ban
     state: restarted
   when: fail2ban_service_stat.stat.exists and fail2ban_config_updated.changed
+
+# AWS-specific security updates - Only execute when provider is AWS
+- name: Check if we're running on AWS provider
+  set_fact:
+    is_aws_provider: "{{ hostvars['localhost']['provider'] | default('') == 'aws' }}"
+
+- name: AWS-specific security updates
+  block:
+    - name: Get redirector security group information
+      block:
+        - name: Check if infrastructure state file exists
+          stat:
+            path: "{{ playbook_dir }}/../infrastructure_state_{{ hostvars['localhost']['deployment_id'] }}.json"
+          register: redirector_state_file
+        
+        - name: Load redirector state if available
+          include_vars:
+            file: "{{ playbook_dir }}/../infrastructure_state_{{ hostvars['localhost']['deployment_id'] }}.json"
+            name: redirector_state
+          when: redirector_state_file.stat.exists
+      
+    - name: Explicitly confirm we're running on AWS
+      debug:
+        msg: "Updating AWS security group for redirector to allow SSH from C2"
+      
+    - name: Update redirector security group to allow SSH from C2
+      delegate_to: localhost
+      amazon.aws.ec2_security_group_rule:
+        security_group_id: "{{ redirector_state.security_group_id }}"
+        region: "{{ redirector_state.region | default(aws_region) }}"
+        rule:
+          proto: tcp
+          ports: 22
+          cidr_ip: "{{ ansible_host }}/32"
+        state: present
+      when: redirector_state is defined and redirector_state.security_group_id is defined
+      register: sg_update
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ hostvars['localhost']['aws_access_key'] }}"
+        AWS_SECRET_ACCESS_KEY: "{{ hostvars['localhost']['aws_secret_key'] }}"
+      ignore_errors: yes
+      
+    - name: Display security group update result
+      debug:
+        msg: "{{ 'Redirector security group updated to allow SSH from C2 (' + ansible_host + ')' if sg_update is success else 'Failed to update security group: ' + (sg_update.msg | default('unknown error')) }}"
+  when: is_aws_provider | bool
