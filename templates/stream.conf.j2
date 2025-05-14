@@ -14,7 +14,7 @@ stream {
     
     # HTTPS for Havoc
     server {
-  listen {{ havoc_https_port | default(443) }};
+  listen {{ havoc_https_port | default(8443) }};
   proxy_pass {{ c2_ip }}:{{ havoc_https_port | default(443) }};
     }
 }

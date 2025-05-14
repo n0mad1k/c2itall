@@ -1,5 +1,5 @@
 #!/bin/bash
-# post_install_c2.sh - Post-installation setup for C2 server
+# post_install_redirector.sh - Post-installation setup for redirector
 
 # ANSI color codes
 GREEN='\033[0;32m'
@@ -8,8 +8,47 @@ RED='\033[0;31m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Debug mode flag
+DEBUG=false
+
+# Show usage information
+function show_usage() {
+    echo "Usage: $0 [options]"
+    echo ""
+    echo "Options:"
+    echo "  -d, --debug    Enable debug/verbose output"
+    echo "  -h, --help     Show this help message"
+    echo ""
+}
+
+# Process command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -d|--debug)
+            DEBUG=true
+            shift
+            ;;
+        -h|--help)
+            show_usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            show_usage
+            exit 1
+            ;;
+    esac
+done
+
+# Debug function - only prints if DEBUG is true
+function debug() {
+    if [ "$DEBUG" = true ]; then
+        echo -e "${BLUE}[DEBUG] $1${NC}"
+    fi
+}
+
 echo -e "${BLUE}==================================================${NC}"
-echo -e "${BLUE}   C2ingRed Post-Installation Setup - C2 Server    ${NC}"
+echo -e "${BLUE}   C2ingRed Post-Installation Setup - Redirector    ${NC}"
 echo -e "${BLUE}==================================================${NC}"
 
 # Function to check if domain resolves to current IP
@@ -17,6 +56,10 @@ check_dns() {
     domain=$1
     current_ip=$(curl -s ifconfig.me)
     resolved_ip=$(dig +short $domain)
+    
+    debug "Checking DNS for $domain"
+    debug "Current IP: $current_ip"
+    debug "Resolved IP: $resolved_ip"
     
     if [ "$resolved_ip" = "$current_ip" ]; then
         echo -e "${GREEN}DNS check passed for $domain!${NC}"
@@ -35,130 +78,149 @@ setup_letsencrypt() {
     email=$2
     
     echo -e "\n${BLUE}Setting up Let's Encrypt for $domain${NC}"
+    debug "Domain: $domain, Email: $email"
     
-    # Stop Havoc service temporarily to free port 80
-    systemctl stop havoc 2>/dev/null
+    # Check if certificate already exists
+    if [ -d "/etc/letsencrypt/live/$domain" ]; then
+        echo -e "${YELLOW}Certificate already exists for $domain${NC}"
+        read -p "Do you want to renew it? (y/n): " renew
+        if [ "$renew" != "y" ]; then
+            echo -e "${YELLOW}Skipping certificate renewal${NC}"
+            return 0
+        fi
+    fi
+    
+    # Stop nginx if running to free up port 80
+    debug "Stopping nginx to free port 80"
+    systemctl stop nginx 2>/dev/null
     
     # Get certificate
-    certbot certonly --standalone -d $domain -m $email --agree-tos --non-interactive
+    debug "Running certbot to obtain certificate"
+    if [ "$DEBUG" = true ]; then
+        certbot certonly --standalone -d $domain -m $email --agree-tos --non-interactive
+    else
+        certbot certonly --standalone -d $domain -m $email --agree-tos --non-interactive >/dev/null 2>&1
+    fi
     
-    if [ $? -eq 0 ]; then
+    cert_result=$?
+    debug "Certbot result code: $cert_result"
+    
+    if [ $cert_result -eq 0 ]; then
         echo -e "${GREEN}Successfully obtained certificate for $domain${NC}"
-        
-        # Configure applications to use the certificate if needed
-        if [ -f "/etc/postfix/main.cf" ]; then
-            sed -i "s|^smtpd_tls_cert_file =.*|smtpd_tls_cert_file = /etc/letsencrypt/live/$domain/fullchain.pem|" /etc/postfix/main.cf
-            sed -i "s|^smtpd_tls_key_file =.*|smtpd_tls_key_file = /etc/letsencrypt/live/$domain/privkey.pem|" /etc/postfix/main.cf
-        fi
-        
-        # Restart Havoc
-        systemctl start havoc
-        
         return 0
     else
         echo -e "${RED}Failed to obtain certificate for $domain${NC}"
-        
-        # Restart Havoc
-        systemctl start havoc
-        
         return 1
     fi
 }
 
-# Function to display DKIM/DMARC records
-show_dns_records() {
+# Function to update NGINX configuration
+update_nginx_config() {
     domain=$1
     
-    if [ -f "/etc/opendkim/keys/$domain/mail.txt" ]; then
-        echo -e "\n${BLUE}DKIM DNS Record Information for $domain${NC}"
-        echo -e "${YELLOW}Add the following TXT record to your DNS:${NC}"
-        echo -e "${GREEN}=================================================${NC}"
-        echo -e "Name: mail._domainkey.$domain"
-        echo -e "Value:"
-        cat /etc/opendkim/keys/$domain/mail.txt | grep -v "^;" | tr -d '\n'
-        echo -e "\n${GREEN}=================================================${NC}"
+    debug "Updating NGINX configuration for $domain"
+    
+    # Check if NGINX config exists and contains the domain
+    if [ -f "/etc/nginx/sites-available/default" ]; then
+        if grep -q "$domain" "/etc/nginx/sites-available/default"; then
+            echo -e "\n${BLUE}Updating NGINX configuration to use SSL certificate${NC}"
+            
+            # Update SSL certificate paths
+            debug "Updating SSL certificate paths in NGINX config"
+            sed -i "s|ssl_certificate .*|ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;|" /etc/nginx/sites-available/default
+            sed -i "s|ssl_certificate_key .*|ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;|" /etc/nginx/sites-available/default
+            
+            echo -e "${GREEN}NGINX configuration updated${NC}"
+        else
+            echo -e "${YELLOW}Domain $domain not found in NGINX configuration${NC}"
+            debug "Searched for '$domain' in NGINX config but did not find it"
+        fi
+    else
+        echo -e "${RED}NGINX configuration file not found${NC}"
+    fi
+}
+
+# Function to start services
+start_services() {
+    echo -e "\n${BLUE}Starting required services${NC}"
+    
+    # Start nginx
+    debug "Starting NGINX"
+    systemctl start nginx
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}NGINX started successfully${NC}"
+        systemctl enable nginx
+    else
+        echo -e "${RED}Failed to start NGINX${NC}"
     fi
     
-    echo -e "\n${BLUE}DMARC Record Recommendation for $domain${NC}"
-    echo -e "${YELLOW}Add the following TXT record to your DNS:${NC}"
-    echo -e "${GREEN}=================================================${NC}"
-    echo -e "Name: _dmarc.$domain"
-    echo -e "Value: v=DMARC1; p=reject; rua=mailto:admin@$domain; ruf=mailto:admin@$domain; pct=100"
-    echo -e "${GREEN}=================================================${NC}"
-}
-
-# Function to test redirector connection
-test_redirector() {
-    # Check if SSH to redirector is configured
-    if [ -f "/root/.ssh/config" ] && grep -q "Host redirector" /root/.ssh/config; then
-        echo -e "\n${BLUE}Testing SSH connection to redirector...${NC}"
-        ssh -o ConnectTimeout=5 redirector "echo 'Connection successful'" >/dev/null 2>&1
-        
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN}SSH connection to redirector successful!${NC}"
-            echo -e "You can access the redirector with: ${YELLOW}ssh redirector${NC}"
-            return 0
-        else
-            echo -e "${RED}Could not connect to redirector.${NC}"
-            echo -e "${YELLOW}Please verify SSH configuration and firewall rules.${NC}"
-            return 1
-        fi
+    # Start shell handler
+    debug "Starting shell handler"
+    systemctl start shell-handler
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}Shell handler started successfully${NC}"
+        systemctl enable shell-handler
     else
-        echo -e "\n${YELLOW}Redirector SSH configuration not found.${NC}"
-        echo -e "If you need to access the redirector, please check deployment logs."
-        return 1
+        echo -e "${RED}Failed to start shell handler${NC}"
     fi
 }
 
-# Function to synchronize payloads with redirector
-sync_payloads() {
-    # Check if sync script exists
-    if [ -f "/root/Tools/secure_payload_sync.sh" ]; then
-        echo -e "\n${BLUE}Synchronizing payloads with redirector...${NC}"
-        /root/Tools/secure_payload_sync.sh
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN}Payload synchronization successful${NC}"
-            return 0
-        else
-            echo -e "${RED}Payload synchronization failed${NC}"
-            echo -e "${YELLOW}Check /root/Tools/logs/payload_sync.log for details${NC}"
-            return 1
-        fi
+# Function to display port information
+show_port_info() {
+    # Display shell handler port
+    debug "Collecting port information"
+    
+    if [ -f "/etc/systemd/system/shell-handler.service" ]; then
+        debug "Found shell-handler.service, extracting port information"
+        SHELL_PORT=$(grep "LISTEN_PORT=" /root/Tools/shell-handler/persistent-listener.sh | cut -d'=' -f2)
+        echo -e "\n${BLUE}Shell Handler Port Information:${NC}"
+        echo -e "Shell Handler is using port: ${GREEN}$SHELL_PORT${NC}"
+    fi
+    
+    # Display nginx listening ports
+    echo -e "\n${BLUE}NGINX Listening Ports:${NC}"
+    if [ "$DEBUG" = true ]; then
+        netstat -tulnp | grep nginx
     else
-        echo -e "\n${YELLOW}Payload sync script not found${NC}"
-        return 1
+        netstat -tulnp | grep nginx | grep -v "127.0.0.1"
     fi
 }
 
 # Main execution
-echo -e "\n${BLUE}Running post-installation checks...${NC}"
+debug "Starting redirector post-installation process with debug mode: $DEBUG"
+
+echo -e "\n${BLUE}Beginning redirector setup process...${NC}"
 
 # Get domain information
-read -p "Enter primary domain: " domain
+read -p "Enter redirector domain (e.g., cdn.example.com): " redirector_domain
 read -p "Enter email for Let's Encrypt: " email
 
-# Check DNS configuration
+# Check if DNS is properly configured
 echo -e "\n${BLUE}Checking DNS configuration...${NC}"
-check_dns $domain
+check_dns $redirector_domain
 
-# Ask if user wants to set up Let's Encrypt certificates
-read -p "Set up Let's Encrypt SSL certificate? (y/n): " setup_ssl
-if [ "$setup_ssl" = "y" ]; then
-    setup_letsencrypt $domain $email
+# Confirm proceeding even if DNS check fails
+if [ $? -ne 0 ]; then
+    echo -e "${YELLOW}DNS check failed but we can proceed anyway.${NC}"
+    echo -e "${YELLOW}Make sure to set up DNS records before trying to obtain certificates.${NC}"
+    read -p "Do you want to proceed anyway? (y/n): " proceed
+    if [ "$proceed" != "y" ]; then
+        echo -e "${RED}Setup aborted.${NC}"
+        exit 1
+    fi
 fi
 
-# Show DNS records to configure
-show_dns_records $domain
+# Set up Let's Encrypt
+setup_letsencrypt $redirector_domain $email
 
-# Test redirector connection
-test_redirector
+# Update NGINX configuration
+update_nginx_config $redirector_domain
 
-# Ask if user wants to sync payloads
-read -p "Synchronize payloads with redirector? (y/n): " sync_payload
-if [ "$sync_payload" = "y" ]; then
-    sync_payloads
-fi
+# Start services
+start_services
 
-echo -e "\n${GREEN}Post-installation checks complete!${NC}"
-echo -e "${YELLOW}Ensure your DNS records are properly configured.${NC}"
-echo -e "${YELLOW}See your deployment log for complete infrastructure details.${NC}"
+# Show port information
+show_port_info
+
+echo -e "\n${GREEN}Redirector setup complete!${NC}"
+echo -e "${YELLOW}Make sure DNS records are properly configured for continued operation.${NC}"
