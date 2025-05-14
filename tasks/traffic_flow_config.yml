@@ -23,6 +23,33 @@
     msg: "Skipping host-based firewall configuration for AWS instance. Security Groups are handling this at the infrastructure level."
   when: is_aws_provider
 
+# Check if UFW is installed or can be installed
+- name: Check if UFW is installed
+  command: which ufw
+  register: ufw_check
+  failed_when: false
+  changed_when: false
+  when: not is_aws_provider
+
+# Try to install UFW if not found and we're not on AWS
+- name: Install UFW if not present
+  apt:
+    name: ufw
+    state: present
+    update_cache: yes
+  register: ufw_install
+  until: ufw_install is success or ufw_install is failed
+  retries: 3
+  delay: 5
+  ignore_errors: yes
+  when: not is_aws_provider and ufw_check.rc != 0
+
+# Set a fact to track if UFW is available
+- name: Determine if UFW is available
+  set_fact:
+    ufw_available: "{{ (ufw_check.rc == 0) or (ufw_install is defined and ufw_install is success) }}"
+  when: not is_aws_provider
+
 # UFW Configuration Block (non-AWS only)
 - name: Configure C2 server routing with UFW
   block:
@@ -57,8 +84,36 @@
   when: 
     - server_role == 'c2'
     - not is_aws_provider
+    - ufw_available | default(false) | bool
 
-# Rest of the original file for non-AWS providers only
+# Fallback to iptables if UFW is not available
+- name: Configure C2 server routing with iptables (fallback)
+  block:
+    - name: Set up basic iptables rules for C2 server
+      shell: |
+        iptables -F
+        iptables -P INPUT DROP
+        iptables -P FORWARD DROP
+        iptables -P OUTPUT ACCEPT
+        # Allow established connections
+        iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+        # Allow SSH from operator
+        iptables -A INPUT -p tcp --dport 22 -s {{ operator_ip }} -j ACCEPT
+        # Allow Havoc teamserver from operator
+        iptables -A INPUT -p tcp --dport {{ havoc_teamserver_port | default(40056) }} -s {{ operator_ip }} -j ACCEPT
+        # Allow traffic from redirector
+        iptables -A INPUT -p tcp --dport 80 -s {{ redirector_ip }} -j ACCEPT
+        iptables -A INPUT -p tcp --dport 443 -s {{ redirector_ip }} -j ACCEPT
+        iptables -A INPUT -p tcp --dport {{ havoc_http_port | default(8080) }} -s {{ redirector_ip }} -j ACCEPT
+        iptables -A INPUT -p tcp --dport {{ havoc_https_port | default(9443) }} -s {{ redirector_ip }} -j ACCEPT
+        iptables -A INPUT -p tcp --dport {{ gophish_admin_port }} -s {{ redirector_ip }} -j ACCEPT
+      when: redirector_ip is defined
+  when: 
+    - server_role == 'c2'
+    - not is_aws_provider
+    - not (ufw_available | default(false) | bool)
+
+# Configure redirector routing with UFW when available
 - name: Configure redirector routing with UFW
   block:
     - name: Allow SSH only from operator IP
@@ -85,7 +140,32 @@
   when: 
     - server_role == 'redirector'
     - not is_aws_provider
+    - ufw_available | default(false) | bool
 
+# Fallback to iptables for redirector if UFW is not available
+- name: Configure redirector routing with iptables (fallback)
+  block:
+    - name: Set up basic iptables rules for redirector
+      shell: |
+        iptables -F
+        iptables -P INPUT DROP
+        iptables -P FORWARD DROP
+        iptables -P OUTPUT ACCEPT
+        # Allow established connections
+        iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+        # Allow SSH from operator
+        iptables -A INPUT -p tcp --dport 22 -s {{ operator_ip }} -j ACCEPT
+        # Allow web traffic from anywhere
+        iptables -A INPUT -p tcp --dport 80 -j ACCEPT
+        iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+        # Allow shell handler port
+        iptables -A INPUT -p tcp --dport {{ shell_handler_port | default('4444') }} -j ACCEPT
+  when: 
+    - server_role == 'redirector'
+    - not is_aws_provider
+    - not (ufw_available | default(false) | bool)
+
+# The rest of your tasks remain unchanged...
 - name: Configure logging server routing
   block:
     - name: Allow SSH only from operator IP
@@ -110,6 +190,7 @@
   when: 
     - server_role == 'logserver'
     - not is_aws_provider
+    - ufw_available | default(false) | bool
 
 - name: Update security group to allow SSH from C2 to redirector
   block:
@@ -133,5 +214,10 @@
         port: 22
         src: "{{ c2_ip }}"
         proto: tcp
-      when: provider != "aws" and not is_aws_provider
+      when: provider != "aws" and not is_aws_provider and ufw_available | default(false) | bool
+      
+    - name: Allow SSH from C2 to redirector (iptables fallback)
+      shell: |
+        iptables -A INPUT -p tcp --dport 22 -s {{ c2_ip }} -j ACCEPT
+      when: provider != "aws" and not is_aws_provider and not (ufw_available | default(false) | bool)
   when: server_role == 'redirector' and c2_ip is defined and redirector_ip is defined

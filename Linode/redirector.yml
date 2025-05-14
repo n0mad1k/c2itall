@@ -8,8 +8,6 @@
   vars_files:
     - vars.yaml
   vars:
-    # Handle both region and selected_region for backward compatibility
-    selected_region: "{{ selected_region | default(region) | default(linode_region) | default(region_choices | random) }}"
     # Use constant values directly to avoid recursive template resolution
     redirector_image_static: "linode/debian12"
 

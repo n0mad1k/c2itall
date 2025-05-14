@@ -21,6 +21,8 @@
       - secure-delete
       - jq
       - php-fpm
+      - net-tools
+      - nginx-extras
     state: present
     update_cache: yes
 

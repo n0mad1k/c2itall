@@ -53,6 +53,7 @@
       - zip
       - unzip
       - postfix
+      - net-tools
       - certbot
       - opendkim
       - opendkim-tools

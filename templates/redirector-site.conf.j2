@@ -287,16 +287,8 @@ server {
     listen 443 ssl default_server;
     listen [::]:443 ssl default_server;
     
-    # Use snakeoil or fallback to our generated certificates
-    {% raw %}
-    {% if snakeoil_cert.stat.exists %}
-    ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;
-    ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
-    {% else %}
     ssl_certificate /etc/nginx/conf.d/selfsigned.crt;
     ssl_certificate_key /etc/nginx/conf.d/selfsigned.key;
-    {% endif %}
-    {% endraw %}
     
     # Redirect unknown hosts to legitimate sites
     return 301 https://www.google.com;
