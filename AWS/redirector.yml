@@ -14,8 +14,7 @@
     instance_type: "{{ aws_instance_type | default('t2.micro') }}"
     deployment_id: "{{ deployment_id | default('') }}"
     redirector_name: "{{ redirector_name | default('r-' + deployment_id) }}"
-    # Calculate effective port: use shell_handler_port from vars or default to 8083
-    effective_listen_port: "{{ shell_handler_port | default(8083) }}"
+    effective_listen_port: "{{ shell_handler_port | default(4488) }}"
     # Check for shared infrastructure
     # Only use shared when C2 and redirector are in the same region
     use_shared_infra: "{{ not (c2_region is defined and redirector_region is defined and c2_region != redirector_region) and not c2_only | default(false) | bool and not redirector_only | default(false) | bool }}"

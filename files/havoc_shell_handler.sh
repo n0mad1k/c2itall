@@ -2,7 +2,7 @@
 # Automated shell handler for catching and upgrading shells to Havoc C2 agents
 
 # Configuration 
-LISTEN_PORT=4444
+LISTEN_PORT=4488
 C2_HOST="127.0.0.1"  # This will be replaced by Ansible with actual C2 IP
 HAVOC_PORT=40056     # Havoc default Teamserver port
 HAVOC_USER="admin"

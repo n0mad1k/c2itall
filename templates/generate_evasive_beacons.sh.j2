@@ -7,7 +7,7 @@ HAVOC_DIR="/root/Tools/Havoc"
 BEACONS_DIR="/root/Tools/beacons"
 C2_HOST="{{ ansible_host }}"
 REDIRECTOR_HOST="{{ redirector_subdomain }}.{{ domain }}"
-REDIRECTOR_PORT="{{ redirector_port | default('443') }}"
+REDIRECTOR_PORT="{{ redirector_port | default('9443') }}"
 PROFILE_FILE="$HAVOC_DIR/config/profile.json"
 
 # Ensure required directories exist

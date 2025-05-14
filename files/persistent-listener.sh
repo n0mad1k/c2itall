@@ -2,7 +2,7 @@
 # Automated shell handler for catching and upgrading reverse shells
 
 # Configuration 
-LISTEN_PORT=4444
+LISTEN_PORT=8844
 C2_HOST="127.0.0.1"  # This will be replaced by Ansible with actual C2 IP
 C2_PORT=50051        # Sliver default gRPC port
 WINDOWS_BEACON="/root/Tools/beacons/windows.exe"

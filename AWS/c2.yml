@@ -207,8 +207,11 @@
               - 80
               - 443
               - "{{ havoc_http_port | default(8080) }}"
-              - "{{ havoc_https_port | default(443) }}"
-              - "{{ gophish_admin_port }}"
+              - "{{ havoc_https_port | default(9443) }}"  # Updated from 443
+              - "{{ havoc_payload_port | default(8443) }}"
+              - "{{ gophish_admin_port | default(2222) }}"
+              - "{{ gophish_phish_port | default(8081) }}"
+              - "{{ tracker_port | default(5000) }}"
             cidr_ip: "{{ redirector_ip }}/32"
         rules_egress:
           - proto: -1
@@ -355,7 +358,7 @@
         letsencrypt_email: "{{ letsencrypt_email }}"
         havoc_teamserver_port: "{{ havoc_teamserver_port | default(40056) }}"
         havoc_http_port: "{{ havoc_http_port | default(8080) }}"
-        havoc_https_port: "{{ havoc_https_port | default(443) }}"
+        havoc_https_port: "{{ havoc_https_port | default(9443) }}"
         zero_logs: "{{ zero_logs | default(true) }}"
         secure_memory: "{{ secure_memory | default(true) }}"
         disable_history: "{{ disable_history | default(true) }}"

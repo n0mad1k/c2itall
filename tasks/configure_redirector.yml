@@ -138,6 +138,30 @@
   include_tasks: port_randomization.yml
   when: randomize_ports | default(true) | bool
 
+# Add just before configuring NGINX
+- name: Check if snakeoil certificates exist
+  stat:
+    path: /etc/ssl/certs/ssl-cert-snakeoil.pem
+  register: snakeoil_cert
+
+- name: Generate self-signed certificates if snakeoil not available
+  block:
+    - name: Create directory for self-signed certificates
+      file:
+        path: /etc/nginx/conf.d
+        state: directory
+        mode: '0755'
+
+    - name: Generate self-signed certificate
+      shell: |
+        openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+        -keyout /etc/nginx/conf.d/selfsigned.key \
+        -out /etc/nginx/conf.d/selfsigned.crt \
+        -subj "/C=US/ST=State/L=City/O=Organization/CN=localhost"
+      args:
+        creates: /etc/nginx/conf.d/selfsigned.crt
+  when: not snakeoil_cert.stat.exists
+
 # Configure nginx for dual HTTP/HTTPS with complete encryption
 - name: Configure NGINX for secure C2 redirection
   template:

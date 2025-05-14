@@ -165,7 +165,7 @@ server {
     # Valid C2 beacon routing - CRITICAL PATHS
     location ~ ^/api/beacon/ {
         # Only valid beacons proceed to C2
-        proxy_pass https://{{ c2_ip }}:{{ havoc_https_port | default(443) }};
+        proxy_pass https://{{ c2_ip }}:{{ havoc_https_port | default(9443) }};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -287,8 +287,16 @@ server {
     listen 443 ssl default_server;
     listen [::]:443 ssl default_server;
     
+    # Use snakeoil or fallback to our generated certificates
+    {% raw %}
+    {% if snakeoil_cert.stat.exists %}
     ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;
     ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
+    {% else %}
+    ssl_certificate /etc/nginx/conf.d/selfsigned.crt;
+    ssl_certificate_key /etc/nginx/conf.d/selfsigned.key;
+    {% endif %}
+    {% endraw %}
     
     # Redirect unknown hosts to legitimate sites
     return 301 https://www.google.com;

@@ -89,8 +89,11 @@
             - "80"
             - "443"
             - "{{ havoc_http_port | default('8080') }}"
-            - "{{ havoc_https_port | default('443') }}" 
+            - "{{ havoc_https_port | default('9443') }}"  # Updated from 443
+            - "{{ havoc_payload_port | default('8443') }}"
             - "{{ gophish_admin_port }}"
+            - "{{ gophish_phish_port | default('8081') }}"
+            - "{{ tracker_port | default('5000') }}"
       when: "'c2servers' in group_names"
 
     - name: Configure UFW for redirector
@@ -116,7 +119,7 @@
           loop:
             - "80"
             - "443"
-            - "{{ shell_handler_port | default('4444') }}"
+            - "{{ shell_handler_port | default('4488') }}"
       when: "'redirectors' in group_names"
   # Only run UFW block if not AWS and UFW is available/installed
   when: not is_aws_provider and (ufw_check.rc == 0 or ufw_install is success)
