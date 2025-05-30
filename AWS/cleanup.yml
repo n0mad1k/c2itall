@@ -433,6 +433,18 @@
         state: absent
       ignore_errors: yes
       register: infra_file
+
+    - name: Clean up deployment state file
+      file:
+        path: "{{ playbook_dir }}/../deployment_state_{{ deployment_id }}.json"
+        state: absent
+      ignore_errors: yes
+      register: state_file_deletion
+
+    - name: Report state file cleanup
+      debug:
+        msg: "Deployment state file {{ 'deleted' if state_file_deletion.changed else 'not found' }}"
+      when: state_file_deletion is defined
       
     # STEP 16: Enhanced and Accurate Cleanup Summary
     - name: Enhanced cleanup summary

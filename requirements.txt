@@ -5,3 +5,4 @@ botocore
 awscli
 passlib
 paramiko
+linode-cli

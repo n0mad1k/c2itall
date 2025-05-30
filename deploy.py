@@ -101,14 +101,16 @@ def main_menu():
         print(f"3) Deploy C2 Server")
         print(f"4) Deploy Redirector")
         print(f"5) Deploy Email Tracking Server")
-        print(f"6) Deploy Payload Server {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
-        print(f"7) Deploy Phishing Server {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
-        print(f"8) Deploy Logging Server {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
-        print(f"9) Deploy Share-Drive {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
-        print(f"10) Deploy Hashtopolis {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
-        print(f"11) Custom Deployment")
-        print(f"12) Tools")
-        print(f"13) Debug Mode: {COLORS['GREEN'] if debug_mode else COLORS['RED']}{debug_mode}{COLORS['RESET']}")
+        print(f"6) Deploy Advanced Phishing Infrastructure")
+        print(f"7) Deploy Ephemeral MTA Front-End")
+        print(f"8) Deploy Payload Server {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
+        print(f"9) Deploy Phishing Server {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
+        print(f"10) Deploy Logging Server {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
+        print(f"11) Deploy Share-Drive {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
+        print(f"12) Deploy Hashtopolis {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
+        print(f"13) Custom Deployment")
+        print(f"14) Tools")
+        print(f"15) Debug Mode: {COLORS['GREEN'] if debug_mode else COLORS['RED']}{debug_mode}{COLORS['RESET']}")
         print(f"\n")
         print(f"99) Exit")
         
@@ -124,7 +126,11 @@ def main_menu():
             redirector_menu()
         elif choice == "5":
             deploy_tracker()
-        elif choice in ["6", "7", "8", "9", "10"]:
+        elif choice == "6":
+            deploy_ephemeral_mta()
+        elif choice == "7":
+            deploy_advanced_phishing_infrastructure()
+        elif choice in ["8", "9", "10", "11", "12"]:
             print(f"\n{COLORS['YELLOW']}This feature is currently under construction.{COLORS['RESET']}")
             input("\nPress Enter to continue...")
         elif choice == "11":
@@ -209,6 +215,7 @@ def deploy_full_c2():
     config['c2_only'] = False
     config['deploy_tracker'] = True
     config['integrated_tracker'] = False
+    config['deploy_ephemeral_mta'] = True
     
     # Deployment ID will be generated in execute_deployment
     execute_deployment(config)
@@ -225,6 +232,28 @@ def deploy_basic_c2():
     config['integrated_tracker'] = False
     
     # Deployment ID will be generated in execute_deployment
+    execute_deployment(config)
+
+def deploy_ephemeral_mta():
+    """Deploy Ephemeral MTA for phishing campaigns with high OPSEC"""
+    config = gather_ephemeral_mta_parameters()
+    if not config:
+        return
+    
+    # Add ephemeral MTA flag
+    config['ephemeral_mta'] = True
+    execute_deployment(config)
+
+def deploy_advanced_phishing_infrastructure():
+    """Deploy full phishing infrastructure with Ephemeral MTA + GoPhish + C2 integration"""
+    
+    config = gather_advanced_phishing_parameters()
+    if not config:
+        return
+    
+    # Add both flags
+    config['advanced_phishing'] = True
+    config['ephemeral_mta'] = True
     execute_deployment(config)
 
 def deploy_c2_server():
@@ -379,6 +408,118 @@ def gather_common_parameters():
     # Fix: SSH option that defaults to 'y' properly
     ssh_response = input("\nSSH into instance after deployment? (y/n) [default: y]: ").lower()
     config['ssh_after_deploy'] = ssh_response != 'n'  # Default to True unless they type 'n'
+    
+    return config
+
+def gather_ephemeral_mta_parameters():
+    """Gather parameters needed for ephemeral MTA deployment"""
+    config = gather_common_parameters()
+    if not config:
+        return None
+    
+    print(f"\n{COLORS['BLUE']}Ephemeral MTA Configuration{COLORS['RESET']}")
+    print(f"\n{COLORS['YELLOW']}IMPORTANT OPSEC NOTES:{COLORS['RESET']}")
+    print(f"- Use completely separate domains for phishing campaigns")
+    print(f"- Never use your operational domains for phishing")
+    print(f"- Use generic, innocuous domain names that blend with business traffic")
+    print(f"- Campaign IDs should look natural, not like 'wave42'")
+    
+    # Use separate domains for phishing campaigns
+    phish_domain = input(f"\nEnter phishing domain (separate from C2 domain): ")
+    if not phish_domain:
+        print(f"{COLORS['RED']}A separate phishing domain is required for proper OPSEC.{COLORS['RESET']}")
+        return None
+    config['phish_domain'] = phish_domain
+    
+    # Generate a campaign ID that looks natural
+    default_campaign_id = f"mail{generate_random_string(4).lower()}"
+    campaign_id = input(f"Enter campaign identifier [default: {default_campaign_id}]: ") or default_campaign_id
+    config['campaign_id'] = campaign_id
+    
+    # Email for Let's Encrypt
+    default_email = f"admin@{phish_domain}"
+    email = input(f"Enter email for Let's Encrypt [default: {default_email}]: ") or default_email
+    config['letsencrypt_email'] = email
+    
+    # C2 connection method
+    print(f"\n{COLORS['BLUE']}C2 Connection Configuration{COLORS['RESET']}")
+    print(f"1) SSH Tunnel (recommended)")
+    print(f"2) Direct connection (less secure)")
+    connection_type = input(f"Select connection method [default: 1]: ") or "1"
+    
+    if connection_type == "1":
+        config['use_ssh_tunnel'] = True
+        
+        # Get SSH key for C2 access
+        if 'deployment_id' in config:
+            default_key_path = f"~/.ssh/c2deploy_{config['deployment_id']}.pem"
+        else:
+            default_key_path = "~/.ssh/id_rsa"
+        
+        ssh_key_path = input(f"Enter SSH key path for C2 access [default: {default_key_path}]: ") or default_key_path
+        config['c2_ssh_key_path'] = os.path.expanduser(ssh_key_path)
+    else:
+        config['use_ssh_tunnel'] = False
+    
+    # C2 server info for mail delivery - over private tunnel, not public DNS
+    c2_ip = input(f"Enter C2 server IP for mail delivery: ")
+    if not c2_ip:
+        print(f"{COLORS['RED']}C2 server IP is required for mail delivery.{COLORS['RESET']}")
+        return None
+    config['static_mailstore_ip'] = c2_ip
+    
+    # DKIM settings
+    print(f"\n{COLORS['BLUE']}DKIM Configuration{COLORS['RESET']}")
+    use_dkim = input(f"Configure DKIM for better deliverability? (y/n) [default: y]: ").lower() != 'n'
+    config['use_dkim'] = use_dkim
+    
+    # Number of MTAs to deploy (for rotation)
+    num_mtas = input(f"\nNumber of MTAs to deploy (for IP rotation) [default: 1]: ") or "1"
+    try:
+        config['num_mtas'] = int(num_mtas)
+    except ValueError:
+        config['num_mtas'] = 1
+    
+    return config
+    
+def gather_advanced_phishing_parameters():
+    """Collect parameters for advanced phishing infrastructure"""
+    
+    # Start with ephemeral MTA parameters
+    config = gather_ephemeral_mta_parameters()
+    if not config:
+        return None
+    
+    # Add GoPhish configuration
+    print(f"\n{COLORS['BLUE']}GoPhish Configuration{COLORS['RESET']}")
+    
+    # SMTP authentication details
+    default_smtp_user = f"mail{generate_random_string(4)}"
+    smtp_user = input(f"Enter SMTP auth username [default: {default_smtp_user}]: ") or default_smtp_user
+    config['smtp_auth_user'] = smtp_user
+    
+    smtp_pass = input(f"Enter SMTP auth password [default: random]: ")
+    if not smtp_pass:
+        smtp_pass = generate_random_string(16)
+        print(f"Generated SMTP password: {smtp_pass}")
+    config['smtp_auth_pass'] = smtp_pass
+    
+    # GoPhish admin port
+    default_gophish_port = str(random.randint(2000, 6000))
+    gophish_port = input(f"Enter GoPhish admin port [default: {default_gophish_port}]: ") or default_gophish_port
+    config['gophish_admin_port'] = gophish_port
+    
+    # Landing page configuration
+    print(f"\n{COLORS['BLUE']}Landing Page Configuration{COLORS['RESET']}")
+    use_landing_page = input(f"Configure phishing landing page? (y/n) [default: y]: ").lower() != 'n'
+    config['use_landing_page'] = use_landing_page
+    
+    if use_landing_page:
+        landing_domain = input(f"Enter landing page domain (separate from phish domain): ")
+        if landing_domain:
+            config['landing_domain'] = landing_domain
+        else:
+            print(f"{COLORS['YELLOW']}Will use redirector domain for landing pages.{COLORS['RESET']}")
     
     return config
 
@@ -2001,6 +2142,11 @@ def teardown_infrastructure(config):
         elif vars_data.get('aws_secret_key'):
             os.environ['AWS_SECRET_ACCESS_KEY'] = vars_data['aws_secret_key']
             config['aws_secret_key'] = vars_data['aws_secret_key']
+    elif provider == "linode":
+        # Explicitly load Linode token from vars.yaml if not already in config
+        if not config.get('linode_token') and vars_data.get('linode_token'):
+            config['linode_token'] = vars_data['linode_token']
+            logging.info("Loaded Linode token from vars.yaml for cleanup")
     
     # Set default resource names based on deployment ID
     config['redirector_name'] = f"r-{deployment_id}"
@@ -2289,10 +2435,10 @@ def generate_deployment_info(config, success=True):
 
     # Add correct SSH commands for each server type
     if not config.get('redirector_only'):
-        info.append(f"SSH Command for C2: ssh -t -o 'StrictHostKeyChecking=no' -o 'UserKnownHostsFile=/dev/null' -o 'IdentitiesOnly=yes' -i {ssh_key} ubuntu@{config.get('c2_ip', 'N/A')}")
+        info.append(f"SSH Command for C2: ssh -t -o 'StrictHostKeyChecking=no' -o 'UserKnownHostsFile=/dev/null' -o 'IdentitiesOnly=yes' -i {ssh_key} {ssh_user}@{config.get('c2_ip', 'N/A')}")
 
     if not config.get('c2_only'):
-        info.append(f"SSH Command for Redirector: ssh -t -o 'StrictHostKeyChecking=no' -o 'UserKnownHostsFile=/dev/null' -o 'IdentitiesOnly=yes' -i {ssh_key} {ssh_user}@{config.get('redirector_ip', 'N/A')}")
+        info.append(f"SSH Command for Redirector: ssh -t -o 'StrictHostKeyChecking=no' -o 'UserKnownHostsFile=/dev/null' -o 'IdentitiesOnly=yes' -i {ssh_key} ubuntu@{config.get('redirector_ip', 'N/A')}")
 
     if config.get('deploy_tracker') and not config.get('integrated_tracker'):
         info.append(f"SSH Command for Tracker: ssh -t -o 'StrictHostKeyChecking=no' -o 'UserKnownHostsFile=/dev/null' -o 'IdentitiesOnly=yes' -i {ssh_key} {ssh_user}@{config.get('tracker_ip', 'N/A')}")

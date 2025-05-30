@@ -73,6 +73,18 @@
       when: cleanup_tracker and tracker_name is defined and tracker_name != ""
       register: tracker_deletion
       ignore_errors: yes
+
+    - name: Clean up deployment state file
+      file:
+        path: "{{ playbook_dir }}/../deployment_state_{{ deployment_id }}.json"
+        state: absent
+      ignore_errors: yes
+      register: state_file_deletion
+
+    - name: Report state file cleanup
+      debug:
+        msg: "Deployment state file {{ 'deleted' if state_file_deletion.changed else 'not found' }}"
+      when: state_file_deletion is defined
       
     - name: Report cleanup status
       debug:
