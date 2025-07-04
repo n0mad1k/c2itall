@@ -1,0 +1,129 @@
+---
+# Main phishing infrastructure deployment playbook
+# Handles all deployment types and orchestrates component deployment
+
+- name: Deploy phishing infrastructure
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars_files:
+    - vars.yaml
+  vars:
+    deployment_id: "{{ deployment_id | default('') }}"
+    provider: "{{ provider | default('aws') }}"
+    deployment_type: "{{ deployment_type | default('phishing_only_noccdn') }}"
+    
+  tasks:
+    - name: Validate deployment configuration
+      assert:
+        that:
+          - deployment_id != ""
+          - provider != ""
+          - deployment_type != ""
+        fail_msg: "Missing required deployment parameters"
+
+    - name: Display deployment information
+      debug:
+        msg:
+          - "Phishing Infrastructure Deployment"
+          - "=================================="
+          - "Deployment ID: {{ deployment_id }}"
+          - "Provider: {{ provider }}"
+          - "Deployment Type: {{ deployment_type }}"
+          - "Primary Domain: {{ primary_domain | default(domain) }}"
+          - "Phishing Domain: {{ phishing_domain | default(primary_domain) }}"
+
+    # Phase 1: Deploy core infrastructure components
+    - name: Deploy MTA Front server
+      include: mta_front.yml
+      when: deploy_mta_front | default(false) | bool
+      vars:
+        server_name: "mta-{{ deployment_id }}"
+        component_type: "mta_front"
+
+    - name: Deploy Gophish server
+      include: gophish_server.yml
+      when: deploy_gophish | default(false) | bool
+      vars:
+        server_name: "gophish-{{ deployment_id }}"
+        component_type: "gophish"
+
+    - name: Deploy phishing redirector
+      include: phishing_redirector.yml
+      when: deploy_phishing_redirector | default(false) | bool
+      vars:
+        server_name: "phish-redir-{{ deployment_id }}"
+        component_type: "phishing_redirector"
+
+    - name: Deploy phishing web server
+      include: phishing_webserver.yml
+      when: deploy_phishing_webserver | default(false) | bool
+      vars:
+        server_name: "phish-web-{{ deployment_id }}"
+        component_type: "phishing_webserver"
+
+    - name: Deploy payload redirector
+      include: payload_redirector.yml
+      when: deploy_payload_redirector | default(false) | bool
+      vars:
+        server_name: "payload-redir-{{ deployment_id }}"
+        component_type: "payload_redirector"
+
+    - name: Deploy payload server
+      include: payload_server.yml
+      when: deploy_payload_server | default(false) | bool
+      vars:
+        server_name: "payload-{{ deployment_id }}"
+        component_type: "payload_server"
+
+    # Phase 2: Deploy C2 infrastructure if requested
+    - name: Deploy C2 redirector
+      include: ../AWS/redirector.yml
+      when: deploy_c2_redirector | default(false) | bool
+      vars:
+        redirector_name: "c2-redir-{{ deployment_id }}"
+
+    - name: Deploy C2 backend
+      include: ../AWS/c2.yml
+      when: deploy_c2_backend | default(false) | bool
+      vars:
+        c2_name: "c2-{{ deployment_id }}"
+
+    # Phase 3: Configure security groups and firewall rules
+    - name: Configure phishing security
+      include_tasks: "../tasks/setup_phishing_security.yml"
+      vars:
+        deployment_components:
+          mta_front: "{{ deploy_mta_front | default(false) }}"
+          gophish: "{{ deploy_gophish | default(false) }}"
+          phishing_redirector: "{{ deploy_phishing_redirector | default(false) }}"
+          phishing_webserver: "{{ deploy_phishing_webserver | default(false) }}"
+          payload_redirector: "{{ deploy_payload_redirector | default(false) }}"
+          payload_server: "{{ deploy_payload_server | default(false) }}"
+
+    # Phase 4: Save deployment state
+    - name: Save phishing deployment state
+      template:
+        src: "../templates/phishing_deployment_state.j2"
+        dest: "phishing_deployment_{{ deployment_id }}.json"
+        mode: '0600'
+      vars:
+        deployment_info:
+          deployment_id: "{{ deployment_id }}"
+          deployment_type: "{{ deployment_type }}"
+          provider: "{{ provider }}"
+          components: "{{ deployment_components }}"
+          domains:
+            primary: "{{ primary_domain | default(domain) }}"
+            phishing: "{{ phishing_domain | default(primary_domain) }}"
+          created: "{{ ansible_date_time.iso8601 }}"
+
+    - name: Display deployment summary
+      debug:
+        msg:
+          - "Phishing Infrastructure Deployment Complete!"
+          - "==========================================="
+          - "Access your Gophish interface at: https://{{ gophish_ip }}:{{ gophish_admin_port | default(3333) }}"
+          - "Phishing domain: {{ phishing_domain }}"
+          - "Campaign ready to launch!"
+      when: not disable_summary | default(false)

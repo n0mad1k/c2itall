@@ -296,6 +296,263 @@ def deploy_tracker():
     
     execute_deployment(config)
 
+def phishing_menu():
+    """Display the phishing submenu and handle user selection"""
+    while True:
+        clear_screen()
+        print_banner()
+        print(f"{COLORS['WHITE']}PHISHING INFRASTRUCTURE MENU{COLORS['RESET']}")
+        print(f"{COLORS['WHITE']}============================{COLORS['RESET']}")
+        print(f"1) Full Red Team Infra (CDN Abuse)")
+        print(f"2) Full Red Team Infra (No CDN)")
+        print(f"3) Phishing Only (CDN)")
+        print(f"4) Phishing Only (No CDN)")
+        print(f"5) FedRAMP Compliant Phishing")
+        print(f"6) MTA Front Server Only")
+        print(f"7) Gophish Server Only")
+        print(f"8) Phishing Redirector Only")
+        print(f"9) Phishing Web Server Only")
+        print(f"99) Return to Main Menu")
+        
+        choice = input("\nSelect an option: ")
+        
+        if choice == "1":
+            deploy_full_redteam_cdn()
+        elif choice == "2":
+            deploy_full_redteam_noccdn()
+        elif choice == "3":
+            deploy_phishing_only_cdn()
+        elif choice == "4":
+            deploy_phishing_only_noccdn()
+        elif choice == "5":
+            deploy_fedramp_phishing()
+        elif choice == "6":
+            deploy_mta_front_only()
+        elif choice == "7":
+            deploy_gophish_only()
+        elif choice == "8":
+            deploy_phishing_redirector_only()
+        elif choice == "9":
+            deploy_phishing_webserver_only()
+        elif choice == "99":
+            return
+        else:
+            print(f"\n{COLORS['RED']}Invalid option. Please try again.{COLORS['RESET']}")
+            time.sleep(1)
+
+def deploy_full_redteam_cdn():
+    """Deploy complete red team infrastructure with CDN abuse"""
+    config = gather_phishing_parameters()
+    if not config:
+        return
+    
+    config['deployment_type'] = 'full_redteam_cdn'
+    config['use_cdn'] = True
+    config['deploy_mta_front'] = True
+    config['deploy_gophish'] = True
+    config['deploy_phishing_redirector'] = True
+    config['deploy_phishing_webserver'] = True
+    config['deploy_payload_redirector'] = True
+    config['deploy_payload_server'] = True
+    config['deploy_c2_redirector'] = True
+    config['deploy_c2_backend'] = True
+    config['deploy_tracker'] = True
+    
+    execute_phishing_deployment(config)
+
+def deploy_full_redteam_noccdn():
+    """Deploy complete red team infrastructure without CDN abuse"""
+    config = gather_phishing_parameters()
+    if not config:
+        return
+    
+    config['deployment_type'] = 'full_redteam_noccdn'
+    config['use_cdn'] = False
+    config['deploy_mta_front'] = True
+    config['deploy_gophish'] = True
+    config['deploy_phishing_redirector'] = True
+    config['deploy_phishing_webserver'] = True
+    config['deploy_payload_redirector'] = True
+    config['deploy_payload_server'] = True
+    config['deploy_c2_redirector'] = True
+    config['deploy_c2_backend'] = True
+    config['deploy_tracker'] = True
+    
+    execute_phishing_deployment(config)
+
+def deploy_phishing_only_cdn():
+    """Deploy phishing infrastructure only with CDN"""
+    config = gather_phishing_parameters()
+    if not config:
+        return
+    
+    config['deployment_type'] = 'phishing_only_cdn'
+    config['use_cdn'] = True
+    config['deploy_mta_front'] = True
+    config['deploy_gophish'] = True
+    config['deploy_phishing_redirector'] = True
+    config['deploy_phishing_webserver'] = True
+    config['deploy_tracker'] = True
+    
+    execute_phishing_deployment(config)
+
+def deploy_phishing_only_noccdn():
+    """Deploy phishing infrastructure only without CDN"""
+    config = gather_phishing_parameters()
+    if not config:
+        return
+    
+    config['deployment_type'] = 'phishing_only_noccdn'
+    config['use_cdn'] = False
+    config['deploy_mta_front'] = True
+    config['deploy_gophish'] = True
+    config['deploy_phishing_redirector'] = True
+    config['deploy_phishing_webserver'] = True
+    config['deploy_tracker'] = True
+    
+    execute_phishing_deployment(config)
+
+def deploy_fedramp_phishing():
+    """Deploy FedRAMP compliant phishing infrastructure"""
+    config = gather_phishing_parameters()
+    if not config:
+        return
+    
+    config['deployment_type'] = 'fedramp_compliant'
+    config['fedramp_mode'] = True
+    config['use_cdn'] = False
+    config['deploy_gophish'] = True
+    config['deploy_phishing_webserver'] = True
+    config['deploy_tracker'] = True
+    config['compliance_mode'] = True
+    config['immediate_disclosure'] = True
+    
+    execute_phishing_deployment(config)
+
+def gather_phishing_parameters():
+    """Collect parameters for phishing deployments"""
+    config = gather_common_parameters()
+    if not config:
+        return None
+    
+    # Phishing-specific configuration
+    print(f"\n{COLORS['BLUE']}Phishing Configuration{COLORS['RESET']}")
+    
+    # Domain configuration
+    primary_domain = input(f"Primary domain [default: {config.get('domain', 'example.com')}]: ") or config.get('domain', 'example.com')
+    config['primary_domain'] = primary_domain
+    
+    aged_domain = input(f"Aged domain for phishing (optional): ")
+    if aged_domain:
+        config['aged_domain'] = aged_domain
+        config['phishing_domain'] = aged_domain
+    else:
+        config['phishing_domain'] = primary_domain
+    
+    # Subdomain configuration
+    config['mta_subdomain'] = input("MTA subdomain [default: mail]: ") or "mail"
+    config['phishing_subdomain'] = input("Phishing subdomain [default: portal]: ") or "portal"
+    config['payload_subdomain'] = input("Payload subdomain [default: cdn]: ") or "cdn"
+    
+    # Campaign configuration
+    config['campaign_name'] = input("Campaign name [default: test-campaign]: ") or "test-campaign"
+    config['sender_name'] = input("Sender display name [default: IT Support]: ") or "IT Support"
+    config['sender_email'] = f"noreply@{config['phishing_domain']}"
+    
+    # Template selection
+    print(f"\nTemplate options:")
+    print(f"1) Office 365 Login")
+    print(f"2) Password Expiration")
+    print(f"3) Security Alert")
+    print(f"4) File Share Notification")
+    print(f"5) Custom Template")
+    
+    template_choice = input("Select template [default: 1]: ") or "1"
+    templates = {
+        "1": "office365_login",
+        "2": "password_expiry", 
+        "3": "security_alert",
+        "4": "file_share",
+        "5": "custom"
+    }
+    config['email_template'] = templates.get(template_choice, "office365_login")
+    
+    return config
+
+def execute_phishing_deployment(config):
+    """Execute phishing infrastructure deployment"""
+    clear_screen()
+    print_banner()
+    print(f"\n{COLORS['GREEN']}Starting phishing infrastructure deployment...{COLORS['RESET']}")
+    
+    # Generate deployment ID
+    if 'deployment_id' not in config:
+        config['deployment_id'] = generate_random_string(8)
+    
+    # Set up logging
+    log_file = setup_logging(config['deployment_id'], "phishing_deployment")
+    
+    print(f"Deployment Type: {config['deployment_type']}")
+    print(f"Deployment ID: {config['deployment_id']}")
+    print(f"Provider: {config['provider']}")
+    
+    # Confirm deployment
+    confirm = input(f"\n{COLORS['YELLOW']}Proceed with phishing deployment? (y/n): {COLORS['RESET']}").lower()
+    if confirm != 'y':
+        print(f"\n{COLORS['YELLOW']}Deployment cancelled.{COLORS['RESET']}")
+        return
+    
+    # Execute deployment based on type
+    success = deploy_phishing_infrastructure(config)
+    
+    if success:
+        print(f"\n{COLORS['GREEN']}Phishing infrastructure deployment completed successfully!{COLORS['RESET']}")
+        deployment_info_log = generate_phishing_deployment_info(config, success=True)
+        print(f"\n{COLORS['CYAN']}Deployment information saved to: {deployment_info_log}{COLORS['RESET']}")
+    else:
+        print(f"\n{COLORS['RED']}Phishing infrastructure deployment failed.{COLORS['RESET']}")
+        deployment_info_log = generate_phishing_deployment_info(config, success=False)
+        print(f"\n{COLORS['YELLOW']}Deployment information saved to: {deployment_info_log}{COLORS['RESET']}")
+    
+    input("\nPress Enter to return to menu...")
+
+# Add the component-only deployment functions
+def deploy_mta_front_only():
+    """Deploy MTA front server only"""
+    config = gather_common_parameters()
+    if not config:
+        return
+    config['deployment_type'] = 'mta_front_only'
+    config['deploy_mta_front'] = True
+    execute_phishing_deployment(config)
+
+def deploy_gophish_only():
+    """Deploy Gophish server only"""
+    config = gather_common_parameters()
+    if not config:
+        return
+    config['deployment_type'] = 'gophish_only'
+    config['deploy_gophish'] = True
+    execute_phishing_deployment(config)
+
+def deploy_phishing_redirector_only():
+    """Deploy phishing redirector only"""
+    config = gather_common_parameters()
+    if not config:
+        return
+    config['deployment_type'] = 'phishing_redirector_only'
+    config['deploy_phishing_redirector'] = True
+    execute_phishing_deployment(config)
+
+def deploy_phishing_webserver_only():
+    """Deploy phishing web server only"""
+    config = gather_common_parameters()
+    if not config:
+        return
+    config['deployment_type'] = 'phishing_webserver_only'
+    config['deploy_phishing_webserver'] = True
+    execute_phishing_deployment(config)
+
 def custom_deployment():
     """Run the full interactive deployment wizard"""
     config = interactive_setup()

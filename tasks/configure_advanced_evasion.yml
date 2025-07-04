@@ -1,0 +1,137 @@
+---
+# Advanced evasion techniques for red team phishing
+
+- name: Install advanced evasion tools
+  apt:
+    name:
+      - python3-dnspython
+      - python3-requests
+      - python3-selenium
+      - chromium-browser
+      - chromium-chromedriver
+      - tor
+      - proxychains4
+    state: present
+
+- name: Create SMTP smuggling configuration
+  template:
+    src: "../templates/smtp-smuggling.py.j2"
+    dest: "/root/Tools/phishing/smtp-smuggling.py"
+    mode: '0755'
+    owner: root
+    group: root
+  when: enable_smtp_smuggling | default(false) | bool
+
+- name: Configure SPF bypass techniques
+  template:
+    src: "../templates/spf-bypass.sh.j2"
+    dest: "/root/Tools/phishing/spf-bypass.sh"
+    mode: '0755'
+    owner: root
+    group: root
+  when: enable_spf_bypass | default(false) | bool
+
+- name: Create domain aging simulation
+  template:
+    src: "../templates/domain-aging.py.j2"
+    dest: "/root/Tools/phishing/domain-aging.py"
+    mode: '0755'
+    owner: root
+    group: root
+  when: aged_domain_mode | default(false) | bool
+
+- name: Set up MTA fronting configuration
+  template:
+    src: "../templates/mta-fronting.conf.j2"
+    dest: "/etc/postfix/mta_fronting.cf"
+    mode: '0644'
+    owner: root
+    group: root
+  when: enable_mta_fronting | default(false) | bool
+  notify: restart postfix
+
+- name: Create file format manipulation tools
+  copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: '0755'
+    owner: root
+    group: root
+  with_items:
+    - { src: "../files/pdf-weaponizer.py", dest: "/root/Tools/phishing/pdf-weaponizer.py" }
+    - { src: "../files/office-macro-generator.py", dest: "/root/Tools/phishing/office-macro-generator.py" }
+    - { src: "../files/lnk-generator.py", dest: "/root/Tools/phishing/lnk-generator.py" }
+
+- name: Create Living off the Land (LOtL) payload templates
+  template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: '0644'
+    owner: root
+    group: root
+  with_items:
+    - { src: "../templates/lotl-powershell.ps1.j2", dest: "/root/Tools/phishing/templates/lotl-powershell.ps1" }
+    - { src: "../templates/lotl-wmic.cmd.j2", dest: "/root/Tools/phishing/templates/lotl-wmic.cmd" }
+    - { src: "../templates/lotl-bitsadmin.cmd.j2", dest: "/root/Tools/phishing/templates/lotl-bitsadmin.cmd" }
+
+- name: Set up CDN abuse configuration
+  template:
+    src: "../templates/cdn-abuse.py.j2"
+    dest: "/root/Tools/phishing/cdn-abuse.py"
+    mode: '0755'
+    owner: root
+    group: root
+  when: enable_cdn_abuse | default(false) | bool
+
+- name: Create domain reputation monitoring
+  template:
+    src: "../templates/reputation-monitor.py.j2"
+    dest: "/root/Tools/phishing/reputation-monitor.py"
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Set up cron job for reputation monitoring
+  cron:
+    name: "Domain reputation monitoring"
+    minute: "0"
+    hour: "*/4"
+    job: "/root/Tools/phishing/reputation-monitor.py >> /root/Tools/phishing/logs/reputation.log 2>&1"
+
+- name: Create email header spoofing tools
+  template:
+    src: "../templates/header-spoofing.py.j2"
+    dest: "/root/Tools/phishing/header-spoofing.py"
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Configure Tor for anonymization
+  template:
+    src: "../templates/torrc-phishing.j2"
+    dest: "/etc/tor/torrc"
+    backup: yes
+  notify: restart tor
+  when: enable_tor_routing | default(false) | bool
+
+- name: Create user-agent rotation script
+  template:
+    src: "../templates/user-agent-rotation.py.j2"
+    dest: "/root/Tools/phishing/user-agent-rotation.py"
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Set up automated evasion techniques
+  template:
+    src: "../templates/automated-evasion.py.j2"
+    dest: "/root/Tools/phishing/automated-evasion.py"
+    mode: '0755'
+    owner: root
+    group: root
+
+handlers:
+  - name: restart tor
+    systemd:
+      name: tor
+      state: restarted

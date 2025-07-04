@@ -1,0 +1,296 @@
+---
+# Common tasks for configuring advanced phishing server
+# Supports both red team and FedRAMP compliance modes
+
+- name: Update system packages
+  apt:
+    update_cache: yes
+    upgrade: dist
+
+- name: Install base packages for phishing server
+  apt:
+    name:
+      - nginx
+      - certbot
+      - python3-certbot-nginx
+      - postfix
+      - dovecot-core
+      - dovecot-imapd
+      - opendkim
+      - opendkim-tools
+      - sqlite3
+      - git
+      - curl
+      - wget
+      - jq
+      - unzip
+      - python3-pip
+      - python3-venv
+      - nodejs
+      - npm
+      - php-fpm
+      - php-sqlite3
+      - php-curl
+      - php-json
+      - swaks
+      - dnsutils
+      - net-tools
+      - fail2ban
+    state: present
+
+- name: Create phishing tools directory
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  with_items:
+    - /root/Tools/phishing
+    - /root/Tools/phishing/templates
+    - /root/Tools/phishing/campaigns
+    - /root/Tools/phishing/logs
+    - /var/www/phishing
+    - /var/www/phishing/assets
+    - /var/www/phishing/api
+
+- name: Set up GoPhish directory
+  file:
+    path: /root/Tools/gophish
+    state: directory
+    mode: '0755'
+
+- name: Download latest GoPhish release
+  shell: |
+    LATEST_URL=$(curl -s https://api.github.com/repos/gophish/gophish/releases/latest | jq -r '.assets[] | select(.browser_download_url | contains("linux-64bit.zip")) | .browser_download_url')
+    curl -L "$LATEST_URL" -o /tmp/gophish.zip
+    unzip /tmp/gophish.zip -d /root/Tools/gophish
+    chmod +x /root/Tools/gophish/gophish
+    rm -f /tmp/gophish.zip
+  args:
+    creates: /root/Tools/gophish/gophish
+
+- name: Create advanced GoPhish configuration
+  template:
+    src: "../templates/advanced-gophish-config.j2"
+    dest: "/root/Tools/gophish/config.json"
+    mode: '0600'
+    owner: root
+    group: root
+
+- name: Create GoPhish systemd service
+  template:
+    src: "../templates/gophish.service.j2"
+    dest: "/etc/systemd/system/gophish.service"
+    mode: '0644'
+    owner: root
+    group: root
+
+- name: Configure Postfix for outbound email
+  template:
+    src: "../templates/postfix-phishing.conf.j2"
+    dest: "/etc/postfix/main.cf"
+    backup: yes
+  notify: restart postfix
+
+- name: Configure OpenDKIM for email authentication
+  template:
+    src: "../templates/opendkim-phishing.conf.j2"
+    dest: "/etc/opendkim.conf"
+    backup: yes
+  notify: restart opendkim
+
+- name: Create DKIM keys directory
+  file:
+    path: "/etc/opendkim/keys/{{ phishing_domain }}"
+    state: directory
+    owner: opendkim
+    group: opendkim
+    mode: '0700'
+
+- name: Generate DKIM keys
+  command: >
+    opendkim-genkey -D /etc/opendkim/keys/{{ phishing_domain }} 
+    -d {{ phishing_domain }} -s phishing
+  args:
+    creates: "/etc/opendkim/keys/{{ phishing_domain }}/phishing.private"
+
+- name: Set DKIM key permissions
+  file:
+    path: "/etc/opendkim/keys/{{ phishing_domain }}/phishing.private"
+    owner: opendkim
+    group: opendkim
+    mode: '0600'
+
+- name: Create phishing landing page templates
+  template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: '0644'
+    owner: www-data
+    group: www-data
+  with_items:
+    - { src: "../templates/phishing-landing-office365.html.j2", dest: "/var/www/phishing/office365.html" }
+    - { src: "../templates/phishing-landing-gmail.html.j2", dest: "/var/www/phishing/gmail.html" }
+    - { src: "../templates/phishing-landing-aws.html.j2", dest: "/var/www/phishing/aws.html" }
+    - { src: "../templates/phishing-landing-generic.html.j2", dest: "/var/www/phishing/generic.html" }
+
+- name: Create credential capture API
+  template:
+    src: "../templates/credential-capture-api.php.j2"
+    dest: "/var/www/phishing/api/capture.php"
+    mode: '0644'
+    owner: www-data
+    group: www-data
+
+- name: Create tracking pixel endpoint
+  template:
+    src: "../templates/tracking-pixel.php.j2"
+    dest: "/var/www/phishing/track.php"
+    mode: '0644'
+    owner: www-data
+    group: www-data
+
+- name: Configure Nginx for phishing sites
+  template:
+    src: "../templates/nginx-phishing.conf.j2"
+    dest: "/etc/nginx/sites-available/phishing"
+    mode: '0644'
+  notify: reload nginx
+
+- name: Enable phishing site
+  file:
+    src: /etc/nginx/sites-available/phishing
+    dest: /etc/nginx/sites-enabled/phishing
+    state: link
+  notify: reload nginx
+
+- name: Create phishing campaign management scripts
+  template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: '0755'
+    owner: root
+    group: root
+  with_items:
+    - { src: "../templates/campaign-launcher.sh.j2", dest: "/root/Tools/phishing/launch-campaign.sh" }
+    - { src: "../templates/stats-collector.sh.j2", dest: "/root/Tools/phishing/collect-stats.sh" }
+    - { src: "../templates/email-validator.py.j2", dest: "/root/Tools/phishing/validate-emails.py" }
+
+- name: Create database for tracking
+  shell: |
+    sqlite3 /root/Tools/phishing/tracking.db << EOF
+    CREATE TABLE IF NOT EXISTS email_opens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        campaign_id TEXT NOT NULL,
+        recipient_email TEXT NOT NULL,
+        ip_address TEXT,
+        user_agent TEXT,
+        opened_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        location TEXT
+    );
+    
+    CREATE TABLE IF NOT EXISTS link_clicks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        campaign_id TEXT NOT NULL,
+        recipient_email TEXT NOT NULL,
+        link_url TEXT NOT NULL,
+        ip_address TEXT,
+        user_agent TEXT,
+        clicked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        location TEXT
+    );
+    
+    CREATE TABLE IF NOT EXISTS credential_submissions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        campaign_id TEXT NOT NULL,
+        recipient_email TEXT,
+        username TEXT,
+        password_hash TEXT,
+        ip_address TEXT,
+        user_agent TEXT,
+        submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        location TEXT,
+        additional_data TEXT
+    );
+    
+    CREATE TABLE IF NOT EXISTS campaigns (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        template TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        status TEXT DEFAULT 'active',
+        target_count INTEGER DEFAULT 0,
+        opened_count INTEGER DEFAULT 0,
+        clicked_count INTEGER DEFAULT 0,
+        submitted_count INTEGER DEFAULT 0
+    );
+    EOF
+  args:
+    creates: /root/Tools/phishing/tracking.db
+
+- name: Set database permissions
+  file:
+    path: /root/Tools/phishing/tracking.db
+    owner: www-data
+    group: www-data
+    mode: '0644'
+
+- name: Install Python dependencies for advanced features
+  pip:
+    name:
+      - requests
+      - beautifulsoup4
+      - lxml
+      - flask
+      - flask-cors
+      - dnspython
+      - python-whois
+      - selenium
+      - fake-useragent
+    state: present
+
+- name: Create SSL certificate setup script
+  template:
+    src: "../templates/setup-phishing-ssl.sh.j2"
+    dest: "/root/Tools/phishing/setup-ssl.sh"
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Create domain reputation checker
+  template:
+    src: "../templates/domain-reputation.py.j2"
+    dest: "/root/Tools/phishing/check-reputation.py"
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Start and enable services
+  systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: yes
+    daemon_reload: yes
+  with_items:
+    - postfix
+    - opendkim
+    - nginx
+    - php7.4-fpm
+    - gophish
+
+handlers:
+  - name: restart postfix
+    systemd:
+      name: postfix
+      state: restarted
+
+  - name: restart opendkim
+    systemd:
+      name: opendkim
+      state: restarted
+
+  - name: reload nginx
+    systemd:
+      name: nginx
+      state: reloaded

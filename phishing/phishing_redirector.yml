@@ -1,0 +1,46 @@
+---
+# Phishing redirector deployment with advanced evasion
+
+- name: Deploy phishing redirector
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars_files:
+    - vars.yaml
+  vars:
+    redirector_instance_type: "{{ redirector_instance_type | default('t3.small') }}"
+    redirector_region: "{{ redirector_region | default(aws_region) }}"
+
+  tasks:
+    - name: Create phishing redirector instance
+      include_tasks: "../tasks/create_instance.yml"
+      vars:
+        instance_name: "{{ server_name }}"
+        instance_type: "{{ redirector_instance_type }}"
+        region: "{{ redirector_region }}"
+        security_group_rules:
+          - { proto: tcp, port: 22, cidr: "{{ operator_ip }}/32", desc: "SSH from operator" }
+          - { proto: tcp, port: 80, cidr: "0.0.0.0/0", desc: "HTTP from anywhere" }
+          - { proto: tcp, port: 443, cidr: "0.0.0.0/0", desc: "HTTPS from anywhere" }
+
+    - name: Add phishing redirector to inventory
+      add_host:
+        name: "phishing_redirector"
+        groups: "phishing_redirectors"
+        ansible_host: "{{ instance_ip }}"
+        ansible_user: "{{ ansible_user | default('ubuntu') }}"
+        ansible_ssh_private_key_file: "{{ ssh_key_path }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Configure phishing redirector
+  hosts: phishing_redirectors
+  become: true
+  gather_facts: true
+  vars_files:
+    - vars.yaml
+  tasks:
+    - name: Include phishing redirector configuration
+      include_tasks: "../tasks/configure_phishing_redirector.yml"
+
+    - name: Include security hardening
+      include_tasks: "../tasks/security_hardening.yml"
