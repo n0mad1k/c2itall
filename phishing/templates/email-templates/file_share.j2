@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document Shared</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; background-color: #f4f4f4;">
+    <table cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color: #f4f4f4; padding: 20px 0;">
+        <tr>
+            <td align="center">
+                <table cellpadding="0" cellspacing="0" border="0" width="600" style="background-color: #ffffff; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <!-- Header -->
+                    <tr>
+                        <td style="padding: 20px; border-bottom: 1px solid #edebe9;">
+                            <table cellpadding="0" cellspacing="0" border="0" width="100%">
+                                <tr>
+                                    <td>
+                                        <img src="{{ sharepoint_logo | default('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIwIiBoZWlnaHQ9IjMwIj48dGV4dCB4PSIwIiB5PSIyNSIgZm9udC1mYW1pbHk9IlNlZ29lIFVJIiBmb250LXNpemU9IjIwIiBmaWxsPSIjMDM3ODkzIj5TaGFyZVBvaW50PC90ZXh0Pjwvc3ZnPg==') }}" alt="SharePoint" style="height: 30px;">
+                                    </td>
+                                    <td align="right">
+                                        <span style="color: #605e5c; font-size: 14px;">{{ share_date | default('{{.ShareDate}}') }}</span>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                    
+                    <!-- Content -->
+                    <tr>
+                        <td style="padding: 30px;">
+                            <h2 style="color: #323130; font-size: 24px; margin: 0 0 20px;">{{ sender_name | default('{{.SenderName}}') }} shared a file with you</h2>
+                            
+                            <p style="color: #605e5c; font-size: 16px; line-height: 24px; margin: 0 0 20px;">
+                                Hi {{ "{{.FirstName}}" }},
+                            </p>
+                            
+                            <p style="color: #605e5c; font-size: 16px; line-height: 24px; margin: 0 0 30px;">
+                                {{ sender_name | default('{{.SenderName}}') }} has shared "{{ document_name | default('{{.DocumentName}}') }}" with you on SharePoint.
+                            </p>
+                            
+                            <!-- File Preview -->
+                            <table cellpadding="0" cellspacing="0" border="0" width="100%" style="border: 1px solid #edebe9; border-radius: 4px; margin: 0 0 30px;">
+                                <tr>
+                                    <td style="padding: 20px;">
+                                        <table cellpadding="0" cellspacing="0" border="0" width="100%">
+                                            <tr>
+                                                <td style="width: 48px; padding-right: 15px; vertical-align: top;">
+                                                    <img src="{{ file_icon | default('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIGZpbGw9IiMxODVhYmQiPjxyZWN0IHdpZHRoPSI0OCIgaGVpZ2h0PSI0OCIgcng9IjQiLz48dGV4dCB4PSIyNCIgeT0iMzAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZpbGw9IndoaXRlIiBmb250LXNpemU9IjE2Ij5ET0M8L3RleHQ+PC9zdmc+') }}" alt="Document" style="width: 48px; height: 48px;">
+                                                </td>
+                                                <td>
+                                                    <h3 style="color: #323130; font-size: 16px; margin: 0 0 5px;">{{ document_name | default('{{.DocumentName}}') }}</h3>
+                                                    <p style="color: #605e5c; font-size: 14px; margin: 0;">
+                                                        {{ file_type | default('{{.FileType}}') }} • {{ file_size | default('{{.FileSize}}') }}
+                                                    </p>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+                            
+                            <!-- Sender Message -->
+                            {% if include_message | default(true) %}
+                            <div style="background-color: #f8f8f8; border-left: 4px solid #0078d4; padding: 15px; margin: 0 0 30px;">
+                                <p style="color: #323130; font-size: 14px; margin: 0 0 5px;"><strong>Message from {{ sender_name | default('{{.SenderName}}') }}:</strong></p>
+                                <p style="color: #605e5c; font-size: 14px; margin: 0;">
+                                    {{ sender_message | default('Please review the attached document and let me know if you have any questions.') }}
+                                </p>
+                            </div>
+                            {% endif %}
+                            
+                            <table cellpadding="0" cellspacing="0" border="0" style="margin: 0 auto;">
+                                <tr>
+                                    <td style="background-color: #0078d4; border-radius: 4px; padding: 12px 24px;">
+                                        <a href="{{ "{{.URL}}" }}" style="color: #ffffff; text-decoration: none; font-size: 16px; font-weight: 600; display: block;">
+                                            Open in SharePoint
+                                        </a>
+                                    </td>
+                                </tr>
+                            </table>
+                            
+                            <p style="color: #a19f9d; font-size: 12px; line-height: 18px; margin: 30px 0 0; text-align: center;">
+                                This link will expire in {{ expiry_days | default('7') }} days.<br>
+                                Only people with the link can access this file.
+                            </p>
+                        </td>
+                    </tr>
+                    
+                    <!-- Footer -->
+                    <tr>
+                        <td style="background-color: #f8f8f8; padding: 20px; text-align: center; border-radius: 0 0 4px 4px;">
+                            <p style="color: #a19f9d; font-size: 12px; margin: 0 0 10px;">
+                                Get the SharePoint mobile app
+                            </p>
+                            <table cellpadding="0" cellspacing="0" border="0" style="margin: 0 auto;">
+                                <tr>
+                                    <td style="padding: 0 5px;">
+                                        <a href="#"><img src="{{ app_store_badge | default('https://cdn.example.com/app-store.png') }}" alt="Download on App Store" style="height: 40px;"></a>
+                                    </td>
+                                    <td style="padding: 0 5px;">
+                                        <a href="#"><img src="{{ play_store_badge | default('https://cdn.example.com/google-play.png') }}" alt="Get it on Google Play" style="height: 40px;"></a>
+                                    </td>
+                                </tr>
+                            </table>
+                            <p style="color: #a19f9d; font-size: 11px; margin: 15px 0 0;">
+                                © {{ current_year | default('2025') }} Microsoft Corporation. All rights reserved.<br>
+                                <a href="#" style="color: #0078d4; text-decoration: none;">Privacy Statement</a> | 
+                                <a href="#" style="color: #0078d4; text-decoration: none;">Terms of Use</a>
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

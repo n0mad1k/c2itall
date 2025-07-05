@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security Alert</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; background-color: #f4f4f4;">
+    <table cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color: #f4f4f4; padding: 20px 0;">
+        <tr>
+            <td align="center">
+                <table cellpadding="0" cellspacing="0" border="0" width="600" style="background-color: #ffffff; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <!-- Header -->
+                    <tr>
+                        <td style="background-color: #d13438; padding: 20px; text-align: center; border-radius: 4px 4px 0 0;">
+                            <h1 style="color: #ffffff; font-size: 24px; margin: 0;">⚠️ Security Alert</h1>
+                        </td>
+                    </tr>
+                    
+                    <!-- Content -->
+                    <tr>
+                        <td style="padding: 30px;">
+                            <h2 style="color: #d13438; font-size: 20px; margin: 0 0 20px;">Suspicious Activity Detected</h2>
+                            
+                            <p style="color: #323130; font-size: 16px; line-height: 24px; margin: 0 0 20px;">
+                                Dear {{ "{{.FirstName}}" }},
+                            </p>
+                            
+                            <p style="color: #323130; font-size: 16px; line-height: 24px; margin: 0 0 20px;">
+                                We detected unusual sign-in activity on your account:
+                            </p>
+                            
+                            <table cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color: #f8f8f8; border-radius: 4px; margin: 0 0 20px;">
+                                <tr>
+                                    <td style="padding: 20px;">
+                                        <table cellpadding="0" cellspacing="0" border="0" width="100%">
+                                            <tr>
+                                                <td style="color: #605e5c; font-size: 14px; padding: 5px 0;"><strong>Date & Time:</strong></td>
+                                                <td style="color: #323130; font-size: 14px; padding: 5px 0;">{{ detection_time | default('{{.DetectionTime}}') }}</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="color: #605e5c; font-size: 14px; padding: 5px 0;"><strong>Location:</strong></td>
+                                                <td style="color: #323130; font-size: 14px; padding: 5px 0;">{{ location | default('{{.Location}}') }}</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="color: #605e5c; font-size: 14px; padding: 5px 0;"><strong>IP Address:</strong></td>
+                                                <td style="color: #323130; font-size: 14px; padding: 5px 0;">{{ ip_address | default('{{.IPAddress}}') }}</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="color: #605e5c; font-size: 14px; padding: 5px 0;"><strong>Device:</strong></td>
+                                                <td style="color: #323130; font-size: 14px; padding: 5px 0;">{{ device | default('{{.Device}}') }}</td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+                            
+                            <p style="color: #323130; font-size: 16px; line-height: 24px; margin: 0 0 30px;">
+                                <strong>If this was you:</strong> You can safely ignore this email.<br>
+                                <strong>If this wasn't you:</strong> Your account may be compromised. Secure it immediately.
+                            </p>
+                            
+                            <table cellpadding="0" cellspacing="0" border="0" style="margin: 0 auto;">
+                                <tr>
+                                    <td style="background-color: #d13438; border-radius: 4px; padding: 12px 24px;">
+                                        <a href="{{ "{{.URL}}" }}" style="color: #ffffff; text-decoration: none; font-size: 16px; font-weight: 600; display: block;">
+                                            Secure My Account
+                                        </a>
+                                    </td>
+                                </tr>
+                            </table>
+                            
+                            <p style="color: #605e5c; font-size: 14px; line-height: 20px; margin: 30px 0 0;">
+                                <strong>What happens next?</strong><br>
+                                We'll guide you through securing your account, including:
+                            </p>
+                            
+                            <ul style="color: #605e5c; font-size: 14px; line-height: 22px; margin: 10px 0 0; padding-left: 20px;">
+                                <li>Verifying your identity</li>
+                                <li>Reviewing recent account activity</li>
+                                <li>Updating your password</li>
+                                <li>Enabling additional security measures</li>
+                            </ul>
+                        </td>
+                    </tr>
+                    
+                    <!-- Footer -->
+                    <tr>
+                        <td style="background-color: #f8f8f8; padding: 20px; text-align: center; border-radius: 0 0 4px 4px;">
+                            <p style="color: #a19f9d; font-size: 12px; margin: 0;">
+                                This security alert was sent to {{ "{{.Email}}" }}<br>
+                                © {{ current_year | default('2025') }} {{ organization | default('Your Organization') }}. All rights reserved.<br>
+                                <a href="#" style="color: #0078d4; text-decoration: none;">Privacy Policy</a> | 
+                                <a href="#" style="color: #0078d4; text-decoration: none;">Contact Support</a>
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

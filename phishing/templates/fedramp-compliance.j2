@@ -1,0 +1,87 @@
+# FedRAMP Phishing Test Compliance Configuration
+# This configuration ensures compliance with FedRAMP requirements
+
+compliance_mode: fedramp
+test_type: user_awareness_only
+
+# Email Configuration
+email_settings:
+  # Emails must be whitelisted on all security systems
+  require_whitelist: true
+  bypass_security_controls: true
+  
+  # No modification of emails allowed
+  allow_header_modification: false
+  allow_content_filtering: false
+  
+  # Tracking requirements
+  tracking:
+    - email_opened (via pixel)
+    - link_clicked
+    - credentials_submitted
+    - user_identity (tied to actions)
+
+# Landing Page Requirements
+landing_page:
+  # Must immediately identify as phishing test
+  show_phishing_notice: true
+  phishing_notice_text: |
+    This was a phishing simulation!
+    You should never enter your credentials on suspicious websites.
+    
+  # Educational content required
+  include_education: true
+  education_content:
+    - How to identify phishing emails
+    - Red flags to watch for
+    - Reporting procedures
+    - Best practices for email security
+
+# Reporting Requirements
+reporting:
+  # No PII in reports
+  anonymize_data: true
+  report_format: aggregate_only
+  
+  # Required metrics
+  metrics:
+    - total_emails_sent
+    - emails_opened_percentage
+    - links_clicked_percentage
+    - credentials_submitted_percentage
+    - department_breakdown
+    - role_based_statistics
+  
+  # Prohibited data
+  exclude:
+    - individual_names
+    - specific_email_addresses
+    - personal_identifiers
+
+# Technical Configuration
+technical:
+  # Simple campaign only
+  campaign_type: basic_phishing_test
+  
+  # No exploitation
+  allow_malware: false
+  allow_exploitation: false
+  allow_persistence: false
+  
+  # Clean tracking only
+  tracking_methods:
+    - pixel_tracking
+    - unique_urls
+    - form_submission
+    
+# Approval Process
+approval:
+  requires_3pao_approval: true
+  requires_template_review: true
+  approval_documentation: required
+
+# Post-Test Requirements
+post_test:
+  notify_failures: true
+  provide_training: true
+  remediation_timeline: 30_days

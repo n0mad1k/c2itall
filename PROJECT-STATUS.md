@@ -24,7 +24,7 @@
 ---
 
 ### 📍 Where I Left Off
-- Working on: Need to fix issue with AWS deployment security hardening playbook
+- Working on: Need to fix issue with AWS deployment security hardening playbook | Need to restructure I want each module in its own dir with its own tasks, templates, files and I want to move Provider playbooks into a Provider dir. I also want to break apart deploy.py and take each part for a module and make its own script that can be ran independently of the deploy script to just deploy the that module if need be
 - Next Priority: Test core deployment
 - Blockers: Sleep
 

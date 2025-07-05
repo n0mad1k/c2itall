@@ -1,0 +1,71 @@
+# Postfix MTA Front Configuration for Phishing Infrastructure
+# This server acts as the front-end mail relay
+
+# Basic settings
+myhostname = {{ mta_hostname | default('mail.' + domain) }}
+mydomain = {{ domain }}
+myorigin = $mydomain
+mydestination = $myhostname, localhost
+inet_interfaces = all
+inet_protocols = ipv4
+
+# Network settings
+mynetworks = 127.0.0.0/8 {{ gophish_server_ip }}/32 {{ mta_allowed_ips | default([]) | join(' ') }}
+relay_domains = $mydestination
+
+# SMTP smuggling mitigation
+smtpd_forbid_bare_newline = yes
+smtpd_forbid_bare_newline_reject_code = 550
+
+# TLS Configuration
+smtpd_tls_cert_file = /etc/letsencrypt/live/{{ mta_hostname | default('mail.' + domain) }}/fullchain.pem
+smtpd_tls_key_file = /etc/letsencrypt/live/{{ mta_hostname | default('mail.' + domain) }}/privkey.pem
+smtpd_use_tls = yes
+smtpd_tls_security_level = may
+smtpd_tls_protocols = !SSLv2, !SSLv3, !TLSv1, !TLSv1.1
+smtp_tls_security_level = may
+
+# SASL Authentication
+smtpd_sasl_auth_enable = yes
+smtpd_sasl_type = dovecot
+smtpd_sasl_path = private/auth
+smtpd_sasl_security_options = noanonymous
+smtpd_sasl_authenticated_header = yes
+
+# Restrictions
+smtpd_helo_required = yes
+smtpd_recipient_restrictions =
+    permit_mynetworks,
+    permit_sasl_authenticated,
+    reject_unauth_destination,
+    reject_unauth_pipelining,
+    reject_invalid_helo_hostname,
+    reject_non_fqdn_helo_hostname
+
+# Rate limiting
+smtpd_client_connection_rate_limit = {{ rate_limit_connections | default(100) }}
+smtpd_client_message_rate_limit = {{ rate_limit_messages | default(100) }}
+
+# Message size and queue settings
+message_size_limit = {{ max_message_size | default(10240000) }}
+mailbox_size_limit = 0
+queue_lifetime = 1h
+maximal_queue_lifetime = 1h
+bounce_queue_lifetime = 0
+
+# Header modifications
+header_checks = regexp:/etc/postfix/header_checks
+
+# DKIM signing
+milter_default_action = accept
+milter_protocol = 6
+smtpd_milters = unix:/var/spool/postfix/opendkim/opendkim.sock
+non_smtpd_milters = unix:/var/spool/postfix/opendkim/opendkim.sock
+
+# Logging
+{% if zero_logs | default(true) %}
+# Zero-logs configuration
+syslog_facility = local0
+syslog_name = 
+maillog_file = /dev/null
+{% endif %}
