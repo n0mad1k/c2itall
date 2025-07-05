@@ -1,57 +1,171 @@
 .
 ├── ansible.cfg
-├── c2
+├── common
 │   ├── files
+│   │   ├── clean-logs.sh
+│   │   ├── persistent-listener.sh
+│   │   ├── randomize_ports.sh
+│   │   ├── rubber-ducky.txt
+│   │   ├── secure-exit.sh
+│   │   └── tracker-nginx.conf
 │   ├── tasks
+│   │   ├── cleanup_confirmation.yml
+│   │   ├── configure_mail.yml
+│   │   ├── initial-infrastructure.yml
+│   │   ├── install_tools.yml
+│   │   ├── port_randomization.yml
+│   │   ├── security_hardening.yml
+│   │   └── traffic_flow_config.yml
 │   └── templates
-│       ├── generate_evasive_beacons.sh.j2
-│       ├── generate_havoc_payloads.sh.j2
-│       ├── havoc-config.yaotl.j2
-│       └── havoc-guide.j2
-├── chat-server
-│   ├── files
-│   ├── tasks
-│   └── templates
+│       ├── default-site.j2
+│       ├── index.html.j2
+│       ├── infrastructure_state.j2
+│       ├── linux_loader.sh.j2
+│       ├── manifest.json.j2
+│       ├── motd-aws.j2
+│       ├── motd.j2
+│       ├── motd-linode.j2
+│       ├── motd-redirector.j2
+│       ├── POST_INSTALL_INSTRUCTIONS.txt.j2
+│       ├── proxychains.conf.j2
+│       ├── reference.txt.j2
+│       ├── resolv.conf.j2
+│       ├── secure-ssh.sh.j2
+│       ├── serve-havoc-payloads.sh.j2
+│       ├── setup-cert.sh.j2
+│       ├── shell-handler.service.j2
+│       ├── torrc.j2
+│       └── windows_loader.ps1.j2
 ├── deploy.py
-├── hashtopolish-server
-│   ├── files
-│   ├── tasks
-│   └── templates
-├── logging-server
-│   ├── files
-│   ├── tasks
-│   └── templates
 ├── logs
-├── payload-server
-│   ├── files
-│   ├── payload_redirector.yml
-│   ├── payload_server.yml
-│   ├── tasks
-│   └── templates
-├── phishing
-│   ├── cleanup_phishing.yml
-│   ├── deploy_phishing_infrastructure.yml
-│   ├── files
-│   ├── gophish_server.yml
-│   ├── mta_front.yml
-│   ├── phishing_redirector.yml
-│   ├── phishing_webserver.yml
-│   ├── Plan.md
-│   ├── tasks
-│   └── templates
-│       ├── email-templates
-│       │   ├── file_share.j2
-│       │   ├── office365_login.j2
-│       │   ├── password_expiry.j2
-│       │   └── security_alert.j2
-│       ├── fake-login.html.j2
-│       ├── fedramp-compliance.j2
-│       ├── gophish-advanced-config.j2
-│       ├── gophish-config.j2
-│       ├── nginx-phishing-webserver.j2
-│       ├── phishing_deployment_state.j2
-│       ├── phishing-landing-page.j2
-│       └── postfix-mta-front.j2
+├── modules
+│   ├── c2
+│   │   ├── files
+│   │   │   ├── havoc_installer.sh
+│   │   │   ├── havoc_mutate.sh
+│   │   │   ├── havoc_shell_handler.sh
+│   │   │   ├── implant_mutator.sh
+│   │   │   └── post_install_c2.sh
+│   │   ├── tasks
+│   │   │   ├── configure_advanced_evasion.yml
+│   │   │   ├── configure_c2.yml
+│   │   │   └── configure_integrated_tracker.yml
+│   │   └── templates
+│   │       ├── generate_evasive_beacons.sh.j2
+│   │       ├── generate_havoc_payloads.sh.j2
+│   │       ├── havoc-config.yaotl.j2
+│   │       └── havoc-guide.j2
+│   ├── chat-server
+│   │   ├── files
+│   │   ├── tasks
+│   │   └── templates
+│   ├── hashtopolish-server
+│   │   ├── files
+│   │   ├── tasks
+│   │   └── templates
+│   ├── infrastructure
+│   │   ├── aws
+│   │   │   ├── files
+│   │   │   ├── tasks
+│   │   │   └── templates
+│   │   ├── flokinet
+│   │   │   ├── files
+│   │   │   ├── tasks
+│   │   │   └── templates
+│   │   └── linode
+│   │       ├── files
+│   │       ├── tasks
+│   │       └── templates
+│   ├── logging-server
+│   │   ├── files
+│   │   ├── tasks
+│   │   └── templates
+│   ├── payload-server
+│   │   ├── files
+│   │   │   └── secure_payload_sync.sh
+│   │   ├── payload_redirector.yml
+│   │   ├── payload_server.yml
+│   │   ├── tasks
+│   │   │   ├── configure_payload_redirector.yml
+│   │   │   └── configure_payload_server.yml
+│   │   └── templates
+│   ├── phishing
+│   │   ├── cleanup_phishing.yml
+│   │   ├── deploy_phishing_infrastructure.yml
+│   │   ├── files
+│   │   ├── gophish
+│   │   │   ├── files
+│   │   │   ├── tasks
+│   │   │   │   ├── configure_gophish_advanced.yml
+│   │   │   │   └── configure_phishing_server.yml
+│   │   │   └── templates
+│   │   ├── gophish_server.yml
+│   │   ├── mta-front
+│   │   │   ├── files
+│   │   │   ├── tasks
+│   │   │   │   └── configure_mta_front.yml
+│   │   │   └── templates
+│   │   ├── mta_front.yml
+│   │   ├── phishing_redirector.yml
+│   │   ├── phishing_webserver.yml
+│   │   ├── Plan.md
+│   │   ├── redirector
+│   │   │   ├── files
+│   │   │   ├── tasks
+│   │   │   │   └── configure_phishing_redirector.yml
+│   │   │   └── templates
+│   │   ├── tasks
+│   │   │   └── configure_fedramp_compliance.yml
+│   │   ├── templates
+│   │   │   ├── email-templates
+│   │   │   │   ├── file_share.j2
+│   │   │   │   ├── office365_login.j2
+│   │   │   │   ├── password_expiry.j2
+│   │   │   │   └── security_alert.j2
+│   │   │   ├── fake-login.html.j2
+│   │   │   ├── fedramp-compliance.j2
+│   │   │   ├── gophish-advanced-config.j2
+│   │   │   ├── gophish-config.j2
+│   │   │   ├── nginx-phishing-webserver.j2
+│   │   │   ├── phishing_deployment_state.j2
+│   │   │   ├── phishing-landing-page.j2
+│   │   │   └── postfix-mta-front.j2
+│   │   └── webserver
+│   │       ├── files
+│   │       ├── tasks
+│   │       │   ├── configure_phishing_webserver.yml
+│   │       │   └── setup_phishing_security.yml
+│   │       └── templates
+│   ├── redirectors
+│   │   ├── files
+│   │   │   └── post_install_redirector.sh
+│   │   ├── tasks
+│   │   │   └── configure_redirector.yml
+│   │   └── templates
+│   │       ├── capture.php.j2
+│   │       ├── nginx.conf.j2
+│   │       ├── nginx-payload-redirector.j2
+│   │       ├── nginx-phishing-redirector.j2
+│   │       ├── redirector-havoc-fragment.j2
+│   │       ├── redirector-index.html.j2
+│   │       ├── redirector-site.conf.j2
+│   │       ├── redirector-site-with-tracker.conf.j2
+│   │       └── stream.conf.j2
+│   ├── share-drive
+│   │   ├── files
+│   │   ├── tasks
+│   │   └── templates
+│   └── tracker
+│       ├── files
+│       │   ├── simple_email_tracker.py
+│       │   ├── tracker.service
+│       │   └── tracker-stats.sh
+│       ├── tasks
+│       └── templates
+│           ├── simple_email_tracker.py.j2
+│           ├── tracker-config.j2
+│           ├── tracker-nginx.conf.j2
+│           └── tracker.service.j2
 ├── PROJECT-STATUS.md
 ├── providers
 │   ├── AWS
@@ -86,92 +200,7 @@
 │       ├── tracker.yml
 │       └── vars.yaml
 ├── README.md
-├── redirectors
-│   ├── files
-│   ├── tasks
-│   └── templates
-│       ├── nginx-payload-redirector.j2
-│       ├── nginx-phishing-redirector.j2
-│       ├── redirector-havoc-fragment.j2
-│       ├── redirector-index.html.j2
-│       ├── redirector-site.conf.j2
-│       └── redirector-site-with-tracker.conf.j2
 ├── requirements.txt
-├── share-drive
-│   ├── files
-│   ├── tasks
-│   └── templates
-├── structure.txt
-├── tracker
-└── universal
-    ├── files
-    │   ├── clean-logs.sh
-    │   ├── havoc_installer.sh
-    │   ├── havoc_mutate.sh
-    │   ├── havoc_shell_handler.sh
-    │   ├── implant_mutator.sh
-    │   ├── persistent-listener.sh
-    │   ├── post_install_c2.sh
-    │   ├── post_install_redirector.sh
-    │   ├── randomize_ports.sh
-    │   ├── rubber-ducky.txt
-    │   ├── secure-exit.sh
-    │   ├── secure_payload_sync.sh
-    │   ├── simple_email_tracker.py
-    │   ├── tracker-nginx.conf
-    │   ├── tracker.service
-    │   └── tracker-stats.sh
-    ├── tasks
-    │   ├── cleanup_confirmation.yml
-    │   ├── configure_advanced_evasion.yml
-    │   ├── configure_c2.yml
-    │   ├── configure_fedramp_compliance.yml
-    │   ├── configure_gophish_advanced.yml
-    │   ├── configure_integrated_tracker.yml
-    │   ├── configure_mail.yml
-    │   ├── configure_mta_front.yml
-    │   ├── configure_payload_redirector.yml
-    │   ├── configure_payload_server.yml
-    │   ├── configure_phishing_redirector.yml
-    │   ├── configure_phishing_server.yml
-    │   ├── configure_phishing_webserver.yml
-    │   ├── configure_redirector.yml
-    │   ├── initial-infrastructure.yml
-    │   ├── install_tools.yml
-    │   ├── port_randomization.yml
-    │   ├── security_hardening.yml
-    │   ├── setup_phishing_security.yml
-    │   └── traffic_flow_config.yml
-    └── templates
-        ├── capture.php.j2
-        ├── default-site.j2
-        ├── generate_evasive_beacons.sh.j2
-        ├── generate_havoc_payloads.sh.j2
-        ├── havoc-config.yaotl.j2
-        ├── havoc-guide.j2
-        ├── index.html.j2
-        ├── infrastructure_state.j2
-        ├── linux_loader.sh.j2
-        ├── manifest.json.j2
-        ├── motd-aws.j2
-        ├── motd.j2
-        ├── motd-linode.j2
-        ├── motd-redirector.j2
-        ├── nginx.conf.j2
-        ├── POST_INSTALL_INSTRUCTIONS.txt.j2
-        ├── proxychains.conf.j2
-        ├── reference.txt.j2
-        ├── resolv.conf.j2
-        ├── secure-ssh.sh.j2
-        ├── serve-havoc-payloads.sh.j2
-        ├── setup-cert.sh.j2
-        ├── shell-handler.service.j2
-        ├── simple_email_tracker.py.j2
-        ├── stream.conf.j2
-        ├── torrc.j2
-        ├── tracker-config.j2
-        ├── tracker-nginx.conf.j2
-        ├── tracker.service.j2
-        └── windows_loader.ps1.j2
+└── structure.txt
 
-53 directories, 122 files
+86 directories, 118 files
