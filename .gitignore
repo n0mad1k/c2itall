@@ -5,3 +5,102 @@ config.yml
 logs/
 domainhunter/
 infrastructure_state_*.json
+# OS-specific files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# VS Code settings
+.vscode/
+.history/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+yarn.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+.env
+.venv/
+venv/
+Pipfile.lock
+
+# C# / .NET
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.vsp
+*.pidb
+*.mdb
+*.cache
+*.pdb
+
+# Java
+*.class
+*.jar
+*.war
+*.ear
+target/
+
+# Logs and temp files
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+*.swn
+*.orig
+*.rej
+
+# Secrets
+.env.local
+.env.*.local
+.envrc
+secrets.*
+credentials.json
+
+# GitHub Copilot
+*.copilot*
+
+# Test output
+coverage/
+.nyc_output/
+test-output/
+
+# IDEs and editors
+.idea/
+*.iml
+*.code-workspace
+
+# Others
+*.sqlite3
+*.db
+*.tar.gz
+*.zip
+*.7z
+*.tgz
+
+# Ignore by file type (optional)
+*.exe
+*.dll
+*.msi
+*.apk
+*.ipa
+
+# Ignore personal scripts
+scripts/dev/*
