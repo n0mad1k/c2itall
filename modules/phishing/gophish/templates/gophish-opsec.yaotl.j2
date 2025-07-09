@@ -1,0 +1,22 @@
+# modules/phishing/gophish/templates/gophish-opsec.yaotl.j2
+gophish:
+  admin_server:
+    # Only listen on localhost
+    listen_url: "127.0.0.1:{{ gophish_admin_port }}"
+    # Use client certificates
+    use_tls: true
+    tls_cert: "/opt/gophish/admin-cert.pem"
+    tls_key: "/opt/gophish/admin-key.pem"
+    client_ca: "/opt/gophish/client-ca.pem"
+  
+  phish_server:
+    # Behind nginx, no direct exposure
+    listen_url: "127.0.0.1:{{ gophish_phish_port }}"
+    
+  # Custom modifications
+  modifications:
+    - remove_default_headers: true
+    - randomize_endpoints: true
+    - custom_tracking_pixel: true
+    - encrypted_storage: true
+    - auto_purge_days: 7
