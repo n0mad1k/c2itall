@@ -101,16 +101,14 @@ def main_menu():
         print(f"3) Deploy C2 Server")
         print(f"4) Deploy Redirector")
         print(f"5) Deploy Email Tracking Server")
-        print(f"6) Deploy Advanced Phishing Infrastructure")
-        print(f"7) Deploy Ephemeral MTA Front-End")
-        print(f"8) Deploy Payload Server {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
-        print(f"9) Deploy Phishing Server {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
-        print(f"10) Deploy Logging Server {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
-        print(f"11) Deploy Share-Drive {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
-        print(f"12) Deploy Hashtopolis {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
-        print(f"13) Custom Deployment")
-        print(f"14) Tools")
-        print(f"15) Debug Mode: {COLORS['GREEN'] if debug_mode else COLORS['RED']}{debug_mode}{COLORS['RESET']}")
+        print(f"6) Deploy Phishing Infrastructure")
+        print(f"7) Deploy Payload Server {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
+        print(f"8) Deploy Logging Server {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
+        print(f"9) Deploy Share-Drive {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
+        print(f"10) Deploy Hashtopolis {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
+        print(f"11) Custom Deployment")
+        print(f"12) Tools")
+        print(f"13) Debug Mode: {COLORS['GREEN'] if debug_mode else COLORS['RED']}{debug_mode}{COLORS['RESET']}")
         print(f"\n")
         print(f"99) Exit")
         
@@ -127,10 +125,8 @@ def main_menu():
         elif choice == "5":
             deploy_tracker()
         elif choice == "6":
-            deploy_ephemeral_mta()
-        elif choice == "7":
-            deploy_advanced_phishing_infrastructure()
-        elif choice in ["8", "9", "10", "11", "12"]:
+            phishing_menu()
+        elif choice in ["7", "8", "9", "10"]:
             print(f"\n{COLORS['YELLOW']}This feature is currently under construction.{COLORS['RESET']}")
             input("\nPress Enter to continue...")
         elif choice == "11":
@@ -308,10 +304,12 @@ def phishing_menu():
         print(f"3) Phishing Only (CDN)")
         print(f"4) Phishing Only (No CDN)")
         print(f"5) FedRAMP Compliant Phishing")
-        print(f"6) MTA Front Server Only")
-        print(f"7) Gophish Server Only")
-        print(f"8) Phishing Redirector Only")
-        print(f"9) Phishing Web Server Only")
+        print(f"6) Ephemeral MTA Front-End")
+        print(f"7) Advanced Phishing Infrastructure")
+        print(f"8) MTA Front Server Only")
+        print(f"9) Gophish Server Only")
+        print(f"10) Phishing Redirector Only")
+        print(f"11) Phishing Web Server Only")
         print(f"99) Return to Main Menu")
         
         choice = input("\nSelect an option: ")
@@ -327,12 +325,16 @@ def phishing_menu():
         elif choice == "5":
             deploy_fedramp_phishing()
         elif choice == "6":
-            deploy_mta_front_only()
+            deploy_ephemeral_mta()
         elif choice == "7":
-            deploy_gophish_only()
+            deploy_advanced_phishing_infrastructure()
         elif choice == "8":
-            deploy_phishing_redirector_only()
+            deploy_mta_front_only()
         elif choice == "9":
+            deploy_gophish_only()
+        elif choice == "10":
+            deploy_phishing_redirector_only()
+        elif choice == "11":
             deploy_phishing_webserver_only()
         elif choice == "99":
             return
@@ -503,15 +505,15 @@ def execute_phishing_deployment(config):
         return
     
     # Execute deployment based on type
-    success = deploy_phishing_infrastructure(config)
+    success = deploy_infrastructure(config)
     
     if success:
         print(f"\n{COLORS['GREEN']}Phishing infrastructure deployment completed successfully!{COLORS['RESET']}")
-        deployment_info_log = generate_phishing_deployment_info(config, success=True)
+        deployment_info_log = generate_deployment_info(config, success=True)
         print(f"\n{COLORS['CYAN']}Deployment information saved to: {deployment_info_log}{COLORS['RESET']}")
     else:
         print(f"\n{COLORS['RED']}Phishing infrastructure deployment failed.{COLORS['RESET']}")
-        deployment_info_log = generate_phishing_deployment_info(config, success=False)
+        deployment_info_log = generate_deployment_info(config, success=False)
         print(f"\n{COLORS['YELLOW']}Deployment information saved to: {deployment_info_log}{COLORS['RESET']}")
     
     input("\nPress Enter to return to menu...")
