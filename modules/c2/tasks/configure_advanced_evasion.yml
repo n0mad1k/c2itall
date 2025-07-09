@@ -58,9 +58,11 @@
     owner: root
     group: root
   with_items:
-    - { src: "../files/pdf-weaponizer.py", dest: "/root/Tools/phishing/pdf-weaponizer.py" }
-    - { src: "../files/office-macro-generator.py", dest: "/root/Tools/phishing/office-macro-generator.py" }
-    - { src: "../files/lnk-generator.py", dest: "/root/Tools/phishing/lnk-generator.py" }
+    # Note: These files need to be created or paths need to be verified
+    # - { src: "../files/pdf-weaponizer.py", dest: "/root/Tools/phishing/pdf-weaponizer.py" }
+    # - { src: "../files/office-macro-generator.py", dest: "/root/Tools/phishing/office-macro-generator.py" }
+    # - { src: "../files/lnk-generator.py", dest: "/root/Tools/phishing/lnk-generator.py" }
+    []
 
 - name: Create Living off the Land (LOtL) payload templates
   template:
@@ -129,9 +131,4 @@
     mode: '0755'
     owner: root
     group: root
-
-handlers:
-  - name: restart tor
-    systemd:
-      name: tor
-      state: restarted
+  when: enable_automated_evasion | default(false) | bool

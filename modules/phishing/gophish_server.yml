@@ -13,7 +13,7 @@
 
   tasks:
     - name: Create Gophish instance
-      include_tasks: "../tasks/create_instance.yml"
+      include_tasks: "../../providers/AWS/tasks/create_instance.yml"
       vars:
         instance_name: "{{ server_name }}"
         instance_type: "{{ gophish_instance_type }}"
@@ -41,11 +41,11 @@
     - vars.yaml
   tasks:
     - name: Include advanced Gophish configuration
-      include_tasks: "../tasks/configure_gophish_advanced.yml"
+      include_tasks: "gophish/tasks/configure_gophish_advanced.yml"
 
     - name: Include security hardening
-      include_tasks: "../tasks/security_hardening.yml"
+      include_tasks: "../../common/tasks/security_hardening.yml"
 
     - name: Include tracker setup
-      include_tasks: "../tasks/configure_integrated_tracker.yml"
+      include_tasks: "../../c2/tasks/configure_integrated_tracker.yml"
       when: deploy_tracker | default(true) | bool

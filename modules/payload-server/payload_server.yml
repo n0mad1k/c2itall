@@ -13,11 +13,11 @@
     
   tasks:
     - name: Deploy payload server based on provider
-      include_tasks: "../{{ provider | upper }}/c2.yml"
+      include_tasks: "../providers/{{ provider | upper }}/c2.yml"
       vars:
         c2_name: "{{ payload_server_name }}"
         server_type: "payload"
         
     - name: Configure payload server
-      include_tasks: "../tasks/configure_payload_server.yml"
+      include_tasks: "tasks/configure_payload_server.yml"
       when: not skip_configuration | default(false)

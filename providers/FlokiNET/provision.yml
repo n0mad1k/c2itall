@@ -83,7 +83,7 @@
 
     - name: Copy operational scripts
       ansible.builtin.copy:
-        src: "../files/{{ item }}"
+        src: "../../common/files/{{ item }}"
         dest: "/opt/c2/{{ item }}"
         mode: '0700'
         owner: root

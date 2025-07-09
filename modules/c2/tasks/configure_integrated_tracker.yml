@@ -63,7 +63,7 @@
 
 - name: Copy tracker application code
   copy:
-    src: "../files/simple_email_tracker.py"
+    src: "../../tracker/files/simple_email_tracker.py"
     dest: /root/Tools/tracker/simple_email_tracker.py
     mode: '0755'
     owner: root
@@ -72,7 +72,7 @@
 
 - name: Copy tracker statistics CLI tool
   copy:
-    src: "../files/tracker-stats.sh"
+    src: "../../tracker/files/tracker-stats.sh"
     dest: /root/Tools/tracker/tracker-stats.sh
     mode: '0755'
     owner: root
@@ -81,7 +81,7 @@
 
 - name: Copy systemd service file for tracker
   copy:
-    src: "../files/tracker.service"
+    src: "../../tracker/files/tracker.service"
     dest: /etc/systemd/system/tracker.service
     mode: '0644'
     owner: root
@@ -102,7 +102,7 @@
 
 - name: Create NGINX site config for tracker
   template:
-    src: "../files/tracker-nginx.conf"
+    src: "../../tracker/files/tracker-nginx.conf"
     dest: /etc/nginx/sites-available/tracker
     mode: '0644'
     owner: root

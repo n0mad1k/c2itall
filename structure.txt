@@ -6,8 +6,7 @@
 │   │   ├── persistent-listener.sh
 │   │   ├── randomize_ports.sh
 │   │   ├── rubber-ducky.txt
-│   │   ├── secure-exit.sh
-│   │   └── tracker-nginx.conf
+│   │   └── secure-exit.sh
 │   ├── tasks
 │   │   ├── cleanup_confirmation.yml
 │   │   ├── configure_mail.yml
@@ -31,7 +30,6 @@
 │       ├── reference.txt.j2
 │       ├── resolv.conf.j2
 │       ├── secure-ssh.sh.j2
-│       ├── serve-havoc-payloads.sh.j2
 │       ├── setup-cert.sh.j2
 │       ├── shell-handler.service.j2
 │       ├── torrc.j2
@@ -54,7 +52,8 @@
 │   │       ├── generate_evasive_beacons.sh.j2
 │   │       ├── generate_havoc_payloads.sh.j2
 │   │       ├── havoc-config.yaotl.j2
-│   │       └── havoc-guide.j2
+│   │       ├── havoc-guide.j2
+│   │       └── serve-havoc-payloads.sh.j2
 │   ├── chat-server
 │   │   ├── files
 │   │   ├── tasks
@@ -63,19 +62,6 @@
 │   │   ├── files
 │   │   ├── tasks
 │   │   └── templates
-│   ├── infrastructure
-│   │   ├── aws
-│   │   │   ├── files
-│   │   │   ├── tasks
-│   │   │   └── templates
-│   │   ├── flokinet
-│   │   │   ├── files
-│   │   │   ├── tasks
-│   │   │   └── templates
-│   │   └── linode
-│   │       ├── files
-│   │       ├── tasks
-│   │       └── templates
 │   ├── logging-server
 │   │   ├── files
 │   │   ├── tasks
@@ -95,25 +81,25 @@
 │   │   ├── files
 │   │   ├── gophish
 │   │   │   ├── files
+│   │   │   │   └── opsec_wrapper.py
 │   │   │   ├── tasks
 │   │   │   │   ├── configure_gophish_advanced.yml
 │   │   │   │   └── configure_phishing_server.yml
 │   │   │   └── templates
+│   │   │       ├── gophish-advanced-config.j2
+│   │   │       ├── gophish-config.j2
+│   │   │       └── gophish-opsec.yaotl.j2
 │   │   ├── gophish_server.yml
 │   │   ├── mta-front
 │   │   │   ├── files
 │   │   │   ├── tasks
 │   │   │   │   └── configure_mta_front.yml
 │   │   │   └── templates
+│   │   │       └── postfix-mta-front.j2
 │   │   ├── mta_front.yml
 │   │   ├── phishing_redirector.yml
 │   │   ├── phishing_webserver.yml
 │   │   ├── Plan.md
-│   │   ├── redirector
-│   │   │   ├── files
-│   │   │   ├── tasks
-│   │   │   │   └── configure_phishing_redirector.yml
-│   │   │   └── templates
 │   │   ├── tasks
 │   │   │   └── configure_fedramp_compliance.yml
 │   │   ├── templates
@@ -122,20 +108,35 @@
 │   │   │   │   ├── office365_login.j2
 │   │   │   │   ├── password_expiry.j2
 │   │   │   │   └── security_alert.j2
-│   │   │   ├── fake-login.html.j2
 │   │   │   ├── fedramp-compliance.j2
-│   │   │   ├── gophish-advanced-config.j2
-│   │   │   ├── gophish-config.j2
-│   │   │   ├── nginx-phishing-webserver.j2
-│   │   │   ├── phishing_deployment_state.j2
-│   │   │   ├── phishing-landing-page.j2
-│   │   │   └── postfix-mta-front.j2
+│   │   │   └── phishing_deployment_state.j2
 │   │   └── webserver
 │   │       ├── files
 │   │       ├── tasks
 │   │       │   ├── configure_phishing_webserver.yml
 │   │       │   └── setup_phishing_security.yml
 │   │       └── templates
+│   │           ├── nginx-phishing-webserver.j2
+│   │           └── page-templates
+│   │               ├── AmazonClone
+│   │               │   ├── amazon_logo.png
+│   │               │   ├── box10_image.jpg
+│   │               │   ├── box11_image.jpg
+│   │               │   ├── box12_image.jpg
+│   │               │   ├── box1_image.jpg
+│   │               │   ├── box2_image.jpg
+│   │               │   ├── box3_image.jpg
+│   │               │   ├── box4_image.jpg
+│   │               │   ├── box5_image.jpg
+│   │               │   ├── box6_image.jpg
+│   │               │   ├── box7_image.jpg
+│   │               │   ├── box8_image.jpg
+│   │               │   ├── box9_image.jpg
+│   │               │   ├── hero1_image.jpg
+│   │               │   ├── index.html
+│   │               │   └── style.css
+│   │               ├── microsoft-login.html.j2
+│   │               └── phishing-landing-page.j2
 │   ├── redirectors
 │   │   ├── files
 │   │   │   └── post_install_redirector.sh
@@ -143,6 +144,7 @@
 │   │   │   └── configure_redirector.yml
 │   │   └── templates
 │   │       ├── capture.php.j2
+│   │       ├── configure_phishing_redirector.yml
 │   │       ├── nginx.conf.j2
 │   │       ├── nginx-payload-redirector.j2
 │   │       ├── nginx-phishing-redirector.j2
@@ -158,6 +160,7 @@
 │   └── tracker
 │       ├── files
 │       │   ├── simple_email_tracker.py
+│       │   ├── tracker-nginx.conf
 │       │   ├── tracker.service
 │       │   └── tracker-stats.sh
 │       ├── tasks
@@ -203,4 +206,4 @@
 ├── requirements.txt
 └── structure.txt
 
-86 directories, 118 files
+71 directories, 136 files

@@ -435,16 +435,16 @@
       ignore_errors: yes
 
     - name: Include common tool installation tasks
-      include_tasks: "../tasks/install_tools.yml"
+      include_tasks: "../../common/tasks/install_tools.yml"
 
     - name: Include common C2 configuration tasks
-      include_tasks: "../tasks/configure_c2.yml"
+      include_tasks: "../../modules/c2/tasks/configure_c2.yml"
 
     - name: Include common security hardening tasks
-      include_tasks: "../tasks/security_hardening.yml"
+      include_tasks: "../../common/tasks/security_hardening.yml"
 
     - name: Include common mail server configuration tasks
-      include_tasks: "../tasks/configure_mail.yml"
+      include_tasks: "../../common/tasks/configure_mail.yml"
 
     - name: Set up SSH access to redirector
       block:

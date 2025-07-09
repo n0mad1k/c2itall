@@ -105,7 +105,7 @@
 
     - name: Configure tracker settings
       template:
-        src: "../templates/tracker-config.j2"
+        src: "../../modules/tracker/templates/tracker-config.j2"
         dest: /root/Tools/tracker/config.py
         mode: '0644'
       ignore_errors: yes
@@ -122,7 +122,7 @@
 
     - name: Create systemd service for tracker
       template:
-        src: "../templates/tracker.service.j2"
+        src: "../../modules/tracker/templates/tracker.service.j2"
         dest: /etc/systemd/system/tracker.service
         mode: '0644'
       ignore_errors: yes

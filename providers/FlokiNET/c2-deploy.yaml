@@ -132,7 +132,7 @@
 
     - name: Copy clean-logs.sh script
       copy:
-        src: "../files/clean-logs.sh"
+        src: "../../common/files/clean-logs.sh"
         dest: /opt/c2/clean-logs.sh
         mode: '0700'
         owner: root
@@ -140,7 +140,7 @@
 
     - name: Copy secure-exit.sh script
       copy:
-        src: "../files/secure-exit.sh"
+        src: "../../common/files/secure-exit.sh"
         dest: /opt/c2/secure-exit.sh
         mode: '0700'
         owner: root
@@ -148,7 +148,7 @@
 
     - name: Copy shell handler script
       copy:
-        src: "../files/persistent-listener.sh"
+        src: "../../common/files/persistent-listener.sh"
         dest: /opt/shell-handler/persistent-listener.sh
         mode: '0700'
         owner: root
@@ -565,7 +565,7 @@
 
     - name: Copy clean-logs.sh script
       copy:
-        src: "../files/clean-logs.sh"
+        src: "../../common/files/clean-logs.sh"
         dest: /opt/c2/clean-logs.sh
         mode: '0700'
         owner: root
@@ -573,7 +573,7 @@
 
     - name: Copy secure-exit.sh script
       copy:
-        src: "../files/secure-exit.sh"
+        src: "../../common/files/secure-exit.sh"
         dest: /opt/c2/secure-exit.sh
         mode: '0700'
         owner: root
@@ -581,7 +581,7 @@
 
     - name: Copy serve-beacons.sh script
       copy:
-        src: "../files/serve-beacons.sh"
+        src: "../../common/files/serve-beacons.sh"
         dest: /opt/c2/serve-beacons.sh
         mode: '0700'
         owner: root

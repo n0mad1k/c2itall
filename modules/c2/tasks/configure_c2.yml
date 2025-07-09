@@ -15,7 +15,7 @@
 
 - name: Set a custom MOTD
   template:
-    src: "../templates/motd.j2"
+    src: "../../common/templates/motd.j2"
     dest: /etc/motd
     owner: root
     group: root
@@ -134,7 +134,7 @@
 
 - name: Create post-install instructions
   template:
-    src: "../templates/POST_INSTALL_INSTRUCTIONS.txt.j2"
+    src: "../../common/templates/POST_INSTALL_INSTRUCTIONS.txt.j2"
     dest: "/root/POST_INSTALL_INSTRUCTIONS.txt"
     mode: '0644'
     owner: root
@@ -218,7 +218,7 @@
 
 - name: Create Linux loader script template
   template:
-    src: "../templates/linux_loader.sh.j2" 
+    src: "../../common/templates/linux_loader.sh.j2" 
     dest: "/root/Tools/linux_loader.template"
     mode: '0644'
     owner: root
@@ -226,7 +226,7 @@
 
 - name: Create Windows PowerShell loader template
   template:
-    src: "../templates/windows_loader.ps1.j2"
+    src: "../../common/templates/windows_loader.ps1.j2"
     dest: "/root/Tools/windows_loader.template"
     mode: '0644'
     owner: root
@@ -292,7 +292,7 @@
     redirector_domain: "{{ redirector_subdomain }}.{{ domain }}"
 
 - name: Include traffic flow configuration
-  include_tasks: "../tasks/traffic_flow_config.yml"
+  include_tasks: "../../common/tasks/traffic_flow_config.yml"
 
 - name: Set up cron job for log cleaning if zero-logs enabled
   cron:

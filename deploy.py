@@ -1147,7 +1147,7 @@ def interactive_setup(deployment_id=None):
         # If they want multi-region deployment, let them select regions now
         if use_multi_region and not config.get('c2_only') and not config.get('redirector_only'):
             provider_dir = PROVIDER_DIRS.get(config['provider'], config['provider'].capitalize())
-            vars_file = f"{provider_dir}/vars.yaml"
+            vars_file = f"providers/{provider_dir}/vars.yaml"
             
             if os.path.exists(vars_file):
                 with open(vars_file, 'r') as f:
@@ -1194,7 +1194,7 @@ def interactive_setup(deployment_id=None):
     vars_data = {}
     for provider in providers_to_configure:
         provider_dir = PROVIDER_DIRS.get(provider, provider.capitalize())
-        vars_file = f"{provider_dir}/vars.yaml"
+        vars_file = f"providers/{provider_dir}/vars.yaml"
         
         if os.path.exists(vars_file):
             try:
@@ -1401,7 +1401,7 @@ def load_vars_file(provider):
     
     # Use correct case for directory
     provider_dir = PROVIDER_DIRS[provider]
-    vars_file = f"{provider_dir}/vars.yaml"
+    vars_file = f"providers/{provider_dir}/vars.yaml"
     
     if (os.path.exists(vars_file)):
         try:
@@ -1803,7 +1803,7 @@ def deploy_infrastructure(config):
             if config.get('redirector_region'):
                 redirector_config['region'] = config['redirector_region']
                 
-            playbook = f"{provider_dir}/redirector.yml"
+            playbook = f"providers/{provider_dir}/redirector.yml"
             inventory_path = create_inventory_file(redirector_config, "local")
             
             logging.info(f"Deploying {provider} redirector using {playbook} in region {redirector_config.get('region', 'default')}")
@@ -1840,7 +1840,7 @@ def deploy_infrastructure(config):
             if config.get('c2_region'):
                 c2_config['region'] = config['c2_region']
                 
-            playbook = f"{provider_dir}/c2.yml"
+            playbook = f"providers/{provider_dir}/c2.yml"
             inventory_path = create_inventory_file(c2_config, "local")
             
             logging.info(f"Deploying {provider} C2 server using {playbook} in region {c2_config.get('region', 'default')}")
@@ -1926,7 +1926,7 @@ def deploy_flokinet_redirector(config):
     inventory_path = create_inventory_file(config, "redirector")
     
     # Run the playbook
-    playbook = f"{PROVIDER_DIRS['flokinet']}/redirector.yml"
+    playbook = f"providers/{PROVIDER_DIRS['flokinet']}/redirector.yml"
     try:
         success, stdout, stderr = run_ansible_playbook(
             playbook, inventory_path, config, config.get('debug', False)
@@ -1962,7 +1962,7 @@ def deploy_flokinet_c2(config):
     inventory_path = create_inventory_file(config, "c2")
     
     # Run the playbook
-    playbook = f"{PROVIDER_DIRS['flokinet']}/c2.yml"
+    playbook = f"providers/{PROVIDER_DIRS['flokinet']}/c2.yml"
     try:
         success, stdout, stderr = run_ansible_playbook(
             playbook, inventory_path, config, config.get('debug', False)
@@ -2000,7 +2000,7 @@ def run_tests(config):
             os.environ['LINODE_TOKEN'] = config['linode_token']
     
     # Run tests playbook
-    playbook = f"{provider_dir}/tests.yml"
+    playbook = f"providers/{provider_dir}/tests.yml"
     if os.path.exists(playbook):
         inventory_path = create_inventory_file(config, "local")
         try:
@@ -2121,7 +2121,7 @@ def cleanup_resources(config, interactive=True):
     # Load credentials from vars.yaml if they're not already in the config
     if provider == "aws" and not (config.get('aws_access_key') and config.get('aws_secret_key')):
         try:
-            vars_file = f"{provider_dir}/vars.yaml"
+            vars_file = f"providers/{provider_dir}/vars.yaml"
             if os.path.exists(vars_file):
                 with open(vars_file, 'r') as f:
                     vars_data = yaml.safe_load(f) or {}
@@ -2233,7 +2233,7 @@ def cleanup_resources(config, interactive=True):
             cleanup_config = region_config.copy()
             cleanup_config.update(extra_vars)
             
-            playbook = f"{provider_dir}/cleanup.yml"
+            playbook = f"providers/{provider_dir}/cleanup.yml"
             if os.path.exists(playbook):
                 try:
                     success, stdout, stderr = run_ansible_playbook(
@@ -2262,7 +2262,7 @@ def cleanup_resources(config, interactive=True):
             "cleanup_tracker": config.get('deploy_tracker', False) and not config.get('integrated_tracker', False)
         }
         
-        playbook = f"{provider_dir}/cleanup.yml"
+        playbook = f"providers/{provider_dir}/cleanup.yml"
         if os.path.exists(playbook):
             logging.info(f"Running cleanup playbook: {playbook}")
             inventory_path = create_inventory_file(config, "local")
@@ -2376,7 +2376,7 @@ def teardown_infrastructure(config):
         logging.warning(f"No infrastructure state file found: {infra_state_file}")
         
     # Load credentials from vars.yaml if not provided
-    vars_file = f"{provider_dir}/vars.yaml"
+    vars_file = f"providers/{provider_dir}/vars.yaml"
     vars_data = {}
     if os.path.exists(vars_file):
         try:
@@ -2431,7 +2431,7 @@ def teardown_infrastructure(config):
         return False
     
     # Run cleanup playbook
-    playbook = f"{provider_dir}/cleanup.yml"
+    playbook = f"providers/{provider_dir}/cleanup.yml"
     if os.path.exists(playbook):
         # Create inventory file
         fd, inventory_path = tempfile.mkstemp(prefix="inventory_teardown_", suffix=".ini")

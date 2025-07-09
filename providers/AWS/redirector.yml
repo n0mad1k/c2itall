@@ -358,11 +358,11 @@
   # Include the rest of your redirector configuration tasks here
   tasks:    
     - name: Include common redirector configuration tasks
-      include_tasks: "../tasks/configure_redirector.yml"
+      include_tasks: "../../modules/redirectors/tasks/configure_redirector.yml"
       
     - name: Configure shell handler script with listening port
       template:
-        src: "../files/havoc_shell_handler.sh"
+        src: "../../modules/c2/files/havoc_shell_handler.sh"
         dest: "/root/Tools/shell_handler.sh"
         mode: 0755
       vars:

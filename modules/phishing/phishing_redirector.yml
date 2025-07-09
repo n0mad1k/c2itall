@@ -13,7 +13,7 @@
 
   tasks:
     - name: Create phishing redirector instance
-      include_tasks: "../tasks/create_instance.yml"
+      include_tasks: "../../providers/AWS/tasks/create_instance.yml"
       vars:
         instance_name: "{{ server_name }}"
         instance_type: "{{ redirector_instance_type }}"
@@ -40,7 +40,7 @@
     - vars.yaml
   tasks:
     - name: Include phishing redirector configuration
-      include_tasks: "../tasks/configure_phishing_redirector.yml"
+      include_tasks: "../redirectors/templates/configure_phishing_redirector.yml"
 
     - name: Include security hardening
-      include_tasks: "../tasks/security_hardening.yml"
+      include_tasks: "../../common/tasks/security_hardening.yml"

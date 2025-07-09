@@ -123,7 +123,7 @@
         state: restarted
       
     - name: Include common redirector configuration tasks
-      include_tasks: "../tasks/configure_redirector.yml"
+      include_tasks: "../../modules/redirectors/tasks/configure_redirector.yml"
       
     - name: Print deployment summary
       debug:

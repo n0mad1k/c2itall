@@ -81,10 +81,10 @@
         state: present
 
     - name: Include common security hardening tasks
-      include_tasks: "../tasks/security_hardening.yml"
+      include_tasks: "../../common/tasks/security_hardening.yml"
 
     - name: Include common redirector configuration tasks
-      include_tasks: "../tasks/configure_redirector.yml"
+      include_tasks: "../../modules/redirectors/tasks/configure_redirector.yml"
 
     - name: Print deployment summary
       debug:
