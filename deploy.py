@@ -494,6 +494,11 @@ def execute_phishing_deployment(config):
     # Set up logging
     log_file = setup_logging(config['deployment_id'], "phishing_deployment")
     
+    # Create consistent resource names now that we have an ID
+    config['redirector_name'] = f"r-{config['deployment_id']}"
+    config['c2_name'] = f"s-{config['deployment_id']}"
+    config['tracker_name'] = f"t-{config['deployment_id']}"
+    
     print(f"Deployment Type: {config['deployment_type']}")
     print(f"Deployment ID: {config['deployment_id']}")
     print(f"Provider: {config['provider']}")
