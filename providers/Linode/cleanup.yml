@@ -10,7 +10,8 @@
     cleanup_redirector: "{{ (redirector_name is defined and redirector_name != '') | ternary(true, false) }}"
     cleanup_c2: "{{ (c2_name is defined and c2_name != '') | ternary(true, false) }}"
     cleanup_tracker: "{{ (tracker_name is defined and tracker_name != '') | ternary(true, false) }}"
-    confirm_cleanup: "{{ confirm_cleanup | default(true) }}"
+    cleanup_attack_box: "{{ (attack_box_name is defined and attack_box_name != '') | ternary(true, false) }}"
+    confirm_cleanup: false  # Skip confirmation in automated teardown
 
   tasks:
     - name: Validate required Linode token
@@ -34,6 +35,9 @@
           {% endif %}
           {% if cleanup_tracker and tracker_name is defined %}
           - Tracker instance: {{ tracker_name }}
+          {% endif %}
+          {% if cleanup_attack_box and attack_box_name is defined %}
+          - Attack Box instance: {{ attack_box_name }}
           {% endif %}
       when: confirm_cleanup | bool
 
@@ -74,6 +78,15 @@
       register: tracker_deletion
       ignore_errors: yes
 
+    - name: Delete attack box instance
+      community.general.linode_v4:
+        access_token: "{{ linode_token }}"
+        label: "{{ attack_box_name }}"
+        state: absent
+      when: cleanup_attack_box and attack_box_name is defined and attack_box_name != ""
+      register: attack_box_deletion
+      ignore_errors: yes
+
     - name: Clean up deployment state file
       file:
         path: "{{ playbook_dir }}/../deployment_state_{{ deployment_id }}.json"
@@ -90,12 +103,15 @@
       debug:
         msg: |
           Cleanup results:
-          {% if redirector_deletion is defined %}
+          {% if redirector_deletion is defined and redirector_name is defined %}
           - Redirector {{ redirector_name }}: {{ redirector_deletion.changed | ternary('Deleted', 'Not found/Could not delete') }}
           {% endif %}
-          {% if c2_deletion is defined %}
+          {% if c2_deletion is defined and c2_name is defined %}
           - C2 {{ c2_name }}: {{ c2_deletion.changed | ternary('Deleted', 'Not found/Could not delete') }}
           {% endif %}
           {% if tracker_deletion is defined and tracker_name is defined %}
           - Tracker {{ tracker_name }}: {{ tracker_deletion.changed | ternary('Deleted', 'Not found/Could not delete') }}
+          {% endif %}
+          {% if attack_box_deletion is defined and attack_box_name is defined %}
+          - Attack Box {{ attack_box_name }}: {{ attack_box_deletion.changed | ternary('Deleted', 'Not found/Could not delete') }}
           {% endif %}

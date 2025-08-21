@@ -15,6 +15,8 @@ C2ingRed enables rapid deployment of complete Command and Control (C2) infrastru
   - Email infrastructure with DKIM/DMARC for phishing
   - Email tracking capabilities
   - Automated payload generation and delivery
+  - Attack boxes (Kali Linux and custom Ubuntu)
+  - **Quick Recon Box** - Streamlined reconnaissance platform (5-8 min deployment)
 - **Security Features**:
   - Zero-logging configuration to minimize evidence
   - Memory protection mechanisms

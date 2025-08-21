@@ -43,22 +43,77 @@
       when: region_choices is defined and region_choices|length > 0 and not selected_region is defined and not linode_region is defined and not c2_region_value is defined
 
     - name: Create C2 Linode instance
-      community.general.linode_v4:
-        access_token: "{{ linode_token }}"
-        label: "{{ c2_name }}"
-        type: "{{ plan }}"
-        region: "{{ c2_region_value }}"
-        image: "linode/kali"
-        root_pass: "{{ lookup('password', '/dev/null length=16') }}"
-        authorized_keys:
-          - "{{ lookup('file', ssh_key_path) }}"
-        state: present
-      register: c2_instance
+      block:
+        - name: Try creating instance in specified region
+          community.general.linode_v4:
+            access_token: "{{ linode_token }}"
+            label: "{{ c2_name }}"
+            type: "{{ plan }}"
+            region: "{{ c2_region_value }}"
+            image: "linode/kali"
+            root_pass: "{{ lookup('password', '/dev/null length=16') }}"
+            authorized_keys:
+              - "{{ lookup('file', ssh_key_path) }}"
+            state: present
+          register: c2_instance
+      rescue:
+        - name: Log region restriction error
+          debug:
+            msg: "Region {{ c2_region_value }} is restricted. Trying fallback regions..."
+
+        - name: Set fallback regions (most reliable ones first)
+          set_fact:
+            fallback_regions:
+              - "us-east"
+              - "us-central" 
+              - "eu-west"
+              - "us-west"
+
+        - name: Try fallback regions
+          community.general.linode_v4:
+            access_token: "{{ linode_token }}"
+            label: "{{ c2_name }}"
+            type: "{{ plan }}"
+            region: "{{ item }}"
+            image: "linode/kali"
+            root_pass: "{{ lookup('password', '/dev/null length=16') }}"
+            authorized_keys:
+              - "{{ lookup('file', ssh_key_path) }}"
+            state: present
+          register: c2_instance
+          loop: "{{ fallback_regions }}"
+          when: c2_instance is not defined or c2_instance.failed
+          ignore_errors: yes
+
+        - name: Update deployment region with successful fallback
+          set_fact:
+            c2_region_value: "{{ item }}"
+          loop: "{{ fallback_regions }}"
+          when: c2_instance.results is defined and c2_instance.results[ansible_loop.index0] is defined and not c2_instance.results[ansible_loop.index0].failed
+          
+        - name: Fail if all regions are restricted
+          fail:
+            msg: "All attempted regions are restricted. Please try again later or contact Linode support."
+          when: c2_instance.failed | default(true)
 
     - name: Set c2_ip for later use
-      set_fact:
-        c2_ip: "{{ c2_instance.instance.ipv4[0] }}"
-        c2_instance_id: "{{ c2_instance.instance.id }}"
+      block:
+        - name: Extract instance info from direct creation
+          set_fact:
+            c2_ip: "{{ c2_instance.instance.ipv4[0] }}"
+            c2_instance_id: "{{ c2_instance.instance.id }}"
+          when: c2_instance.instance is defined
+
+        - name: Extract instance info from fallback creation
+          set_fact:
+            c2_ip: "{{ item.instance.ipv4[0] }}"
+            c2_instance_id: "{{ item.instance.id }}"
+          loop: "{{ c2_instance.results | default([]) }}"
+          when: c2_instance.results is defined and item.instance is defined and not item.failed
+
+    - name: Display final C2 deployment region and IP
+      debug:
+        msg: "C2 server deployed successfully in region {{ c2_region_value }} with IP {{ c2_ip }}"
 
     # Enhanced SSH wait task for Linode/c2.yml
     - name: Wait for C2 SSH to be available
@@ -107,7 +162,7 @@
   vars_files:
     - vars.yaml
   vars:
-    redirector_ip: "{{ redirector_ip | default('127.0.0.1') }}"
+    redirector_ip: "{{ hostvars['localhost']['redirector_ip'] | default('127.0.0.1') }}"
     c2_subdomain: "{{ c2_subdomain | default('mail') }}"
   tasks:
     - name: Wait for apt to be available
@@ -131,13 +186,13 @@
         state: restarted
 
     - name: Include common tool installation tasks
-      include_tasks: "../tasks/install_tools.yml"
+      include_tasks: "../../common/tasks/install_tools.yml"
       
     - name: Include common C2 configuration tasks
-      include_tasks: "../tasks/configure_c2.yml"
+      include_tasks: "../../modules/c2/tasks/configure_c2.yml"
          
     - name: Include common mail server configuration tasks
-      include_tasks: "../tasks/configure_mail.yml"
+      include_tasks: "../../common/tasks/configure_mail.yml"
       
     - name: Print deployment summary
       debug:

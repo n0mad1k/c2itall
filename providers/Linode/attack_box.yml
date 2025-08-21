@@ -1,0 +1,251 @@
+---
+# Linode Attack Box Deployment Playbook
+# Based on attk-box-setup but optimized for headless server deployment
+
+- name: Deploy Attack Box on Linode
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    deployment_type: "attack_box"
+    attack_box_name: "{{ attack_box_name | default('a-' + deployment_id) }}"
+    attack_box_type: "{{ attack_box_type | default('kali') }}"
+    linode_instance_type: "{{ linode_instance_type | default('g6-standard-4') }}"
+    linode_region: "{{ linode_region | default('us-east') }}"
+    ssh_key_name: "{{ ssh_key_path | default('c2deploy_' + attack_box_name) | basename | regex_replace('\\.pub$', '') }}"
+    
+    # Attack box image mapping (headless versions)
+    attack_box_images:
+      kali: "linode/kali"
+      custom: "linode/kali"  # Use Kali as base for custom builds
+      quick_recon: "linode/kali"  # Kali Linux for easy tool expansion
+    
+  tasks:
+    - name: Debug attack box deployment
+      debug:
+        msg: "Deploying {{ attack_box_type }} attack box on Linode in {{ linode_region }}"
+
+    - name: Set attack box image
+      set_fact:
+        attack_box_image: "{{ attack_box_images[attack_box_type] | default('linode/kali') }}"
+
+    - name: Check if SSH key exists (should be pre-generated)
+      stat:
+        path: "~/.ssh/{{ ssh_key_name }}"
+      register: ssh_key_check
+
+    - name: Generate SSH key pair for attack box (if not exists)
+      openssh_keypair:
+        path: "~/.ssh/{{ ssh_key_name }}"
+        type: rsa
+        size: 2048
+        force: no
+      register: ssh_key_result
+      when: not ssh_key_check.stat.exists
+
+    - name: Read public key content
+      slurp:
+        src: "~/.ssh/{{ ssh_key_name }}.pub"
+      register: public_key_content
+
+    - name: Add SSH key to Linode
+      uri:
+        url: "https://api.linode.com/v4/profile/sshkeys"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ linode_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          label: "{{ ssh_key_name }}"
+          ssh_key: "{{ public_key_content.content | b64decode | trim }}"
+        status_code: [200, 201]
+      register: linode_ssh_key
+      ignore_errors: yes
+
+    - name: Generate strong root password
+      set_fact:
+        root_password: "{{ lookup('password', '/dev/null chars=ascii_letters,digits,!@#$%^&*-_=+ length=32') }}"
+      when: ansible_password is not defined
+
+    - name: Set ansible_password if not defined
+      set_fact:
+        ansible_password: "{{ root_password }}"
+      when: ansible_password is not defined and root_password is defined
+
+    - name: Create Linode instance for attack box
+      uri:
+        url: "https://api.linode.com/v4/linode/instances"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ linode_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          label: "{{ attack_box_name }}"
+          type: "{{ linode_instance_type }}"
+          region: "{{ linode_region }}"
+          image: "{{ attack_box_image }}"
+          root_pass: "{{ ansible_password | default(root_password) }}"
+          authorized_keys:
+            - "{{ public_key_content.content | b64decode | trim }}"
+          booted: true
+          backups_enabled: false
+          private_ip: false
+          tags:
+            - "attack-box"
+            - "c2itall"
+            - "{{ deployment_id }}"
+        status_code: [200, 201]
+      register: linode_instance
+
+    - name: Get current timestamp
+      setup:
+        gather_subset: min
+      delegate_to: localhost
+
+    - name: Ensure logs directory exists
+      file:
+        path: "{{ playbook_dir }}/logs"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+
+    - name: Save attack box credentials to local file
+      copy:
+        content: |
+          Attack Box: {{ attack_box_name }}
+          Deployment ID: {{ deployment_id }}
+          Instance IP: {{ linode_instance.json.ipv4[0] if linode_instance.json.ipv4 else 'Pending' }}
+          SSH Key: ~/.ssh/{{ ssh_key_name }}
+          Root Password: {{ ansible_password | default(root_password) }}
+          SSH Command: ssh -i ~/.ssh/{{ ssh_key_name }} root@{{ linode_instance.json.ipv4[0] if linode_instance.json.ipv4 else 'IP_ADDRESS' }}
+          
+          Generated at: {{ ansible_date_time.iso8601 }}
+        dest: "{{ playbook_dir }}/logs/deployment_info_{{ deployment_id }}.txt"
+        mode: '0600'
+      when: linode_instance is succeeded
+      delegate_to: localhost
+
+    - name: Save instance information
+      set_fact:
+        attack_box_ip: "{{ linode_instance.json.ipv4[0] }}"
+        attack_box_id: "{{ linode_instance.json.id }}"
+
+    - name: Display attack box information
+      debug:
+        msg: 
+          - "Attack Box Created Successfully!"
+          - "Name: {{ attack_box_name }}"
+          - "IP Address: {{ attack_box_ip }}"
+          - "Instance ID: {{ attack_box_id }}"
+          - "Type: {{ attack_box_type }}"
+          - "SSH Key: ~/.ssh/{{ ssh_key_name }}"
+
+    - name: Wait for instance to be fully booted
+      wait_for:
+        host: "{{ attack_box_ip }}"
+        port: 22
+        delay: 30
+        timeout: 300
+      ignore_errors: yes
+
+    - name: Test SSH connectivity
+      command: ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no -i ~/.ssh/{{ ssh_key_name }} root@{{ attack_box_ip }} echo "SSH connection successful"
+      register: ssh_test
+      retries: 5
+      delay: 30
+      until: ssh_test.rc == 0
+      ignore_errors: yes
+
+    - name: Create dynamic inventory for attack box configuration
+      add_host:
+        name: "{{ attack_box_ip }}"
+        groups: attack_boxes
+        ansible_host: "{{ attack_box_ip }}"
+        ansible_user: root
+        ansible_ssh_private_key_file: "~/.ssh/{{ ssh_key_name }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+        attack_box_type: "{{ attack_box_type }}"
+        deployment_id: "{{ deployment_id }}"
+
+    - name: Save deployment information
+      copy:
+        content: |
+          # Attack Box Deployment Information
+          DEPLOYMENT_ID={{ deployment_id }}
+          ATTACK_BOX_NAME={{ attack_box_name }}
+          ATTACK_BOX_IP={{ attack_box_ip }}
+          ATTACK_BOX_ID={{ attack_box_id }}
+          ATTACK_BOX_TYPE={{ attack_box_type }}
+          SSH_KEY_PATH=~/.ssh/{{ ssh_key_name }}
+          PROVIDER=linode
+          REGION={{ linode_region }}
+          INSTANCE_TYPE={{ linode_instance_type }}
+          DEPLOYED_DATE={{ ansible_date_time.iso8601 }}
+        dest: "{{ playbook_dir }}/logs/attack_box_{{ deployment_id }}.env"
+
+- name: Configure Attack Box
+  hosts: attack_boxes
+  gather_facts: yes
+  become: yes
+  vars:
+    setup_workspace: "{{ setup_workspace | default(true) }}"
+    setup_vpn: "{{ setup_vpn | default(false) }}"
+    setup_tor: "{{ setup_tor | default(false) }}"
+    
+  tasks:
+    - name: Wait for system to be ready
+      wait_for_connection:
+        delay: 30
+        timeout: 300
+
+    - name: Update package cache only (avoid grub-pc issues)
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      when: ansible_os_family == "Debian"
+      retries: 3
+      delay: 10
+
+    - name: Include attack box configuration tasks
+      include_tasks: "{{ playbook_dir }}/../../modules/attack-box/tasks/configure_attack_box.yml"
+      when: deployment_type != "quick_recon_box"
+
+    - name: Include quick recon configuration tasks
+      include_tasks: "{{ playbook_dir }}/../../modules/attack-box/tasks/configure_quick_recon.yml"
+      when: deployment_type == "quick_recon_box"
+
+    - name: Display final setup information (Full Attack Box)
+      debug:
+        msg:
+          - "🎯 Attack Box Configuration Complete!"
+          - "📦 Instance: {{ attack_box_name }}"
+          - "🔑 SSH Command: ssh -i ~/.ssh/a-{{ deployment_id }} root@{{ ansible_host }}"
+          - "🔒 Root Password: {{ ansible_password | default('Check deployment_info_' + deployment_id + '.txt') }}"
+          - "📁 Credentials saved to: logs/deployment_info_{{ deployment_id }}.txt"
+          - ""
+          - "🛠️  Available Commands:"
+          - "  recon <target>    - Run reconnaissance automation"
+          - "  portscan <target> - Run port scan automation" 
+          - "  webenum <target>  - Run web enumeration automation"
+      when: deployment_type != "quick_recon_box"
+
+    - name: Display final setup information (Quick Recon Box)
+      debug:
+        msg:
+          - "🎯 Quick Recon Box Configuration Complete!"
+          - "📦 Instance: {{ attack_box_name }}"
+          - "🔑 SSH Command: ssh -i ~/.ssh/qr-{{ deployment_id }} root@{{ ansible_host }}"
+          - "🔒 Root Password: {{ ansible_password | default('Check deployment_info_' + deployment_id + '.txt') }}"
+          - "📁 Credentials saved to: logs/deployment_info_{{ deployment_id }}.txt"
+          - ""
+          - "🎯 Quick Recon Commands:"
+          - "  qr                - Go to working directory"
+          - "  toolkit           - Show available tools"
+          - "  portscan <target> - Port scan"
+          - "  subfind <domain>  - Subdomain enumeration"
+          - "  webscan <url>     - Web application scan"
+          - "  tor-recon <target> - Anonymous reconnaissance"
+      when: deployment_type == "quick_recon_box"

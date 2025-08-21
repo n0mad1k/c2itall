@@ -1,0 +1,63 @@
+---
+# AWS-specific phishing infrastructure tasks
+
+- name: Set AWS-specific variables
+  set_fact:
+    region: "{{ aws_region | default('us-east-1') }}"
+    instance_type_map:
+      gophish: "{{ gophish_instance_type | default('t3.large') }}"
+      mta_front: "{{ mta_instance_type | default('t3.medium') }}"
+      redirector: "{{ redirector_instance_type | default('t3.small') }}"
+      webserver: "{{ webserver_instance_type | default('t3.medium') }}"
+
+- name: Create security group for phishing infrastructure
+  debug:
+    msg: "Would create security group: phishing-{{ deployment_id }}"
+
+- name: Deploy Gophish server
+  debug:
+    msg: |
+      Would deploy Gophish server:
+      - Instance type: {{ instance_type_map.gophish }}
+      - Region: {{ region }}
+      - Name: gophish-{{ deployment_id }}
+      - Framework: gophish
+  when: "'gophish' in deployment_components"
+
+- name: Deploy MTA Front server
+  debug:
+    msg: |
+      Would deploy MTA Front server:
+      - Instance type: {{ instance_type_map.mta_front }}
+      - Region: {{ region }}
+      - Name: mta-{{ deployment_id }}
+      - Hostname: {{ mta_hostname | default('mail.' + (phishing_domain | default(domain))) }}
+  when: "'mta_front' in deployment_components"
+
+- name: Deploy Phishing Redirector
+  debug:
+    msg: |
+      Would deploy Phishing Redirector:
+      - Instance type: {{ instance_type_map.redirector }}
+      - Region: {{ region }}
+      - Name: redirector-{{ deployment_id }}
+  when: "'redirector' in deployment_components"
+
+- name: Deploy Phishing Webserver
+  debug:
+    msg: |
+      Would deploy Phishing Webserver:
+      - Instance type: {{ instance_type_map.webserver }}
+      - Region: {{ region }}
+      - Name: web-{{ deployment_id }}
+  when: "'webserver' in deployment_components"
+
+- name: Set deployment results
+  set_fact:
+    phishing_deployment_results:
+      gophish_ip: "{{ '10.0.0.10' if 'gophish' in deployment_components else '' }}"
+      mta_ip: "{{ '10.0.0.11' if 'mta_front' in deployment_components else '' }}"
+      redirector_ip: "{{ '10.0.0.12' if 'redirector' in deployment_components else '' }}"
+      webserver_ip: "{{ '10.0.0.13' if 'webserver' in deployment_components else '' }}"
+      deployment_id: "{{ deployment_id }}"
+      domain: "{{ phishing_domain | default(domain) }}"

@@ -1,0 +1,10 @@
+{
+  "deployment_id": "{{ deployment_id }}",
+  "deployment_type": "{{ deployment_type }}",
+  "provider": "{{ provider }}",
+  "domain": "{{ phishing_domain | default(domain) }}",
+  "timestamp": "{{ ansible_date_time.iso8601 }}",
+  "components": {{ deployment_components | to_json }},
+  "results": {{ phishing_deployment_results | default({}) | to_json }},
+  "status": "completed"
+}

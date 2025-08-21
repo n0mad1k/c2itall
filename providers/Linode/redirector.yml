@@ -35,22 +35,77 @@
       when: region_choices is defined and region_choices|length > 0 and not selected_region is defined and not linode_region is defined and not deployment_region is defined
 
     - name: Create redirector Linode instance
-      community.general.linode_v4:
-        access_token: "{{ linode_token }}"
-        label: "{{ redirector_name }}"
-        type: "{{ redirector_plan | default('g6-nanode-1') }}"
-        region: "{{ deployment_region }}"
-        image: "linode/debian12"
-        root_pass: "{{ lookup('password', '/dev/null length=16') }}"
-        authorized_keys:
-          - "{{ lookup('file', ssh_key_path) }}"
-        state: present
-      register: redirector_instance
+      block:
+        - name: Try creating instance in specified region
+          community.general.linode_v4:
+            access_token: "{{ linode_token }}"
+            label: "{{ redirector_name }}"
+            type: "{{ redirector_plan | default('g6-nanode-1') }}"
+            region: "{{ deployment_region }}"
+            image: "linode/debian12"
+            root_pass: "{{ lookup('password', '/dev/null length=16') }}"
+            authorized_keys:
+              - "{{ lookup('file', ssh_key_path) }}"
+            state: present
+          register: redirector_instance
+      rescue:
+        - name: Log region restriction error
+          debug:
+            msg: "Region {{ deployment_region }} is restricted. Trying fallback regions..."
+
+        - name: Set fallback regions (most reliable ones first)
+          set_fact:
+            fallback_regions:
+              - "us-east"
+              - "us-central" 
+              - "eu-west"
+              - "us-west"
+
+        - name: Try fallback regions
+          community.general.linode_v4:
+            access_token: "{{ linode_token }}"
+            label: "{{ redirector_name }}"
+            type: "{{ redirector_plan | default('g6-nanode-1') }}"
+            region: "{{ item }}"
+            image: "linode/debian12"
+            root_pass: "{{ lookup('password', '/dev/null length=16') }}"
+            authorized_keys:
+              - "{{ lookup('file', ssh_key_path) }}"
+            state: present
+          register: redirector_instance
+          loop: "{{ fallback_regions }}"
+          when: redirector_instance is not defined or redirector_instance.failed
+          ignore_errors: yes
+
+        - name: Update deployment region with successful fallback
+          set_fact:
+            deployment_region: "{{ item }}"
+          loop: "{{ fallback_regions }}"
+          when: redirector_instance.results is defined and redirector_instance.results[ansible_loop.index0] is defined and not redirector_instance.results[ansible_loop.index0].failed
+          
+        - name: Fail if all regions are restricted
+          fail:
+            msg: "All attempted regions are restricted. Please try again later or contact Linode support."
+          when: redirector_instance.failed | default(true)
 
     - name: Set redirector_ip for later use
-      set_fact:
-        redirector_ip: "{{ redirector_instance.instance.ipv4[0] }}"
-        redirector_instance_id: "{{ redirector_instance.instance.id }}"
+      block:
+        - name: Extract instance info from direct creation
+          set_fact:
+            redirector_ip: "{{ redirector_instance.instance.ipv4[0] }}"
+            redirector_instance_id: "{{ redirector_instance.instance.id }}"
+          when: redirector_instance.instance is defined
+
+        - name: Extract instance info from fallback creation
+          set_fact:
+            redirector_ip: "{{ item.instance.ipv4[0] }}"
+            redirector_instance_id: "{{ item.instance.id }}"
+          loop: "{{ redirector_instance.results | default([]) }}"
+          when: redirector_instance.results is defined and item.instance is defined and not item.failed
+
+    - name: Display final deployment region and IP
+      debug:
+        msg: "Redirector deployed successfully in region {{ deployment_region }} with IP {{ redirector_ip }}"
 
     # Enhanced SSH wait task with better retry mechanism
     - name: Wait for redirector SSH to be available

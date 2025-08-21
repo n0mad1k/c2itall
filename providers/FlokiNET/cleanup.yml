@@ -11,7 +11,7 @@
   vars:
     cleanup_redirector: "{{ (redirector_ip is defined and redirector_ip != '') | ternary(true, false) }}"
     cleanup_c2: "{{ (c2_ip is defined and c2_ip != '') | ternary(true, false) }}"
-    confirm_cleanup: "{{ confirm_cleanup | default(true) }}"
+    confirm_cleanup: false  # Skip confirmation in automated teardown
 
   tasks:
     - name: Confirm cleanup if required

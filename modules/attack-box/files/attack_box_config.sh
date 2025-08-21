@@ -1,0 +1,36 @@
+# Attack Box Configuration
+# ========================
+
+# Attack Box Setup Information
+ATTACK_BOX_VERSION="1.0.0"
+WORKSPACE_DIR="/root/operator"
+SCRIPTS_DIR="/root/operator/tools/scripts"
+TOOLS_DIR="/root/operator/tools"
+
+# Available Commands
+echo "Attack Box Commands:"
+echo "==================="
+echo "recon <target>          - Run reconnaissance automation"
+echo "portscan <target>       - Run port scan automation"  
+echo "webenum <target>        - Run web enumeration automation"
+echo "attack-menu             - Launch manual testing menu"
+echo "operator                 - Change to main directory"
+echo "mkoperator <name>        - Create new engagement structure"
+echo ""
+echo "Workspace Structure:"
+echo "==================="
+echo "~/operator/tools/        - All security tools and scripts"
+echo "~/operator/scans/        - All scan results organized by type"
+echo "~/operator/loot/         - Extracted data and credentials"
+echo "~/operator/targets/      - Target lists and reconnaissance"
+echo "~/operator/notes/        - Manual notes and observations"
+echo "~/operator/reports/      - Documentation and reporting"
+echo "~/operator/exploits/     - Working exploits and POCs"
+echo "~/operator/payloads/     - Custom payloads and shells"
+echo "~/operator/wordlists/    - Custom and downloaded wordlists"
+echo "~/operator/pcaps/        - Network captures and analysis"
+echo ""
+echo "Trashpanda-style Directory Structure:"
+echo "====================================="
+echo "The operator directory follows the exact structure as TrashPanda tool"
+echo "with organized subdirectories for different scan types and data."

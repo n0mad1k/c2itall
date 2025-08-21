@@ -98,7 +98,7 @@
 
 - name: Install enhanced tracking pixel
   copy:
-    src: "../files/simple_email_tracker.py"
+    src: "../../tracker/files/simple_email_tracker.py"
     dest: /opt/gophish/tracker.py
     owner: gophish
     group: gophish

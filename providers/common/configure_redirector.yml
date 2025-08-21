@@ -1,0 +1,23 @@
+---
+# Common redirector configuration tasks
+
+- name: Configure redirector servers
+  debug:
+    msg: |
+      Configuring redirector servers for deployment {{ deployment_id }}
+      Backend host: {{ backend_host | default('N/A') }}
+      Redirector type: {{ redirector_type | default('http') }}
+      
+- name: Install redirector software
+  debug:
+    msg: "Would install and configure Apache/Nginx redirectors on target hosts"
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['phishing_redirector'] | default([]) }}"
+  when: groups['phishing_redirector'] is defined
+
+- name: Configure SSL certificates
+  debug:
+    msg: |
+      Would configure SSL certificates for:
+      - Domain: {{ phishing_domain | default(domain) }}
+      - Let's Encrypt email: {{ letsencrypt_email | default('admin@' + (phishing_domain | default(domain))) }}

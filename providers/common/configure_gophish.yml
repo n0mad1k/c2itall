@@ -1,0 +1,24 @@
+---
+# Common Gophish server configuration tasks
+
+- name: Configure Gophish servers
+  debug:
+    msg: |
+      Configuring Gophish servers for deployment {{ deployment_id }}
+      Admin port: {{ gophish_admin_port | default('8090') }}
+      Domain: {{ phishing_domain | default(domain) }}
+      
+- name: Install Gophish
+  debug:
+    msg: "Would install and configure Gophish on target hosts"
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['phishing_gophish'] | default([]) }}"
+  when: groups['phishing_gophish'] is defined
+
+- name: Configure Gophish templates
+  debug:
+    msg: |
+      Would configure Gophish with:
+      - Email template: {{ email_template | default('office365_login') }}
+      - Campaign: {{ campaign_name | default('test-campaign') }}
+      - Sender: {{ sender_name | default('IT Support') }}

@@ -2,6 +2,11 @@
 # Common task for configuring mail server
 # Shared across all providers
 
+- name: Set default SMTP auth credentials if not defined
+  set_fact:
+    smtp_auth_user: "{{ smtp_auth_user | default('admin') }}"
+    smtp_auth_pass: "{{ smtp_auth_pass | default(lookup('password', '/tmp/smtp_auth_pass_' + deployment_id + ' length=16 chars=ascii_letters,digits')) }}"
+
 - name: Configure Postfix main.cf
   lineinfile:
     path: /etc/postfix/main.cf
@@ -16,17 +21,40 @@
     - { regexp: '^smtpd_banner', line: "smtpd_banner = $myhostname ESMTP $mail_name" }
     - { regexp: '^mynetworks', line: "mynetworks = 127.0.0.0/8 [::1]/128" }
     - { regexp: '^relay_domains', line: "relay_domains = $mydestination" }
-    - { regexp: '^smtpd_tls_cert_file', line: "smtpd_tls_cert_file = /etc/letsencrypt/live/{{ domain }}/fullchain.pem" }
-    - { regexp: '^smtpd_tls_key_file', line: "smtpd_tls_key_file = /etc/letsencrypt/live/{{ domain }}/privkey.pem" }
-    - { regexp: '^smtpd_tls_security_level', line: "smtpd_tls_security_level = encrypt" }
+    - { regexp: '^smtpd_use_tls', line: "smtpd_use_tls = yes" }
     - { regexp: '^smtpd_tls_session_cache_database', line: "smtpd_tls_session_cache_database = btree:${data_directory}/smtpd_scache" }
     - { regexp: '^smtp_tls_session_cache_database', line: "smtp_tls_session_cache_database = btree:${data_directory}/smtp_scache" }
-    - { regexp: '^smtpd_use_tls', line: "smtpd_use_tls = yes" }
-    - { regexp: '^smtpd_tls_auth_only', line: "smtpd_tls_auth_only = yes" }
     - { regexp: '^milter_default_action', line: "milter_default_action = accept" }
     - { regexp: '^milter_protocol', line: "milter_protocol = 6" }
     - { regexp: '^smtpd_milters', line: "smtpd_milters = unix:/var/spool/postfix/opendkim/opendkim.sock" }
     - { regexp: '^non_smtpd_milters', line: "non_smtpd_milters = unix:/var/spool/postfix/opendkim/opendkim.sock" }
+
+- name: Check if SSL certificates exist
+  stat:
+    path: "/etc/letsencrypt/live/{{ domain }}/fullchain.pem"
+  register: ssl_cert_exists
+
+- name: Configure Postfix SSL settings (if certificates exist)
+  lineinfile:
+    path: /etc/postfix/main.cf
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+  with_items:
+    - { regexp: '^smtpd_tls_cert_file', line: "smtpd_tls_cert_file = /etc/letsencrypt/live/{{ domain }}/fullchain.pem" }
+    - { regexp: '^smtpd_tls_key_file', line: "smtpd_tls_key_file = /etc/letsencrypt/live/{{ domain }}/privkey.pem" }
+    - { regexp: '^smtpd_tls_security_level', line: "smtpd_tls_security_level = encrypt" }
+    - { regexp: '^smtpd_tls_auth_only', line: "smtpd_tls_auth_only = yes" }
+  when: ssl_cert_exists.stat.exists
+
+- name: Configure Postfix SSL settings (if certificates don't exist - use opportunistic TLS)
+  lineinfile:
+    path: /etc/postfix/main.cf
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+  with_items:
+    - { regexp: '^smtpd_tls_security_level', line: "smtpd_tls_security_level = may" }
+    - { regexp: '^smtpd_tls_auth_only', line: "smtpd_tls_auth_only = no" }
+  when: not ssl_cert_exists.stat.exists
 
 - name: Configure OpenDKIM
   lineinfile:
@@ -41,6 +69,14 @@
     - { regexp: '^Syslog', line: "Syslog   yes" }
     - { regexp: '^UMask', line: "UMask    002" }
     - { regexp: '^Mode', line: "Mode     sv" }
+
+- name: Create OpenDKIM socket directory
+  file:
+    path: /var/spool/postfix/opendkim
+    state: directory
+    owner: opendkim
+    group: postfix
+    mode: 0755
 
 - name: Create DKIM directory
   file:
@@ -75,7 +111,7 @@
     group: opendkim
     mode: 0644
 
-- name: Enable submission port (587) in master.cf
+- name: Enable submission port (587) in master.cf (with SSL)
   blockinfile:
     path: /etc/postfix/master.cf
     insertafter: '^#submission'
@@ -86,6 +122,20 @@
         -o smtpd_sasl_auth_enable=yes
         -o smtpd_recipient_restrictions=permit_sasl_authenticated,reject
         -o smtpd_relay_restrictions=permit_sasl_authenticated,reject
+  when: ssl_cert_exists.stat.exists
+
+- name: Enable submission port (587) in master.cf (without SSL requirements)
+  blockinfile:
+    path: /etc/postfix/master.cf
+    insertafter: '^#submission'
+    block: |
+      submission     inet  n       -       y       -       -       smtpd
+        -o syslog_name=postfix/submission
+        -o smtpd_tls_security_level=may
+        -o smtpd_sasl_auth_enable=yes
+        -o smtpd_recipient_restrictions=permit_sasl_authenticated,reject
+        -o smtpd_relay_restrictions=permit_sasl_authenticated,reject
+  when: not ssl_cert_exists.stat.exists
 
 - name: Configure Dovecot for Postfix SASL
   blockinfile:
@@ -118,25 +168,44 @@
     path: /etc/dovecot/passwd
     line: "{{ smtp_auth_user }}:{{ smtp_auth_pass | password_hash('sha512_crypt') }}"
 
+- name: Display SMTP authentication credentials (if generated)
+  debug:
+    msg: |
+      SMTP Authentication Credentials (Generated):
+      Username: {{ smtp_auth_user }}
+      Password: {{ smtp_auth_pass }}
+      
+      Save these credentials for email client configuration.
+  when: smtp_auth_pass is defined and smtp_auth_pass != ""
+
 - name: Disable system auth and use passwd-file
   lineinfile:
     path: /etc/dovecot/conf.d/10-auth.conf
     regexp: '^!include auth-system.conf.ext'
     line: '#!include auth-system.conf.ext'
 
-- name: Add auth-passwdfile configuration
-  blockinfile:
-    path: /etc/dovecot/conf.d/10-auth.conf
-    insertafter: '^auth_mechanisms ='
-    block: |
+- name: Create custom auth configuration file
+  copy:
+    dest: /etc/dovecot/conf.d/auth-c2itall.conf.ext
+    content: |
       passdb {
         driver = passwd-file
         args = scheme=sha512_crypt /etc/dovecot/passwd
       }
+      
       userdb {
         driver = static
         args = uid=vmail gid=vmail home=/var/vmail/%u
       }
+    mode: '0644'
+    owner: root
+    group: root
+
+- name: Include custom auth configuration
+  lineinfile:
+    path: /etc/dovecot/conf.d/10-auth.conf
+    insertafter: 'auth_mechanisms = plain login'
+    line: '!include auth-c2itall.conf.ext'
 
 - name: Create vmail group
   group:
@@ -159,12 +228,125 @@
     group: vmail
     mode: 0700
 
+- name: Start and enable OpenDKIM service
+  service:
+    name: opendkim
+    state: started
+    enabled: yes
+  ignore_errors: true
+
+- name: Check Postfix configuration syntax
+  command: postfix check
+  register: postfix_config_check
+  failed_when: false
+
+- name: Display Postfix configuration errors if any
+  debug:
+    msg: "Postfix configuration check result: {{ postfix_config_check.stdout_lines }}"
+  when: postfix_config_check.rc != 0
+
 - name: Restart Postfix
   service:
     name: postfix
     state: restarted
+  ignore_errors: true
+  register: postfix_restart_result
+
+- name: Display Postfix restart error details
+  block:
+    - name: Get systemctl status for Postfix
+      command: systemctl status postfix.service
+      register: postfix_status
+      failed_when: false
+    
+    - name: Get journal logs for Postfix
+      command: journalctl -xeu postfix.service --no-pager -n 20
+      register: postfix_logs
+      failed_when: false
+    
+    - name: Display Postfix status and logs
+      debug:
+        msg: |
+          Postfix Status:
+          {{ postfix_status.stdout }}
+          
+          Postfix Logs:
+          {{ postfix_logs.stdout }}
+  when: postfix_restart_result.failed
+
+- name: Continue without Postfix if restart fails
+  debug:
+    msg: "Postfix failed to start but continuing deployment. Email services may not be available."
+  when: postfix_restart_result.failed
+
+- name: Remove OpenDKIM configuration from Postfix if restart failed
+  lineinfile:
+    path: /etc/postfix/main.cf
+    regexp: "{{ item }}"
+    state: absent
+  with_items:
+    - '^smtpd_milters'
+    - '^non_smtpd_milters'
+    - '^milter_default_action'
+    - '^milter_protocol'
+  when: postfix_restart_result.failed
+  ignore_errors: true
+
+- name: Retry Postfix restart without OpenDKIM
+  service:
+    name: postfix
+    state: restarted
+  when: postfix_restart_result.failed
+  ignore_errors: true
+  register: postfix_retry_result
+
+- name: Display final Postfix status
+  debug:
+    msg: |
+      Postfix final status: {{ 'Running' if not postfix_retry_result.failed else 'Failed' }}
+      Email services: {{ 'Limited functionality' if postfix_restart_result.failed else 'Fully operational' }}
+  when: postfix_restart_result.failed
+
+- name: Check Dovecot configuration syntax
+  command: dovecot -n
+  register: dovecot_config_check
+  failed_when: false
+
+- name: Display Dovecot configuration errors if any
+  debug:
+    msg: "Dovecot configuration check result: {{ dovecot_config_check.stdout_lines }}"
+  when: dovecot_config_check.rc != 0
 
 - name: Restart Dovecot
   service:
     name: dovecot
     state: restarted
+  ignore_errors: true
+  register: dovecot_restart_result
+
+- name: Display Dovecot restart error details
+  block:
+    - name: Get systemctl status for Dovecot
+      command: systemctl status dovecot.service
+      register: dovecot_status
+      failed_when: false
+    
+    - name: Get journal logs for Dovecot
+      command: journalctl -xeu dovecot.service --no-pager -n 20
+      register: dovecot_logs
+      failed_when: false
+    
+    - name: Display Dovecot status and logs
+      debug:
+        msg: |
+          Dovecot Status:
+          {{ dovecot_status.stdout }}
+          
+          Dovecot Logs:
+          {{ dovecot_logs.stdout }}
+  when: dovecot_restart_result.failed
+
+- name: Continue without Dovecot if restart fails
+  debug:
+    msg: "Dovecot failed to start but continuing deployment. Email services may not be available."
+  when: dovecot_restart_result.failed

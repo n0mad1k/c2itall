@@ -18,7 +18,7 @@
   until: cache_update is success
   retries: 5
   delay: 10
-  ignore_errors: no
+  ignore_errors: false
 
 - name: Install core packages first (high priority)
   apt:
@@ -101,7 +101,7 @@
         apt-get install -y --no-install-recommends certbot
         apt-get install -y --fix-broken || true
       register: certbot_manual
-      ignore_errors: yes
+      ignore_errors: true
 
     - name: Install certbot via snap as ultimate fallback
       block:
@@ -141,7 +141,7 @@
           - zope.hookable
         state: present
       register: pip_install
-      ignore_errors: yes
+      ignore_errors: true
 
     - name: Download and install packages manually if repositories are down
       shell: |
@@ -154,7 +154,7 @@
           dpkg -i python3-requests-toolbelt_*.deb || apt-get install -f -y
         fi
       when: pip_install is failed
-      ignore_errors: yes
+      ignore_errors: true
 
 - name: Verify critical packages are installed
   command: "{{ item.cmd }}"
@@ -165,7 +165,7 @@
     - { cmd: "socat -V", name: "socat" }
     - { cmd: "jq --version", name: "jq" }
     - { cmd: "which certbot", name: "certbot" }
-  ignore_errors: yes
+  ignore_errors: true
 
 - name: Create package installation report
   debug:
@@ -190,7 +190,7 @@
     dpkg --configure -a
   when: core_packages is failed or certbot_install is failed
   register: fix_broken
-  ignore_errors: yes
+  ignore_errors: true
 
 - name: Final package status check and remediation
   block:
@@ -211,6 +211,17 @@
       debug:
         var: final_status.stdout_lines
 
+- name: Detect installed PHP-FPM service
+  shell: |
+    # Try to find any PHP-FPM service
+    if systemctl list-units --type=service --all | grep -q 'php.*fpm'; then
+      systemctl list-units --type=service --all | grep 'php.*fpm' | head -1 | awk '{print $1}' | sed 's/\.service//'
+    else
+      echo "php-fpm"
+    fi
+  register: php_fpm_service
+  failed_when: false
+
 - name: Ensure critical services are enabled
   systemd:
     name: "{{ item }}"
@@ -218,8 +229,8 @@
     state: started
   loop:
     - nginx
-    - php7.4-fpm
-  ignore_errors: yes
+    - "{{ php_fpm_service.stdout }}"
+  ignore_errors: true
   register: service_start
 
 - name: Create operational readiness marker
@@ -244,7 +255,7 @@
 
 - name: Copy clean-logs.sh script
   copy:
-    src: "../files/clean-logs.sh"
+    src: "../../../common/files/clean-logs.sh"
     dest: /root/Tools/clean-logs.sh
     mode: '0700'
     owner: root
@@ -252,7 +263,7 @@
 
 - name: Copy redirector post-install script
   copy:
-    src: "../files/post_install_redirector.sh"
+    src: "../../../common/files/post_install_redirector.sh"
     dest: "/root/Tools/post_install_redirector.sh"
     mode: '0700'
     owner: root
@@ -260,7 +271,7 @@
 
 - name: Copy port randomization script
   copy:
-    src: "../files/randomize_ports.sh"
+    src: "../../../common/files/randomize_ports.sh"
     dest: "/root/Tools/randomize_ports.sh"
     mode: '0700'
     owner: root
@@ -292,7 +303,7 @@
 
 - name: Copy shell handler script
   copy:
-    src: "../files/havoc_shell_handler.sh"
+    src: "../../c2/files/havoc_shell_handler.sh"
     dest: /root/Tools/shell-handler/persistent-listener.sh
     mode: '0700'
     owner: root
@@ -306,7 +317,7 @@
 
 - name: Configure shell handler script with listening port
   template:
-    src: "../files/havoc_shell_handler.sh"
+    src: "../../c2/files/havoc_shell_handler.sh"
     dest: "/root/Tools/shell_handler.sh"
     mode: 0755
   vars:
@@ -327,7 +338,7 @@
     mode: '0644'
     owner: root
     group: root
-  when: zero_logs | bool
+  when: zero_logs | default(false) | bool
 
 - name: Create payload directory
   file:
@@ -338,11 +349,11 @@
     group: www-data
 
 - name: Include traffic flow configuration
-  include_tasks: "../tasks/traffic_flow_config.yml"
+  include_tasks: "../../common/tasks/traffic_flow_config.yml"
 
 # Run port randomization if enabled
 - name: Run port randomization if enabled
-  include_tasks: port_randomization.yml
+  include_tasks: "../../common/tasks/port_randomization.yml"
   when: randomize_ports | default(true) | bool
 
 # Add just before configuring NGINX
@@ -454,4 +465,4 @@
     minute: "0"
     hour: "*/6"
     job: "/root/Tools/clean-logs.sh > /dev/null 2>&1"
-  when: zero_logs | bool
+  when: zero_logs | default(false) | bool

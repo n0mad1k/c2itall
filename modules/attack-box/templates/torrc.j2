@@ -1,0 +1,36 @@
+# Tor configuration for Quick Recon Box
+# Generated: {{ ansible_date_time.iso8601 }}
+
+# Basic Tor configuration
+DataDirectory /var/lib/tor
+PidFile /var/run/tor/tor.pid
+RunAsDaemon 1
+User debian-tor
+
+# Logging
+Log notice file /var/log/tor/notices.log
+
+# SOCKS proxy for applications
+SocksPort 9050
+SocksPolicy accept *
+
+# Control port for advanced usage
+ControlPort 9051
+CookieAuthentication 1
+
+# Circuit settings for better anonymity
+NewCircuitPeriod 30
+MaxCircuitDirtiness 600
+UseEntryGuards 1
+
+# Exit policy - allow common ports for recon
+ExitPolicy accept *:53     # DNS
+ExitPolicy accept *:80     # HTTP
+ExitPolicy accept *:443    # HTTPS
+ExitPolicy accept *:993    # IMAPS
+ExitPolicy accept *:995    # POP3S
+ExitPolicy reject *:*
+
+# Performance tuning for reconnaissance
+CircuitBuildTimeout 10
+LearnCircuitBuildTimeout 0

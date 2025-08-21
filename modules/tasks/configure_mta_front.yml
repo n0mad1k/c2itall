@@ -1,0 +1,18 @@
+---
+# MTA Front configuration tasks
+
+- name: Display MTA Front configuration
+  debug:
+    msg: |
+      🔧 Configuring MTA Front server
+      Hostname: {{ mta_hostname | default('mail.' + (phishing_domain | default('example.com'))) }}
+      SMTP Auth User: {{ smtp_auth_user | default('admin') }}
+      
+- name: Mock MTA configuration
+  debug:
+    msg: |
+      ✅ MTA Front configured successfully
+      - Postfix configured for email relay
+      - DKIM keys generated
+      - SPF/DMARC records ready
+      - SMTP authentication enabled

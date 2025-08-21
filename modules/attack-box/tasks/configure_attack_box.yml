@@ -1,0 +1,701 @@
+---
+# Attack Box Configuration Tasks
+# Based on TrashPanda directory structure - creates /root/operator
+
+- name: Set user variables for headless deployment
+  ansible.builtin.set_fact:
+    target_user: "root"
+    user_home: "/root"
+    # Use deployment ID for directory name if enhanced OPSEC is enabled
+    work_dir: "{{ '/root/' + deployment_id if enhanced_opsec | default(false) else '/root/operator' }}"
+    tool_name: "{{ 'toolkit' if enhanced_opsec | default(false) else 'trashpanda' }}"
+    project_name: "{{ deployment_id if enhanced_opsec | default(false) else 'operator' }}"
+    # Legacy compatibility
+    operator_dir: "{{ '/root/' + deployment_id if enhanced_opsec | default(false) else '/root/operator' }}"
+
+- name: Display attack box configuration start
+  debug:
+    msg: |
+      ================================================================
+                      ATTACK BOX CONFIGURATION STARTED
+      ================================================================
+      Deployment ID: {{ deployment_id }}
+      Target: {{ ansible_host }}
+      OPSEC Mode: {{ 'Enhanced' if enhanced_opsec | default(false) else 'Standard' }}
+      Working Directory: {{ work_dir }}
+      Configuration Steps:
+        1. Create {{ 'secure' if enhanced_opsec | default(false) else 'TrashPanda' }} directory structure
+        2. Install base packages (~100 packages)
+        3. Install pipx and Python tools (~30 tools)
+        4. Install Go tools (~12 tools)
+        5. Clone Git repositories (~20 repositories)
+        6. Configure scripts and automation
+        7. Set up PATH and environment
+      
+      This process may take 30-60 minutes depending on network speed.
+      Progress will be displayed for each step.
+      ================================================================
+
+- name: Record configuration start time
+  set_fact:
+    config_start_time: "{{ ansible_date_time.epoch }}"
+
+- name: Create TrashPanda directory structure
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ target_user }}"
+    group: "{{ target_user }}"
+    mode: '0755'
+  loop:
+    # Main TrashPanda directories (exactly like trashpanda.py)
+    - "{{ operator_dir }}"
+    - "{{ operator_dir }}/tools"
+    - "{{ operator_dir }}/scans"
+    - "{{ operator_dir }}/logs"
+    - "{{ operator_dir }}/loot"
+    - "{{ operator_dir }}/payloads"
+    - "{{ operator_dir }}/targets"
+    - "{{ operator_dir }}/screenshots"
+    - "{{ operator_dir }}/reports"
+    - "{{ operator_dir }}/notes"
+    - "{{ operator_dir }}/exploits"
+    - "{{ operator_dir }}/wordlists"
+    - "{{ operator_dir }}/pcaps"
+    # Scan subdirectories (exactly like trashpanda.py)
+    - "{{ operator_dir }}/scans/nmap"
+    - "{{ operator_dir }}/scans/dns"
+    - "{{ operator_dir }}/scans/snmp"
+    - "{{ operator_dir }}/scans/smb"
+    - "{{ operator_dir }}/scans/web"
+    - "{{ operator_dir }}/scans/ssl"
+    - "{{ operator_dir }}/scans/vulns"
+    - "{{ operator_dir }}/scans/ldap"
+    - "{{ operator_dir }}/scans/ftp"
+    - "{{ operator_dir }}/scans/ssh"
+    - "{{ operator_dir }}/scans/databases"
+    - "{{ operator_dir }}/scans/custom"
+    - "{{ operator_dir }}/scans/reachability"
+    # Loot subdirectories (exactly like trashpanda.py)
+    - "{{ operator_dir }}/loot/credentials"
+    - "{{ operator_dir }}/loot/hashes"
+    - "{{ operator_dir }}/loot/keys"
+    - "{{ operator_dir }}/loot/configs"
+    - "{{ operator_dir }}/loot/databases"
+    - "{{ operator_dir }}/loot/files"
+    # Tools subdirectories for organization
+    - "{{ operator_dir }}/tools/scripts"
+    - "{{ operator_dir }}/tools/windows"
+    - "{{ operator_dir }}/tools/linux"
+    - "{{ operator_dir }}/tools/web"
+    - "{{ operator_dir }}/tools/wireless"
+    - "{{ operator_dir }}/tools/privesc"
+
+# Attack Box Configuration
+# Based on /home/n0mad1k/Tools/attk-box-setup for headless deployment
+# Uses TrashPanda directory structure under /root/operator
+
+- name: Update package cache only (avoid grub-pc issues)
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+  retries: 3
+  delay: 10
+
+- name: Install base packages with progress feedback
+  ansible.builtin.apt:
+    name: "{{ item }}"
+    state: present
+    update_cache: yes
+  loop:
+    - curl
+    - wget
+    - git
+    - vim
+    - htop
+    - screen
+    - tmux
+    - python3
+    - python3-pip
+    - python3-venv
+    - python3-dev
+    - build-essential
+    - binutils
+    - hashcat
+    - john
+    - hydra
+    - aircrack-ng
+    - recon-ng
+    - exploitdb
+    - gobuster
+    - dirb
+    - nikto
+    - whatweb
+    - wapiti
+    - uniscan
+    - theharvester
+    - dnsenum
+    - dnsmap
+    - dnsutils
+    - whois
+    - netcat-traditional
+    - netcat-openbsd
+    - socat
+    - ncat
+    - nmap
+    - masscan
+    - unicornscan
+    - hping3
+    - tcpdump
+    - tshark
+    - dsniff
+    - arp-scan
+    - nbtscan
+    - enum4linux
+    - smbclient
+    - rpcclient
+    - showmount
+    - rpcinfo
+    - snmp
+    - snmp-mibs-downloader
+    - onesixtyone
+    - ldap-utils
+    - sslscan
+    - sslyze
+    - testssl.sh
+    - openssl
+    - ike-scan
+    - sleuthkit
+    - autopsy
+    - foremost
+    - scalpel
+    - binwalk
+    - exiftool
+    - steghide
+    - outguess
+    - stegosuite
+    - hexedit
+    - ghex
+    - bless
+    - radare2
+    - gdb
+    - valgrind
+    - ltrace
+    - strace
+    - lsof
+    - psmisc
+    - tree
+    - file
+    - less
+    - most
+    - unzip
+    - p7zip-full
+    - rar
+    - unrar
+    - cabextract
+    - cpio
+    - binutils-dev
+    - libc6-dev
+    - gcc
+    - g++
+    - make
+    - cmake
+    - autoconf
+    - automake
+    - libtool
+    - pkg-config
+    - libssl-dev
+    - libffi-dev
+    - libxml2-dev
+    - libxslt1-dev
+    - zlib1g-dev
+    - libjpeg-dev
+    - libpng-dev
+    - libgif-dev
+    - libfreetype6-dev
+    - libmagic-dev
+    - libpcap-dev
+    - libnetfilter-queue-dev
+    - libnfnetlink-dev
+    - libdnet-dev
+    - libpcre3-dev
+    - libgtk2.0-dev
+    - libgtk-3-dev
+  register: apt_install_result
+  ignore_errors: true
+
+- name: Show package installation progress
+  debug:
+    msg: "Package {{ item.item }} installation: {{ 'SUCCESS' if item.changed else 'ALREADY INSTALLED' }}"
+  loop: "{{ apt_install_result.results }}"
+  when: apt_install_result.results is defined
+
+- name: Check if pipx is available
+  ansible.builtin.command: pipx --version
+  register: pipx_version_check
+  failed_when: false
+
+- name: Install pipx if not available
+  ansible.builtin.apt:
+    name: pipx
+    state: present
+    update_cache: yes
+  when: pipx_version_check.rc != 0
+  retries: 2
+  delay: 5
+
+- name: Display pipx availability
+  debug:
+    msg: "Pipx version: {{ pipx_version_check.stdout if pipx_version_check.rc == 0 else 'Pipx was not found but has been installed' }}"
+
+- name: Ensure pipx is properly configured
+  ansible.builtin.shell: pipx ensurepath
+  args:
+    executable: /bin/bash
+  register: pipx_ensurepath_result
+  failed_when: false
+
+- name: Display pipx configuration result
+  debug:
+    msg: "Pipx ensurepath: {{ pipx_ensurepath_result.stdout }}"
+
+- name: Upload pipx tools installation script
+  ansible.builtin.copy:
+    src: "../../modules/attack-box/files/install_pipx_tools.sh"
+    dest: /tmp/install_pipx_tools.sh
+    mode: '0755'
+
+- name: Execute pipx tools installation script
+  ansible.builtin.shell: /tmp/install_pipx_tools.sh
+  register: pipx_install_result
+  ignore_errors: true
+
+- name: Display pipx installation summary
+  debug:
+    msg: |
+      Pipx installation completed!
+      Check the detailed output above for individual tool status.
+      Full output captured in deployment logs.
+
+- name: Display pipx installation status
+  debug:
+    msg: "Pipx installation {{ 'completed successfully' if pipx_install_result.rc == 0 else 'completed with some failures' }}"
+  when: pipx_install_result is defined
+
+- name: Install additional Python packages via pip3 (for libraries)
+  ansible.builtin.pip:
+    name:
+      - requests
+      - beautifulsoup4
+      - lxml
+      - selenium
+      - paramiko
+      - capstone
+      - keystone-engine
+      - unicorn
+      - dnspython
+      - netaddr
+      - python-nmap
+    state: present
+    executable: pip3
+  retries: 2
+  delay: 5
+  ignore_errors: true
+
+- name: Check if Go is available
+  ansible.builtin.command: go version
+  register: go_version_check
+  failed_when: false
+
+- name: Display Go version
+  debug:
+    msg: "Go version: {{ go_version_check.stdout if go_version_check.rc == 0 else 'Go not found - skipping Go tools installation' }}"
+
+- name: Upload Go tools installation script
+  ansible.builtin.copy:
+    src: "../files/install_go_tools.sh"
+    dest: /tmp/install_go_tools.sh
+    mode: '0755'
+
+- name: Execute Go tools installation script
+  ansible.builtin.shell: OPERATOR_DIR="{{ operator_dir }}" /tmp/install_go_tools.sh
+  register: go_install_result
+  when: go_version_check.rc == 0
+  ignore_errors: true
+
+- name: Display Go tools installation summary
+  debug:
+    msg: |
+      Go tools installation completed!
+      Check the detailed output above for individual tool status.
+      Full output captured in deployment logs.
+
+- name: Configure PATH for all installed tools
+  ansible.builtin.blockinfile:
+    path: /root/.bashrc
+    block: |
+      # Attack Box Tool Paths
+      export GOPATH="{{ operator_dir }}/tools/go"
+      export PATH="$PATH:/root/.local/bin"  # pipx tools
+      export PATH="$PATH:/usr/local/go/bin"  # Go binary
+      export PATH="$PATH:$GOPATH/bin"  # Go tools
+      export PATH="$PATH:{{ operator_dir }}/tools"  # Custom tools
+      export PATH="$PATH:/opt/metasploit-framework/bin"  # Metasploit
+      
+      # Useful aliases for attack box
+      alias operator="cd {{ operator_dir }}"
+      alias tools="cd {{ operator_dir }}/tools"
+      alias scans="cd {{ operator_dir }}/scans"
+      alias loot="cd {{ operator_dir }}/loot"
+      alias trashpanda="python3 {{ operator_dir }}/tools/trashpanda.py"
+      alias ll="ls -la"
+      alias la="ls -la"
+    marker: "# {mark} ATTACK BOX CONFIGURATION"
+    create: yes
+
+- name: Source bashrc to apply PATH changes
+  ansible.builtin.shell: source /root/.bashrc
+  args:
+    executable: /bin/bash
+
+- name: Upload Git repositories cloning script
+  ansible.builtin.copy:
+    src: "../files/install_git_repos.sh"
+    dest: /tmp/install_git_repos.sh
+    mode: '0755'
+
+- name: Execute Git repositories cloning script
+  ansible.builtin.shell: OPERATOR_DIR="{{ operator_dir }}" /tmp/install_git_repos.sh
+  register: git_clone_result
+  ignore_errors: true
+
+- name: Display Git repositories cloning summary
+  debug:
+    msg: |
+      Git repositories cloning completed!
+      Check the detailed output above for individual repository status.
+      Full output captured in deployment logs.
+
+- name: Install Metasploit (latest nightly build)
+  shell: |
+    cd /tmp
+    curl https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb > msfinstall
+    chmod 755 msfinstall
+    ./msfinstall
+  args:
+    creates: /opt/metasploit-framework/bin/msfconsole
+
+- name: Copy TrashPanda tool to operator directory
+  copy:
+    src: "../files/{{ tool_name }}.py"
+    dest: "{{ operator_dir }}/tools/{{ tool_name }}.py"
+    mode: '0755'
+    owner: "{{ target_user }}"
+    group: "{{ target_user }}"
+  when: not (enhanced_opsec | default(false))
+
+- name: Copy OPSEC monitoring scripts
+  copy:
+    src: "{{ item }}"
+    dest: "{{ operator_dir }}/tools/scripts/"
+    mode: '0755'
+    owner: "{{ target_user }}"
+    group: "{{ target_user }}"
+  loop:
+    - "../files/opsec-check.sh"
+    - "../files/emergency-wipe.sh"
+    - "../files/trash-cleanup.sh"
+
+- name: Copy OPSEC-aware shell aliases
+  copy:
+    src: "../files/clean-shell-aliases"
+    dest: "{{ operator_dir }}/tools/scripts/shell-aliases"
+    mode: '0644'
+    owner: "{{ target_user }}"
+    group: "{{ target_user }}"
+  when: enhanced_opsec | default(false)
+
+- name: Copy automation scripts to tools directory
+  copy:
+    src: "{{ item }}"
+    dest: "{{ operator_dir }}/tools/scripts/"
+    mode: '0755'
+    owner: "{{ target_user }}"
+    group: "{{ target_user }}"
+  with_fileglob:
+    - "../files/*.sh"
+    - "../files/*.py"
+  when: not (enhanced_opsec | default(false))
+
+- name: Create engagement log file
+  copy:
+    content: |
+      # Engagement Log - {{ ansible_date_time.iso8601 }}
+      # Attack Box Deployment: {{ attack_box_name | default('attack-box') }}
+      # IP Address: {{ ansible_default_ipv4.address | default('N/A') }}
+      # 
+      # Directory Structure:
+      # {{ operator_dir }}/tools/        - Downloaded/compiled tools and scripts
+      # {{ operator_dir }}/scans/        - All scan results organized by type
+      # {{ operator_dir }}/logs/         - Execution logs and debug output
+      # {{ operator_dir }}/loot/         - Extracted credentials, hashes, and sensitive data
+      # {{ operator_dir }}/payloads/     - Custom payloads and exploit code
+      # {{ operator_dir }}/targets/      - Target lists and reconnaissance data
+      # {{ operator_dir }}/screenshots/  - Visual evidence and GUI captures
+      # {{ operator_dir }}/reports/      - Draft reports and documentation
+      # {{ operator_dir }}/notes/        - Manual notes and observations
+      # {{ operator_dir }}/exploits/     - Working exploits and proof-of-concepts
+      # {{ operator_dir }}/wordlists/    - Custom and downloaded wordlists
+      # {{ operator_dir }}/pcaps/        - Network captures and traffic analysis
+      #
+      # Log started: {{ ansible_date_time.iso8601 }}
+      
+    dest: "{{ operator_dir }}/logs/engagement.log"
+    owner: "{{ target_user }}"
+    group: "{{ target_user }}"
+    mode: '0644'
+
+- name: Create initial target template
+  copy:
+    content: |
+      # Target List Template
+      # Add targets one per line in various formats:
+      # 
+      # Individual IPs:
+      # 10.0.0.10
+      # 10.0.0.5
+      #
+      # IP Ranges:
+      # 192.168.1.1-254
+      # 10.0.0.1-50
+      #
+      # CIDR Notation:
+      # 192.168.1.0/24
+      # 10.0.0.0/16
+      #
+      # Hostnames:
+      # target.example.com
+      # www.example.com
+      
+    dest: "{{ operator_dir }}/targets/targets.txt"
+    owner: "{{ target_user }}"
+    group: "{{ target_user }}"
+    mode: '0644'
+    force: no
+
+- name: Create bash aliases for workflow (OPSEC mode)
+  lineinfile:
+    path: "{{ user_home }}/.bashrc"
+    line: "{{ item }}"
+    create: yes
+  loop:
+    - "# Attack Box Aliases"
+    - "alias ops='cd {{ operator_dir }}'"
+    - "alias tools='cd {{ operator_dir }}/tools'"
+    - "alias scans='cd {{ operator_dir }}/scans'"
+    - "alias loot='cd {{ operator_dir }}/loot'"
+    - "alias targets='cd {{ operator_dir }}/targets'"
+    - "alias reports='cd {{ operator_dir }}/reports'"
+    - "alias logs='cd {{ operator_dir }}/logs'"
+    - "alias toolkit='python3 {{ operator_dir }}/tools/toolkit.py'"
+    - "alias recon='{{ operator_dir }}/tools/scripts/recon_automation.sh'"
+    - "alias portscan='{{ operator_dir }}/tools/scripts/port_scan_automation.sh'"
+    - "alias webenum='{{ operator_dir }}/tools/scripts/web_enum_automation.sh'"
+    - "alias attack-menu='{{ operator_dir }}/tools/scripts/manual_testing_menu.sh'"
+    - "alias opsec='{{ operator_dir }}/tools/scripts/opsec-check.sh'"
+    - "alias panic='{{ operator_dir }}/tools/scripts/emergency-wipe.sh'"
+    - "alias clean='{{ operator_dir }}/tools/scripts/trash-cleanup.sh'"
+  when: enhanced_opsec | default(false)
+
+- name: Create bash aliases for workflow (Standard mode)
+  lineinfile:
+    path: "{{ user_home }}/.bashrc"
+    line: "{{ item }}"
+    create: yes
+  loop:
+    - "# TrashPanda Attack Box Aliases"
+    - "alias operator='cd {{ operator_dir }}'"
+    - "alias tools='cd {{ operator_dir }}/tools'"
+    - "alias scans='cd {{ operator_dir }}/scans'"
+    - "alias loot='cd {{ operator_dir }}/loot'"
+    - "alias targets='cd {{ operator_dir }}/targets'"
+    - "alias reports='cd {{ operator_dir }}/reports'"
+    - "alias logs='cd {{ operator_dir }}/logs'"
+    - "alias trashpanda='python3 {{ operator_dir }}/tools/trashpanda.py'"
+    - "alias recon='{{ operator_dir }}/tools/scripts/recon_automation.sh'"
+    - "alias portscan='{{ operator_dir }}/tools/scripts/port_scan_automation.sh'"
+    - "alias webenum='{{ operator_dir }}/tools/scripts/web_enum_automation.sh'"
+    - "alias attack-menu='{{ operator_dir }}/tools/scripts/manual_testing_menu.sh'"
+  when: not (enhanced_opsec | default(false))
+
+- name: Set Go path in bashrc
+  lineinfile:
+    path: "{{ user_home }}/.bashrc"
+    line: "{{ item }}"
+    create: yes
+  loop:
+    - "export GOPATH={{ operator_dir }}/tools/go"
+    - "export PATH=$PATH:{{ operator_dir }}/tools/go/bin"
+
+- name: Load OPSEC shell aliases (Enhanced OPSEC mode)
+  blockinfile:
+    path: "{{ user_home }}/.bashrc"
+    block: |
+      # OPSEC-aware shell aliases
+      source {{ operator_dir }}/tools/scripts/shell-aliases
+    marker: "# {mark} OPSEC SHELL ALIASES"
+    create: yes
+  when: enhanced_opsec | default(false)
+
+- name: Configure hardened SSH (Enhanced OPSEC mode)
+  blockinfile:
+    path: "/etc/ssh/sshd_config"
+    block: |
+      # OPSEC hardened SSH configuration
+      LogLevel QUIET
+      TCPKeepAlive no
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+      MaxAuthTries 3
+      MaxSessions 2
+      LoginGraceTime 60
+    marker: "# {mark} OPSEC SSH HARDENING"
+    backup: yes
+  when: enhanced_opsec | default(false)
+  register: ssh_config_changed
+
+- name: Restart SSH service if configuration changed
+  service:
+    name: ssh
+    state: restarted
+  when: enhanced_opsec | default(false) and ssh_config_changed.changed
+
+- name: Disable bash history for OPSEC (Enhanced OPSEC mode)
+  lineinfile:
+    path: "{{ user_home }}/.bashrc"
+    line: "{{ item }}"
+    create: yes
+  loop:
+    - "# OPSEC: Minimize command history"
+    - "export HISTSIZE=100"
+    - "export HISTFILESIZE=100"
+    - "export HISTCONTROL=ignoreboth:erasedups"
+  when: enhanced_opsec | default(false)
+
+- name: Set up Tor if requested
+  block:
+    - name: Configure Tor
+      copy:
+        content: |
+          SocksPort 9050
+          ControlPort 9051
+          CookieAuthentication 1
+          DataDirectory /var/lib/tor
+        dest: /etc/tor/torrc
+        backup: yes
+
+    - name: Start and enable Tor
+      systemd:
+        name: tor
+        state: started
+        enabled: yes
+
+    - name: Configure proxychains for Tor
+      replace:
+        path: /etc/proxychains4.conf
+        regexp: '^socks4.*127\.0\.0\.1.*9050.*$'
+        replace: 'socks5 127.0.0.1 9050'
+  when: setup_tor | default(false)
+
+- name: Update locate database
+  command: updatedb
+  ignore_errors: true
+
+- name: Calculate configuration duration
+  set_fact:
+    config_end_time: "{{ ansible_date_time.epoch }}"
+    config_duration: "{{ (ansible_date_time.epoch|int - config_start_time|int) // 60 }}"
+
+- name: Display attack box configuration summary
+  debug:
+    msg: |
+      ================================================================
+                    ATTACK BOX CONFIGURATION COMPLETED
+      ================================================================
+      Deployment ID: {{ deployment_id }}
+      Target: {{ ansible_host }}
+      Configuration Duration: {{ config_duration }} minutes
+      
+      Directory Structure: {{ operator_dir }}
+      ├── docs/           - Documentation and notes
+      ├── exploits/       - Exploit development
+      ├── loot/           - Extracted data and findings
+      ├── reports/        - Assessment reports
+      ├── scripts/        - Custom automation scripts
+      ├── tools/          - Security tools
+      │   ├── go/bin/     - Go-based tools
+      │   └── git/        - Git repositories
+      └── wordlists/      - Custom wordlists
+      
+      Tools Installed:
+      - Base packages: ~100 security tools
+      - Python tools: ~30 tools via pipx
+      - Go tools: ~12 reconnaissance tools
+      - Git repositories: ~20 tool repositories
+      
+      Environment:
+      - PATH configured for all tools
+      - pipx tools accessible system-wide
+      - Go tools in {{ operator_dir }}/tools/go/bin
+      
+      Next Steps:
+      1. SSH into the box: ssh -i a-{{ deployment_id }} root@{{ ansible_host }}
+      2. Navigate to working directory: cd {{ operator_dir }}
+      3. Start your assessment activities
+      
+      ================================================================
+
+- name: Display setup completion information (OPSEC mode)
+  debug:
+    msg:
+      - "Attack Box Setup Complete!"
+      - ""
+      - "Main Directory: {{ operator_dir }}"
+      - "Tools Location: {{ operator_dir }}/tools"
+      - "Scan Results: {{ operator_dir }}/scans"
+      - "Loot Storage: {{ operator_dir }}/loot"
+      - ""
+      - "Quick Commands:"
+      - "  ops               - Go to main directory"
+      - "  toolkit [targets] - Run toolkit enumeration"
+      - "  recon <target>    - Run reconnaissance automation"
+      - "  portscan <target> - Run port scan automation"
+      - "  webenum <target>  - Run web enumeration automation"
+      - "  attack-menu       - Launch manual testing menu"
+      - "  opsec             - Check OPSEC status"
+      - "  panic             - Emergency sanitization"
+      - "  clean             - Clean operational artifacts"
+      - ""
+      - "Start here: {{ operator_dir }}/targets/targets.txt"
+  when: enhanced_opsec | default(false)
+
+- name: Display setup completion information (Standard mode)
+  debug:
+    msg:
+      - "TrashPanda Attack Box Setup Complete!"
+      - ""
+      - "Main Directory: {{ operator_dir }}"
+      - "Tools Location: {{ operator_dir }}/tools"
+      - "Scan Results: {{ operator_dir }}/scans"
+      - "Loot Storage: {{ operator_dir }}/loot"
+      - ""
+      - "Quick Commands:"
+      - "  operator              - Go to main directory"
+      - "  trashpanda [targets] - Run TrashPanda enumeration"
+      - "  recon <target>       - Run reconnaissance automation"
+      - "  portscan <target>    - Run port scan automation"
+      - "  webenum <target>     - Run web enumeration automation"
+      - "  attack-menu          - Launch manual testing menu"
+      - ""
+      - "Start here: {{ operator_dir }}/targets/targets.txt"
+  when: not (enhanced_opsec | default(false))

@@ -1,0 +1,65 @@
+---
+# Phishing infrastructure deployment playbook
+# This is a comprehensive playbook that handles all phishing components
+
+- name: Deploy Phishing Infrastructure
+  hosts: localhost
+  gather_facts: true
+  connection: local
+  vars_files:
+    - vars.yaml
+  
+  tasks:
+    - name: Display deployment information
+      debug:
+        msg: |
+          Deploying phishing infrastructure
+          Deployment ID: {{ deployment_id }}
+          Provider: {{ provider }}
+          Domain: {{ domain | default(phishing_domain) }}
+          Components: {{ deployment_type }}
+    
+    - name: Set deployment facts
+      set_fact:
+        deployment_timestamp: "{{ ansible_date_time.epoch }}"
+        phishing_deployment_results: {}
+        deployment_components: >-
+          {% set components = [] %}
+          {% if deployment_type in ['gophish_only', 'basic_phishing', 'advanced_phishing', 'full_phishing', 'fedramp_phishing'] %}
+            {% set _ = components.append('gophish') %}
+          {% endif %}
+          {% if deployment_type in ['mta_front_only', 'basic_phishing', 'advanced_phishing', 'full_phishing', 'ephemeral_mta'] %}
+            {% set _ = components.append('mta_front') %}
+          {% endif %}
+          {% if deployment_type in ['phishing_redirector_only', 'advanced_phishing', 'full_phishing'] %}
+            {% set _ = components.append('redirector') %}
+          {% endif %}
+          {% if deployment_type in ['phishing_webserver_only', 'full_phishing', 'fedramp_phishing'] %}
+            {% set _ = components.append('webserver') %}
+          {% endif %}
+          {{ components }}
+    
+    - name: Include provider-specific tasks
+      include_tasks: "{{ provider }}_phishing.yml"
+      when: deployment_components | length > 0
+    
+    - name: Ensure logs directory exists
+      file:
+        path: "../../logs"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+    
+    - name: Save deployment information
+      template:
+        src: phishing_deployment_info.j2
+        dest: "{{ playbook_dir }}/logs/phishing_deployment_{{ deployment_id }}.json"
+      delegate_to: localhost
+      
+    - name: Display success message
+      debug:
+        msg: |
+          ✅ Phishing infrastructure deployment completed
+          Deployment ID: {{ deployment_id }}
+          Components deployed: {{ deployment_components | join(', ') }}
+          Check logs/phishing_deployment_{{ deployment_id }}.json for details

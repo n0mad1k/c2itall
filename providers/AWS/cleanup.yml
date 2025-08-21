@@ -8,7 +8,7 @@
     - vars.yaml
   vars:
     aws_region: "{{ aws_region | default(aws_region_choices | random) }}"
-    confirm_cleanup: "{{ confirm_cleanup | default(true) }}"
+    confirm_cleanup: false  # Skip confirmation in automated teardown
     deployment_id: "{{ deployment_id | default('') }}"
     redirector_name: "{{ redirector_name | default('r-' + deployment_id) }}"
     c2_name: "{{ c2_name | default('s-' + deployment_id) }}"

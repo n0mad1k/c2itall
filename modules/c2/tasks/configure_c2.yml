@@ -110,15 +110,15 @@
     owner: root
     group: root
   with_items:
-    - "../files/clean-logs.sh"
-    - "../files/secure-exit.sh"
+    - "../../../common/files/clean-logs.sh"
+    - "../../../common/files/secure-exit.sh"
     - "../files/havoc_installer.sh"
     - "../files/havoc_shell_handler.sh"
     - "../files/secure_payload_sync.sh"
 
 - name: Copy post-install script
   copy:
-    src: "../files/post_install_c2.sh"
+    src: "../../../common/files/post_install_c2.sh"
     dest: "/root/Tools/post_install_c2.sh"
     mode: '0700'
     owner: root
@@ -126,7 +126,7 @@
 
 - name: Copy port randomization script
   copy:
-    src: "../files/randomize_ports.sh"
+    src: "../../../common/files/randomize_ports.sh"
     dest: "/root/Tools/randomize_ports.sh"
     mode: '0700'
     owner: root
@@ -271,7 +271,7 @@
 
 - name: Create NGINX configuration fragment for redirector
   template:
-    src: "../templates/redirector-havoc-fragment.j2"
+    src: "../../redirectors/templates/redirector-havoc-fragment.j2"
     dest: "/root/Tools/redirector-config.conf"
     mode: '0644'
     owner: root
@@ -300,7 +300,7 @@
     minute: "0"
     hour: "*/6"
     job: "/root/Tools/clean-logs.sh > /dev/null 2>&1"
-  when: zero_logs | bool
+  when: zero_logs is defined and zero_logs | bool
 
 - name: Ensure SSH key for redirector access is available
   block:

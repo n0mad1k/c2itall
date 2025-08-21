@@ -1,0 +1,119 @@
+---
+# FlokiNET-specific phishing infrastructure tasks
+
+- name: Create FlokiNET instances for phishing
+  uri:
+    url: "{{ flokinet_api_endpoint }}/instances"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ flokinet_api_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      plan: "{{ flokinet_plan | default('basic') }}"
+      region: "{{ flokinet_region | default('romania') }}"
+      os: "{{ flokinet_os | default('ubuntu-22.04') }}"
+      hostname: "{{ deployment_id }}-{{ item }}"
+      ssh_keys:
+        - "{{ ssh_public_key }}"
+      tags:
+        - "c2itall"
+        - "phishing"
+        - "{{ deployment_id }}"
+    status_code: [200, 201]
+  register: flokinet_instances
+  loop: "{{ deployment_components }}"
+  when: item in deployment_components
+
+- name: Wait for instances to be active
+  uri:
+    url: "{{ flokinet_api_endpoint }}/instances/{{ item.json.id }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ flokinet_api_token }}"
+  register: instance_status
+  until: instance_status.json.status == "active"
+  retries: 30
+  delay: 10
+  loop: "{{ flokinet_instances.results }}"
+  when: flokinet_instances.results is defined
+
+- name: Get instance details
+  uri:
+    url: "{{ flokinet_api_endpoint }}/instances/{{ item.json.id }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ flokinet_api_token }}"
+  register: instance_details
+  loop: "{{ flokinet_instances.results }}"
+  when: flokinet_instances.results is defined
+
+- name: Set instance facts
+  set_fact:
+    phishing_instances: >-
+      {% set instances = [] %}
+      {% for result in instance_details.results %}
+        {% set instance = {
+          'id': result.json.id,
+          'hostname': result.json.hostname,
+          'ip': result.json.main_ip,
+          'region': result.json.region,
+          'plan': result.json.plan,
+          'status': result.json.status
+        } %}
+        {% set _ = instances.append(instance) %}
+      {% endfor %}
+      {{ instances }}
+  when: instance_details.results is defined
+
+- name: Wait for SSH connectivity
+  wait_for:
+    host: "{{ item.ip }}"
+    port: 22
+    delay: 30
+    timeout: 300
+  loop: "{{ phishing_instances }}"
+  when: phishing_instances is defined
+
+- name: Update instance inventory
+  add_host:
+    name: "{{ item.ip }}"
+    groups: "phishing_{{ item.hostname.split('-')[-1] }}"
+    ansible_host: "{{ item.ip }}"
+    ansible_user: root
+    ansible_ssh_private_key_file: "{{ ssh_private_key_path }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+    instance_id: "{{ item.id }}"
+    instance_hostname: "{{ item.hostname }}"
+    provider: "flokinet"
+  loop: "{{ phishing_instances }}"
+  when: phishing_instances is defined
+
+- name: Configure Gophish servers
+  include_tasks: ../common/configure_gophish.yml
+  when: "'gophish' in deployment_components"
+
+- name: Configure MTA fronts  
+  include_tasks: ../common/configure_mta.yml
+  when: "'mta_front' in deployment_components"
+
+- name: Configure redirectors
+  include_tasks: ../common/configure_redirector.yml
+  when: "'redirector' in deployment_components"
+
+- name: Configure web servers
+  include_tasks: ../common/configure_webserver.yml
+  when: "'webserver' in deployment_components"
+
+- name: Display deployment summary
+  debug:
+    msg: |
+      🎯 FlokiNET Phishing Infrastructure Deployed
+      {{ phishing_instances | length }} instances created
+      Provider: FlokiNET
+      Deployment ID: {{ deployment_id }}
+      Instances:
+      {% for instance in phishing_instances %}
+      - {{ instance.hostname }}: {{ instance.ip }} ({{ instance.plan }})
+      {% endfor %}
+  when: phishing_instances is defined
