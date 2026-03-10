@@ -43,9 +43,10 @@ def main_menu():
         print(f"7) Deploy Logging Server {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
         print(f"8) Deploy Share-Drive {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
         print(f"9) Deploy Hashtopolis {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
-        print(f"10) Deploy Chat Server {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
-        print(f"11) Tools & Utilities")
-        print(f"12) Cleanup & Teardown")
+        print(f"10) Deploy Chat Server {COLORS['GREEN']}(Matrix + Element + Tailscale){COLORS['RESET']}")
+        print(f"11) Deploy Privacy Server {COLORS['GREEN']}(Phantom — VPN, DNS, Matrix, etc.){COLORS['RESET']}")
+        print(f"12) Tools & Utilities")
+        print(f"13) Cleanup & Teardown")
         print(f"\n99) Exit")
         
         choice = input(f"\nSelect an option: ")
@@ -62,12 +63,16 @@ def main_menu():
             deploy_payload_server()
         elif choice == "6":
             deploy_tracker()
-        elif choice in ["7", "8", "9", "10"]:
+        elif choice in ["7", "8", "9"]:
             print(f"\n{COLORS['YELLOW']}This feature is currently under construction.{COLORS['RESET']}")
             wait_for_input()
+        elif choice == "10":
+            deploy_chat_server()
         elif choice == "11":
-            tools_menu()
+            deploy_phantom()
         elif choice == "12":
+            tools_menu()
+        elif choice == "13":
             cleanup_menu()
         elif choice == "99":
             print(f"\n{COLORS['GREEN']}Exiting C2ingRed. Goodbye!{COLORS['RESET']}")
@@ -136,6 +141,55 @@ def deploy_payload_server():
     if payload_module:
         payload_module.payload_menu()
 
+def deploy_chat_server():
+    """Launch the chat server deployment module"""
+    archive_logs_before_deployment()
+
+    chat_module_path = os.path.join(os.path.dirname(__file__), 'modules', 'chat-server', 'deploy_chat.py')
+
+    if not os.path.exists(chat_module_path):
+        print(f"\n{COLORS['RED']}Chat server deployment module not found at: {chat_module_path}{COLORS['RESET']}")
+        wait_for_input()
+        return
+
+    chat_module = import_module_from_path('deploy_chat', chat_module_path)
+    if chat_module:
+        chat_module.chat_menu()
+
+def deploy_phantom():
+    """Launch the Phantom privacy server deployer"""
+    c2itall_dir = os.path.dirname(os.path.abspath(__file__))
+    submodule_path = os.path.join(c2itall_dir, 'ghost_protocol', 'phantom', 'phantom.py')
+    standalone_path = os.path.expanduser('~/tools/ghost_protocol/phantom/phantom.py')
+
+    # Prefer submodule, fall back to standalone install
+    if os.path.exists(submodule_path):
+        phantom_path = submodule_path
+    elif os.path.exists(standalone_path):
+        phantom_path = standalone_path
+    else:
+        # Auto-clone as fallback
+        print(f"\n{COLORS['YELLOW']}[*] Phantom not found — cloning ghost_protocol...{COLORS['RESET']}")
+        repo_url = "https://github.com/n0mad1k/ghost_protocol-public.git"
+        clone_dest = os.path.expanduser('~/tools/ghost_protocol')
+        try:
+            subprocess.run(['git', 'clone', repo_url, clone_dest], check=True)
+            phantom_path = os.path.join(clone_dest, 'phantom', 'phantom.py')
+            print(f"{COLORS['GREEN']}[+] Cloned to {clone_dest}{COLORS['RESET']}")
+        except subprocess.CalledProcessError:
+            print(f"{COLORS['RED']}[-] Failed to clone ghost_protocol{COLORS['RESET']}")
+            wait_for_input()
+            return
+
+    try:
+        env = os.environ.copy()
+        env["C2ITALL_INTEGRATED"] = "1"
+        subprocess.run([sys.executable, phantom_path], env=env)
+    except KeyboardInterrupt:
+        pass
+    wait_for_input()
+
+
 def deploy_tracker():
     """Deploy email tracking server"""
     print(f"\n{COLORS['BLUE']}Email Tracker Deployment{COLORS['RESET']}")
@@ -168,9 +222,10 @@ def tools_menu():
         print(f"1) Generate SSH Keys")
         print(f"2) Test Provider Connectivity")
         print(f"3) Validate Configuration Files")
-        print(f"4) Network Reconnaissance Tools {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
+        print(f"4) Recon & Red Team Tools {COLORS['GREEN']}(Umbra + Custom Tools){COLORS['RESET']}")
         print(f"5) Payload Generation Tools {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
         print(f"6) Infrastructure Health Check")
+        print(f"7) Ops Dashboard {COLORS['CYAN']}(Real-Time Engagement Monitor){COLORS['RESET']}")
         print(f"99) Return to Main Menu")
         
         choice = input(f"\nSelect an option: ")
@@ -181,16 +236,37 @@ def tools_menu():
             test_provider_connectivity()
         elif choice == "3":
             validate_configurations()
-        elif choice in ["4", "5"]:
+        elif choice == "4":
+            recon_module_path = os.path.join(os.path.dirname(__file__), 'modules', 'tools', 'recon_tools.py')
+            recon_module = import_module_from_path('recon_tools', recon_module_path)
+            if recon_module:
+                recon_module.recon_tools_menu()
+        elif choice == "5":
             print(f"\n{COLORS['YELLOW']}This feature is currently under construction.{COLORS['RESET']}")
             wait_for_input()
         elif choice == "6":
             infrastructure_health_check()
+        elif choice == "7":
+            launch_ops_dashboard()
         elif choice == "99":
             return
         else:
             print(f"\n{COLORS['RED']}Invalid option. Please try again.{COLORS['RESET']}")
             wait_for_input()
+
+
+def launch_ops_dashboard():
+    """Launch the ops dashboard."""
+    dashboard_path = os.path.join(os.path.dirname(__file__), 'ops_dashboard.py')
+    if not os.path.exists(dashboard_path):
+        print(f"\n{COLORS['RED']}Dashboard not found at {dashboard_path}{COLORS['RESET']}")
+        wait_for_input()
+        return
+    try:
+        subprocess.run([sys.executable, dashboard_path])
+    except KeyboardInterrupt:
+        pass
+
 
 def cleanup_menu():
     """Display the cleanup submenu"""

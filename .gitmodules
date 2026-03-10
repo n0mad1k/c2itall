@@ -1,0 +1,3 @@
+[submodule "ghost_protocol"]
+	path = ghost_protocol
+	url = https://github.com/n0mad1k/ghost_protocol-public.git
