@@ -227,6 +227,7 @@ def tools_menu():
         print(f"6) Infrastructure Health Check")
         print(f"7) Ops Dashboard {COLORS['CYAN']}(Real-Time Engagement Monitor){COLORS['RESET']}")
         print(f"8) Claude Bot {COLORS['CYAN']}(Matrix-Claude Code Bridge){COLORS['RESET']}")
+        print(f"9) Chaos C2 {COLORS['CYAN']}(Deploy / Manage Chaos teamserver){COLORS['RESET']}")
         print(f"99) Return to Main Menu")
         
         choice = input(f"\nSelect an option: ")
@@ -254,6 +255,11 @@ def tools_menu():
             claude_bot_module = import_module_from_path('deploy_claude_bot', claude_bot_module_path)
             if claude_bot_module:
                 claude_bot_module.claude_bot_menu()
+        elif choice == "9":
+            chaos_module_path = os.path.join(os.path.dirname(__file__), 'modules', 'c2', 'deploy_chaos.py')
+            chaos_module = import_module_from_path('deploy_chaos', chaos_module_path)
+            if chaos_module:
+                chaos_module.chaos_menu()
         elif choice == "99":
             return
         else:
