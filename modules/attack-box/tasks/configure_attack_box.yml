@@ -1,17 +1,15 @@
 ---
 # Attack Box Configuration Tasks
-# Based on TrashPanda directory structure - creates /root/operator
+# Creates /root/<deployment_id> workspace structure
 
 - name: Set user variables for headless deployment
   ansible.builtin.set_fact:
     target_user: "root"
     user_home: "/root"
-    # Use deployment ID for directory name if enhanced OPSEC is enabled
-    work_dir: "{{ '/root/' + deployment_id if enhanced_opsec | default(false) else '/root/operator' }}"
-    tool_name: "{{ 'toolkit' if enhanced_opsec | default(false) else 'trashpanda' }}"
-    project_name: "{{ deployment_id if enhanced_opsec | default(false) else 'operator' }}"
-    # Legacy compatibility
-    operator_dir: "{{ '/root/' + deployment_id if enhanced_opsec | default(false) else '/root/operator' }}"
+    # Always use deployment_id for directory name (no hardcoded operator aliases)
+    work_dir: "{{ work_dir | default('/root/' + deployment_id) }}"
+    tool_name: "{{ tool_name | default('toolkit' if enhanced_opsec | default(false) else 'trashpanda') }}"
+    project_name: "{{ project_name | default(deployment_id) }}"
 
 - name: Display attack box configuration start
   debug:
@@ -49,51 +47,50 @@
     mode: '0755'
   loop:
     # Main TrashPanda directories (exactly like trashpanda.py)
-    - "{{ operator_dir }}"
-    - "{{ operator_dir }}/tools"
-    - "{{ operator_dir }}/scans"
-    - "{{ operator_dir }}/logs"
-    - "{{ operator_dir }}/loot"
-    - "{{ operator_dir }}/payloads"
-    - "{{ operator_dir }}/targets"
-    - "{{ operator_dir }}/screenshots"
-    - "{{ operator_dir }}/reports"
-    - "{{ operator_dir }}/notes"
-    - "{{ operator_dir }}/exploits"
-    - "{{ operator_dir }}/wordlists"
-    - "{{ operator_dir }}/pcaps"
+    - "{{ work_dir }}"
+    - "{{ work_dir }}/tools"
+    - "{{ work_dir }}/scans"
+    - "{{ work_dir }}/logs"
+    - "{{ work_dir }}/loot"
+    - "{{ work_dir }}/payloads"
+    - "{{ work_dir }}/targets"
+    - "{{ work_dir }}/screenshots"
+    - "{{ work_dir }}/reports"
+    - "{{ work_dir }}/notes"
+    - "{{ work_dir }}/exploits"
+    - "{{ work_dir }}/wordlists"
+    - "{{ work_dir }}/pcaps"
     # Scan subdirectories (exactly like trashpanda.py)
-    - "{{ operator_dir }}/scans/nmap"
-    - "{{ operator_dir }}/scans/dns"
-    - "{{ operator_dir }}/scans/snmp"
-    - "{{ operator_dir }}/scans/smb"
-    - "{{ operator_dir }}/scans/web"
-    - "{{ operator_dir }}/scans/ssl"
-    - "{{ operator_dir }}/scans/vulns"
-    - "{{ operator_dir }}/scans/ldap"
-    - "{{ operator_dir }}/scans/ftp"
-    - "{{ operator_dir }}/scans/ssh"
-    - "{{ operator_dir }}/scans/databases"
-    - "{{ operator_dir }}/scans/custom"
-    - "{{ operator_dir }}/scans/reachability"
+    - "{{ work_dir }}/scans/nmap"
+    - "{{ work_dir }}/scans/dns"
+    - "{{ work_dir }}/scans/snmp"
+    - "{{ work_dir }}/scans/smb"
+    - "{{ work_dir }}/scans/web"
+    - "{{ work_dir }}/scans/ssl"
+    - "{{ work_dir }}/scans/vulns"
+    - "{{ work_dir }}/scans/ldap"
+    - "{{ work_dir }}/scans/ftp"
+    - "{{ work_dir }}/scans/ssh"
+    - "{{ work_dir }}/scans/databases"
+    - "{{ work_dir }}/scans/custom"
+    - "{{ work_dir }}/scans/reachability"
     # Loot subdirectories (exactly like trashpanda.py)
-    - "{{ operator_dir }}/loot/credentials"
-    - "{{ operator_dir }}/loot/hashes"
-    - "{{ operator_dir }}/loot/keys"
-    - "{{ operator_dir }}/loot/configs"
-    - "{{ operator_dir }}/loot/databases"
-    - "{{ operator_dir }}/loot/files"
+    - "{{ work_dir }}/loot/credentials"
+    - "{{ work_dir }}/loot/hashes"
+    - "{{ work_dir }}/loot/keys"
+    - "{{ work_dir }}/loot/configs"
+    - "{{ work_dir }}/loot/databases"
+    - "{{ work_dir }}/loot/files"
     # Tools subdirectories for organization
-    - "{{ operator_dir }}/tools/scripts"
-    - "{{ operator_dir }}/tools/windows"
-    - "{{ operator_dir }}/tools/linux"
-    - "{{ operator_dir }}/tools/web"
-    - "{{ operator_dir }}/tools/wireless"
-    - "{{ operator_dir }}/tools/privesc"
+    - "{{ work_dir }}/tools/scripts"
+    - "{{ work_dir }}/tools/windows"
+    - "{{ work_dir }}/tools/linux"
+    - "{{ work_dir }}/tools/web"
+    - "{{ work_dir }}/tools/wireless"
+    - "{{ work_dir }}/tools/privesc"
 
 # Attack Box Configuration
-# Based on /home/n0mad1k/Tools/attk-box-setup for headless deployment
-# Uses TrashPanda directory structure under /root/operator
+# Uses TrashPanda directory structure under /root/<deployment_id>
 
 - name: Update package cache only (avoid grub-pc issues)
   apt:
@@ -318,7 +315,7 @@
     mode: '0755'
 
 - name: Execute Go tools installation script
-  ansible.builtin.shell: OPERATOR_DIR="{{ operator_dir }}" /tmp/install_go_tools.sh
+  ansible.builtin.shell: WORK_DIR="{{ work_dir }}" /tmp/install_go_tools.sh
   register: go_install_result
   when: go_version_check.rc == 0
   ignore_errors: true
@@ -335,23 +332,32 @@
     path: /root/.bashrc
     block: |
       # Attack Box Tool Paths
-      export GOPATH="{{ operator_dir }}/tools/go"
+      export WORK_DIR="{{ work_dir }}"
+      export GOPATH="{{ work_dir }}/tools/go"
       export PATH="$PATH:/root/.local/bin"  # pipx tools
       export PATH="$PATH:/usr/local/go/bin"  # Go binary
       export PATH="$PATH:$GOPATH/bin"  # Go tools
-      export PATH="$PATH:{{ operator_dir }}/tools"  # Custom tools
+      export PATH="$PATH:{{ work_dir }}/tools"  # Custom tools
       export PATH="$PATH:/opt/metasploit-framework/bin"  # Metasploit
       
       # Useful aliases for attack box
-      alias operator="cd {{ operator_dir }}"
-      alias tools="cd {{ operator_dir }}/tools"
-      alias scans="cd {{ operator_dir }}/scans"
-      alias loot="cd {{ operator_dir }}/loot"
-      alias trashpanda="python3 {{ operator_dir }}/tools/trashpanda.py"
+      alias workspace="cd {{ work_dir }}"
+      alias tools="cd {{ work_dir }}/tools"
+      alias scans="cd {{ work_dir }}/scans"
+      alias loot="cd {{ work_dir }}/loot"
+      alias trashpanda="python3 {{ work_dir }}/tools/{{ tool_name }}.py"
       alias ll="ls -la"
       alias la="ls -la"
+      # Persistent tmux socket (prevents /tmp cleanup from killing sessions)
+      export TMUX_TMPDIR="/root/.local/share/tmux"
     marker: "# {mark} ATTACK BOX CONFIGURATION"
     create: yes
+
+- name: Create persistent tmux socket directory
+  ansible.builtin.file:
+    path: /root/.local/share/tmux
+    state: directory
+    mode: '0700'
 
 - name: Source bashrc to apply PATH changes
   ansible.builtin.shell: source /root/.bashrc
@@ -365,7 +371,7 @@
     mode: '0755'
 
 - name: Execute Git repositories cloning script
-  ansible.builtin.shell: OPERATOR_DIR="{{ operator_dir }}" /tmp/install_git_repos.sh
+  ansible.builtin.shell: WORK_DIR="{{ work_dir }}" /tmp/install_git_repos.sh
   register: git_clone_result
   ignore_errors: true
 
@@ -385,10 +391,10 @@
   args:
     creates: /opt/metasploit-framework/bin/msfconsole
 
-- name: Copy TrashPanda tool to operator directory
+- name: Copy TrashPanda tool to workspace directory
   copy:
     src: "../files/{{ tool_name }}.py"
-    dest: "{{ operator_dir }}/tools/{{ tool_name }}.py"
+    dest: "{{ work_dir }}/tools/{{ tool_name }}.py"
     mode: '0755'
     owner: "{{ target_user }}"
     group: "{{ target_user }}"
@@ -397,7 +403,7 @@
 - name: Copy OPSEC monitoring scripts
   copy:
     src: "{{ item }}"
-    dest: "{{ operator_dir }}/tools/scripts/"
+    dest: "{{ work_dir }}/tools/scripts/"
     mode: '0755'
     owner: "{{ target_user }}"
     group: "{{ target_user }}"
@@ -409,7 +415,7 @@
 - name: Copy OPSEC-aware shell aliases
   copy:
     src: "../files/clean-shell-aliases"
-    dest: "{{ operator_dir }}/tools/scripts/shell-aliases"
+    dest: "{{ work_dir }}/tools/scripts/shell-aliases"
     mode: '0644'
     owner: "{{ target_user }}"
     group: "{{ target_user }}"
@@ -418,7 +424,7 @@
 - name: Copy automation scripts to tools directory
   copy:
     src: "{{ item }}"
-    dest: "{{ operator_dir }}/tools/scripts/"
+    dest: "{{ work_dir }}/tools/scripts/"
     mode: '0755'
     owner: "{{ target_user }}"
     group: "{{ target_user }}"
@@ -435,22 +441,22 @@
       # IP Address: {{ ansible_default_ipv4.address | default('N/A') }}
       # 
       # Directory Structure:
-      # {{ operator_dir }}/tools/        - Downloaded/compiled tools and scripts
-      # {{ operator_dir }}/scans/        - All scan results organized by type
-      # {{ operator_dir }}/logs/         - Execution logs and debug output
-      # {{ operator_dir }}/loot/         - Extracted credentials, hashes, and sensitive data
-      # {{ operator_dir }}/payloads/     - Custom payloads and exploit code
-      # {{ operator_dir }}/targets/      - Target lists and reconnaissance data
-      # {{ operator_dir }}/screenshots/  - Visual evidence and GUI captures
-      # {{ operator_dir }}/reports/      - Draft reports and documentation
-      # {{ operator_dir }}/notes/        - Manual notes and observations
-      # {{ operator_dir }}/exploits/     - Working exploits and proof-of-concepts
-      # {{ operator_dir }}/wordlists/    - Custom and downloaded wordlists
-      # {{ operator_dir }}/pcaps/        - Network captures and traffic analysis
+      # {{ work_dir }}/tools/        - Downloaded/compiled tools and scripts
+      # {{ work_dir }}/scans/        - All scan results organized by type
+      # {{ work_dir }}/logs/         - Execution logs and debug output
+      # {{ work_dir }}/loot/         - Extracted credentials, hashes, and sensitive data
+      # {{ work_dir }}/payloads/     - Custom payloads and exploit code
+      # {{ work_dir }}/targets/      - Target lists and reconnaissance data
+      # {{ work_dir }}/screenshots/  - Visual evidence and GUI captures
+      # {{ work_dir }}/reports/      - Draft reports and documentation
+      # {{ work_dir }}/notes/        - Manual notes and observations
+      # {{ work_dir }}/exploits/     - Working exploits and proof-of-concepts
+      # {{ work_dir }}/wordlists/    - Custom and downloaded wordlists
+      # {{ work_dir }}/pcaps/        - Network captures and traffic analysis
       #
       # Log started: {{ ansible_date_time.iso8601 }}
       
-    dest: "{{ operator_dir }}/logs/engagement.log"
+    dest: "{{ work_dir }}/logs/engagement.log"
     owner: "{{ target_user }}"
     group: "{{ target_user }}"
     mode: '0644'
@@ -477,7 +483,7 @@
       # target.example.com
       # www.example.com
       
-    dest: "{{ operator_dir }}/targets/targets.txt"
+    dest: "{{ work_dir }}/targets/targets.txt"
     owner: "{{ target_user }}"
     group: "{{ target_user }}"
     mode: '0644'
@@ -490,21 +496,22 @@
     create: yes
   loop:
     - "# Attack Box Aliases"
-    - "alias ops='cd {{ operator_dir }}'"
-    - "alias tools='cd {{ operator_dir }}/tools'"
-    - "alias scans='cd {{ operator_dir }}/scans'"
-    - "alias loot='cd {{ operator_dir }}/loot'"
-    - "alias targets='cd {{ operator_dir }}/targets'"
-    - "alias reports='cd {{ operator_dir }}/reports'"
-    - "alias logs='cd {{ operator_dir }}/logs'"
-    - "alias toolkit='python3 {{ operator_dir }}/tools/toolkit.py'"
-    - "alias recon='{{ operator_dir }}/tools/scripts/recon_automation.sh'"
-    - "alias portscan='{{ operator_dir }}/tools/scripts/port_scan_automation.sh'"
-    - "alias webenum='{{ operator_dir }}/tools/scripts/web_enum_automation.sh'"
-    - "alias attack-menu='{{ operator_dir }}/tools/scripts/manual_testing_menu.sh'"
-    - "alias opsec='{{ operator_dir }}/tools/scripts/opsec-check.sh'"
-    - "alias panic='{{ operator_dir }}/tools/scripts/emergency-wipe.sh'"
-    - "alias clean='{{ operator_dir }}/tools/scripts/trash-cleanup.sh'"
+    - "export WORK_DIR='{{ work_dir }}'"
+    - "alias ops='cd {{ work_dir }}'"
+    - "alias tools='cd {{ work_dir }}/tools'"
+    - "alias scans='cd {{ work_dir }}/scans'"
+    - "alias loot='cd {{ work_dir }}/loot'"
+    - "alias targets='cd {{ work_dir }}/targets'"
+    - "alias reports='cd {{ work_dir }}/reports'"
+    - "alias logs='cd {{ work_dir }}/logs'"
+    - "alias toolkit='python3 {{ work_dir }}/tools/toolkit.py'"
+    - "alias recon='{{ work_dir }}/tools/scripts/recon_automation.sh'"
+    - "alias portscan='{{ work_dir }}/tools/scripts/port_scan_automation.sh'"
+    - "alias webenum='{{ work_dir }}/tools/scripts/web_enum_automation.sh'"
+    - "alias attack-menu='{{ work_dir }}/tools/scripts/manual_testing_menu.sh'"
+    - "alias opsec='{{ work_dir }}/tools/scripts/opsec-check.sh'"
+    - "alias panic='{{ work_dir }}/tools/scripts/emergency-wipe.sh'"
+    - "alias clean='{{ work_dir }}/tools/scripts/trash-cleanup.sh'"
   when: enhanced_opsec | default(false)
 
 - name: Create bash aliases for workflow (Standard mode)
@@ -513,19 +520,20 @@
     line: "{{ item }}"
     create: yes
   loop:
-    - "# TrashPanda Attack Box Aliases"
-    - "alias operator='cd {{ operator_dir }}'"
-    - "alias tools='cd {{ operator_dir }}/tools'"
-    - "alias scans='cd {{ operator_dir }}/scans'"
-    - "alias loot='cd {{ operator_dir }}/loot'"
-    - "alias targets='cd {{ operator_dir }}/targets'"
-    - "alias reports='cd {{ operator_dir }}/reports'"
-    - "alias logs='cd {{ operator_dir }}/logs'"
-    - "alias trashpanda='python3 {{ operator_dir }}/tools/trashpanda.py'"
-    - "alias recon='{{ operator_dir }}/tools/scripts/recon_automation.sh'"
-    - "alias portscan='{{ operator_dir }}/tools/scripts/port_scan_automation.sh'"
-    - "alias webenum='{{ operator_dir }}/tools/scripts/web_enum_automation.sh'"
-    - "alias attack-menu='{{ operator_dir }}/tools/scripts/manual_testing_menu.sh'"
+    - "# Attack Box Aliases"
+    - "export WORK_DIR='{{ work_dir }}'"
+    - "alias workspace='cd {{ work_dir }}'"
+    - "alias tools='cd {{ work_dir }}/tools'"
+    - "alias scans='cd {{ work_dir }}/scans'"
+    - "alias loot='cd {{ work_dir }}/loot'"
+    - "alias targets='cd {{ work_dir }}/targets'"
+    - "alias reports='cd {{ work_dir }}/reports'"
+    - "alias logs='cd {{ work_dir }}/logs'"
+    - "alias trashpanda='python3 {{ work_dir }}/tools/{{ tool_name }}.py'"
+    - "alias recon='{{ work_dir }}/tools/scripts/recon_automation.sh'"
+    - "alias portscan='{{ work_dir }}/tools/scripts/port_scan_automation.sh'"
+    - "alias webenum='{{ work_dir }}/tools/scripts/web_enum_automation.sh'"
+    - "alias attack-menu='{{ work_dir }}/tools/scripts/manual_testing_menu.sh'"
   when: not (enhanced_opsec | default(false))
 
 - name: Set Go path in bashrc
@@ -534,15 +542,15 @@
     line: "{{ item }}"
     create: yes
   loop:
-    - "export GOPATH={{ operator_dir }}/tools/go"
-    - "export PATH=$PATH:{{ operator_dir }}/tools/go/bin"
+    - "export GOPATH={{ work_dir }}/tools/go"
+    - "export PATH=$PATH:{{ work_dir }}/tools/go/bin"
 
 - name: Load OPSEC shell aliases (Enhanced OPSEC mode)
   blockinfile:
     path: "{{ user_home }}/.bashrc"
     block: |
       # OPSEC-aware shell aliases
-      source {{ operator_dir }}/tools/scripts/shell-aliases
+      source {{ work_dir }}/tools/scripts/shell-aliases
     marker: "# {mark} OPSEC SHELL ALIASES"
     create: yes
   when: enhanced_opsec | default(false)
@@ -607,6 +615,49 @@
         replace: 'socks5 127.0.0.1 9050'
   when: setup_tor | default(false)
 
+- name: Create themes directory
+  ansible.builtin.file:
+    path: "{{ work_dir }}/tools/themes"
+    state: directory
+    owner: "{{ target_user }}"
+    group: "{{ target_user }}"
+    mode: '0755'
+
+- name: Upload terminal theme installer script
+  ansible.builtin.copy:
+    src: "../files/install_terminal_themes.sh"
+    dest: "{{ work_dir }}/tools/scripts/install_terminal_themes.sh"
+    mode: '0755'
+    owner: "{{ target_user }}"
+    group: "{{ target_user }}"
+
+- name: Upload DC27 dconf theme file
+  ansible.builtin.copy:
+    src: "../files/dc27-theme.dconf"
+    dest: "{{ work_dir }}/tools/themes/dc27-theme.dconf"
+    mode: '0644'
+    owner: "{{ target_user }}"
+    group: "{{ target_user }}"
+
+- name: Add terminal theme alias to bashrc
+  lineinfile:
+    path: "{{ user_home }}/.bashrc"
+    line: "alias install-themes='WORK_DIR={{ work_dir }} {{ work_dir }}/tools/scripts/install_terminal_themes.sh'"
+    create: yes
+
+- name: Execute terminal theme installer during deployment
+  ansible.builtin.shell: WORK_DIR="{{ work_dir }}" {{ work_dir }}/tools/scripts/install_terminal_themes.sh
+  args:
+    executable: /bin/bash
+  register: theme_install_result
+  when: install_terminal_themes | default(false)
+  ignore_errors: true
+
+- name: Display terminal theme installation result
+  debug:
+    msg: "Terminal themes {{ 'installed' if theme_install_result.rc == 0 else 'installation had issues (non-critical)' }}"
+  when: install_terminal_themes | default(false) and theme_install_result is defined
+
 - name: Update locate database
   command: updatedb
   ignore_errors: true
@@ -626,7 +677,7 @@
       Target: {{ ansible_host }}
       Configuration Duration: {{ config_duration }} minutes
       
-      Directory Structure: {{ operator_dir }}
+      Directory Structure: {{ work_dir }}
       ├── docs/           - Documentation and notes
       ├── exploits/       - Exploit development
       ├── loot/           - Extracted data and findings
@@ -646,11 +697,11 @@
       Environment:
       - PATH configured for all tools
       - pipx tools accessible system-wide
-      - Go tools in {{ operator_dir }}/tools/go/bin
+      - Go tools in {{ work_dir }}/tools/go/bin
       
       Next Steps:
       1. SSH into the box: ssh -i a-{{ deployment_id }} root@{{ ansible_host }}
-      2. Navigate to working directory: cd {{ operator_dir }}
+      2. Navigate to working directory: cd {{ work_dir }}
       3. Start your assessment activities
       
       ================================================================
@@ -660,10 +711,10 @@
     msg:
       - "Attack Box Setup Complete!"
       - ""
-      - "Main Directory: {{ operator_dir }}"
-      - "Tools Location: {{ operator_dir }}/tools"
-      - "Scan Results: {{ operator_dir }}/scans"
-      - "Loot Storage: {{ operator_dir }}/loot"
+      - "Main Directory: {{ work_dir }}"
+      - "Tools Location: {{ work_dir }}/tools"
+      - "Scan Results: {{ work_dir }}/scans"
+      - "Loot Storage: {{ work_dir }}/loot"
       - ""
       - "Quick Commands:"
       - "  ops               - Go to main directory"
@@ -676,7 +727,7 @@
       - "  panic             - Emergency sanitization"
       - "  clean             - Clean operational artifacts"
       - ""
-      - "Start here: {{ operator_dir }}/targets/targets.txt"
+      - "Start here: {{ work_dir }}/targets/targets.txt"
   when: enhanced_opsec | default(false)
 
 - name: Display setup completion information (Standard mode)
@@ -684,18 +735,18 @@
     msg:
       - "TrashPanda Attack Box Setup Complete!"
       - ""
-      - "Main Directory: {{ operator_dir }}"
-      - "Tools Location: {{ operator_dir }}/tools"
-      - "Scan Results: {{ operator_dir }}/scans"
-      - "Loot Storage: {{ operator_dir }}/loot"
+      - "Main Directory: {{ work_dir }}"
+      - "Tools Location: {{ work_dir }}/tools"
+      - "Scan Results: {{ work_dir }}/scans"
+      - "Loot Storage: {{ work_dir }}/loot"
       - ""
       - "Quick Commands:"
-      - "  operator              - Go to main directory"
+      - "  workspace            - Go to main directory"
       - "  trashpanda [targets] - Run TrashPanda enumeration"
       - "  recon <target>       - Run reconnaissance automation"
       - "  portscan <target>    - Run port scan automation"
       - "  webenum <target>     - Run web enumeration automation"
       - "  attack-menu          - Launch manual testing menu"
       - ""
-      - "Start here: {{ operator_dir }}/targets/targets.txt"
+      - "Start here: {{ work_dir }}/targets/targets.txt"
   when: not (enhanced_opsec | default(false))

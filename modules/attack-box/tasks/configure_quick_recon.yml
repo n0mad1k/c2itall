@@ -22,7 +22,7 @@
 - name: Set common variables
   set_fact:
     target_user: "root"
-    work_dir: "/root/recon"
+    work_dir: "{{ work_dir | default('/root/' + deployment_id) }}"
     deployment_id: "{{ deployment_id }}"
     attack_box_name: "{{ attack_box_name }}"
 
@@ -200,6 +200,13 @@
     - "alias tor-nmap='torsocks nmap'"
     - "alias tor-curl='torsocks curl'"
     - "alias check-tor='curl --socks5 127.0.0.1:9050 https://check.torproject.org/api/ip'"
+    - "export TMUX_TMPDIR=/root/.local/share/tmux"
+
+- name: Create persistent tmux socket directory
+  ansible.builtin.file:
+    path: /root/.local/share/tmux
+    state: directory
+    mode: '0700'
 
 - name: Create simple quick reference
   ansible.builtin.copy:
