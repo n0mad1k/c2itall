@@ -170,9 +170,7 @@ def set_provider_environment_for_teardown(config):
             # Load token from provider vars file
             try:
                 from utils.common import load_vars_file, PROVIDER_DIRS
-                provider_dir = PROVIDER_DIRS.get(provider, provider.capitalize())
-                vars_file = f"providers/{provider_dir}/vars.yaml"
-                vars_data = load_vars_file(vars_file)
+                vars_data = load_vars_file(provider)
                 if vars_data and vars_data.get('linode_token'):
                     os.environ['LINODE_TOKEN'] = vars_data['linode_token']
                     config['linode_token'] = vars_data['linode_token']  # Add to config for later use

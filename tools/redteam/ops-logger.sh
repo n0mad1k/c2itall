@@ -926,69 +926,6 @@ clear_window_indicators() {
     fi
 }
 
-# ================================================================
-# OHMYTMUX-COMPATIBLE WINDOW NAME MANAGEMENT
-# ================================================================
-
-# Improved window name handling that works with ohmytmux
-get_current_window_name() {
-    local tmux_pane_ref="$1"
-    local name=$(tmux display -t "$tmux_pane_ref" -p '#{window_name}')
-    
-    # Remove our indicators as well as any ohmytmux status indicators
-    name="${name#🔴 }"
-    name="${name#🎥 }"
-    name="${name#● }"
-    name="${name#⚠ }"
-    name="${name#▶ }"
-    
-    echo "$name"
-}
-
-set_window_logging_indicator() {
-    local tmux_pane_ref="$1"
-    local current_name=$(get_current_window_name "$tmux_pane_ref")
-    
-    # Preserve ohmytmux automatic formats but add our indicator
-    if [[ "$current_name" == *Z ]]; then
-        # Zoomed window format in ohmytmux
-        tmux rename-window -t "$tmux_pane_ref" "🔴 ${current_name%Z}Z"
-    else
-        tmux rename-window -t "$tmux_pane_ref" "🔴 $current_name"
-    fi
-}
-
-set_window_recording_indicator() {
-    local tmux_pane_ref="$1"
-    local current_name=$(get_current_window_name "$tmux_pane_ref")
-    
-    # Remove logging indicator if present and add recording
-    current_name="${current_name#🔴 }"
-    
-    # Preserve ohmytmux automatic formats
-    if [[ "$current_name" == *Z ]]; then
-        # Zoomed window format in ohmytmux
-        tmux rename-window -t "$tmux_pane_ref" "🎥 ${current_name%Z}Z"
-    else
-        tmux rename-window -t "$tmux_pane_ref" "🎥 $current_name"
-    fi
-}
-
-clear_window_indicators() {
-    local tmux_pane_ref="$1"
-    local current_name=$(tmux display -t "$tmux_pane_ref" -p '#{window_name}')
-    local clean_name=$(get_current_window_name "$tmux_pane_ref")
-    
-    # Preserve any ohmytmux indicators that might be present
-    if [[ "$current_name" == *Z ]]; then
-        # Zoomed window format in ohmytmux
-        tmux rename-window -t "$tmux_pane_ref" "${clean_name}Z"
-    else
-        tmux rename-window -t "$tmux_pane_ref" "$clean_name"
-    fi
-}
-
-# ================================================================
 # MAIN LOGGING FUNCTIONS
 # ================================================================
 
@@ -1279,7 +1216,7 @@ EOSCRIPT
         chmod +x "$config_script"
         
         # Open new window for config
-        bash $config_script; rm -f $config_script
+        bash "$config_script"; rm -f "$config_script"
         return 0
     fi
     

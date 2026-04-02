@@ -27,7 +27,12 @@ import hashlib
 import struct
 import base64
 from datetime import datetime, timedelta
-from scapy.all import sniff, IP, TCP, UDP, Raw, get_if_list, DNS, DNSQR, DNSRR
+try:
+    from scapy.all import sniff, IP, TCP, UDP, Raw, get_if_list, DNS, DNSQR, DNSRR
+    SCAPY_AVAILABLE = True
+except ImportError:
+    SCAPY_AVAILABLE = False
+    print("⚠️  Warning: scapy not available. Install with: pip install scapy")
 from collections import defaultdict, deque, Counter
 from typing import Dict, List, Tuple, Optional, Set, Any
 
@@ -1373,7 +1378,11 @@ class EnhancedBlueTeamDetector:
         """Select network interface"""
         if self.config["interface"] != "auto":
             return self.config["interface"]
-        
+
+        if not SCAPY_AVAILABLE:
+            logging.error("scapy not installed — cannot list interfaces")
+            return "eth0"
+
         interfaces = get_if_list()
         preferred = ['eth0', 'ens33', 'ens192', 'ens160', 'enp0s3', 'wlan0']
         
@@ -1469,10 +1478,14 @@ class EnhancedBlueTeamDetector:
     
     def run(self):
         """Main detection loop"""
+        if not SCAPY_AVAILABLE:
+            print("❌ scapy is required for packet capture. Install with: pip install scapy")
+            return
+
         # Signal handlers
         signal.signal(signal.SIGTERM, self.cleanup)
         signal.signal(signal.SIGINT, self.cleanup)
-        
+
         # Get interface
         interface = self.get_network_interface()
         

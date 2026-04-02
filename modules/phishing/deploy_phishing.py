@@ -447,38 +447,55 @@ def execute_component_deployment(config):
         'deploy_phishing_webserver': os.path.join(os.path.dirname(__file__), 'phishing_webserver.yml'),
     }
     
-    # Build extra vars for ansible
-    extra_vars = []
+    # Build extra vars for ansible as JSON (safe for special chars)
+    import json as _json
+    import tempfile as _tempfile
+    extra_vars_dict = {}
     for key, value in config.items():
         if isinstance(value, (str, int, bool)):
-            extra_vars.append(f"{key}={value}")
-    
+            extra_vars_dict[key] = value
+
     deployed_components = []
-    
+
     try:
         # Deploy each enabled component
         for component, playbook_path in component_playbooks.items():
             if config.get(component, False):
                 print(f"\n{COLORS['YELLOW']}Deploying {component.replace('deploy_', '')}...{COLORS['RESET']}")
-                
+
                 # Check if playbook exists
                 if not os.path.exists(playbook_path):
                     print(f"{COLORS['RED']}Error: Playbook not found: {playbook_path}{COLORS['RESET']}")
                     continue
-                
+
+                # Write vars to temp file (avoids CLI exposure)
+                _vars_file = _tempfile.NamedTemporaryFile(
+                    mode='w', suffix='.json', prefix='phish_vars_',
+                    delete=False
+                )
+                _json.dump(extra_vars_dict, _vars_file)
+                _vars_file.close()
+                os.chmod(_vars_file.name, 0o600)
+
                 # Build ansible command
                 cmd = [
                     'ansible-playbook',
                     playbook_path,
                     '--extra-vars',
-                    ' '.join(extra_vars)
+                    f'@{_vars_file.name}'
                 ]
-                
-                print(f"{COLORS['GRAY']}Running: {' '.join(cmd)}{COLORS['RESET']}")
+
+                print(f"{COLORS['GRAY']}Running: ansible-playbook {os.path.basename(playbook_path)}{COLORS['RESET']}")
                 
                 # Execute playbook
                 result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.path.dirname(__file__))
-                
+
+                # Clean up temp vars file
+                try:
+                    os.unlink(_vars_file.name)
+                except OSError:
+                    pass
+
                 if result.returncode == 0:
                     print(f"{COLORS['GREEN']}✅ {component.replace('deploy_', '')} deployed successfully{COLORS['RESET']}")
                     deployed_components.append(component)
@@ -490,16 +507,29 @@ def execute_component_deployment(config):
         # Deploy the orchestration playbook to save state
         print(f"\n{COLORS['YELLOW']}Saving deployment state...{COLORS['RESET']}")
         orchestration_playbook = os.path.join(os.path.dirname(__file__), 'deploy_phishing_infrastructure.yml')
-        
+
+        _orch_vars_file = _tempfile.NamedTemporaryFile(
+            mode='w', suffix='.json', prefix='phish_orch_',
+            delete=False
+        )
+        _json.dump(extra_vars_dict, _orch_vars_file)
+        _orch_vars_file.close()
+        os.chmod(_orch_vars_file.name, 0o600)
+
         cmd = [
             'ansible-playbook',
             orchestration_playbook,
             '--extra-vars',
-            ' '.join(extra_vars)
+            f'@{_orch_vars_file.name}'
         ]
         
         result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.path.dirname(__file__))
-        
+
+        try:
+            os.unlink(_orch_vars_file.name)
+        except OSError:
+            pass
+
         if result.returncode == 0:
             print(f"{COLORS['GREEN']}✅ Deployment state saved{COLORS['RESET']}")
             return True
