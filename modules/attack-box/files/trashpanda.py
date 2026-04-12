@@ -207,7 +207,9 @@ def print_banner():
     """
     print(banner)
 
-def create_pentest_structure(base_name="/root/operator"):
+def create_pentest_structure(base_name=None):
+    if base_name is None:
+        base_name = os.environ.get("WORK_DIR", os.environ.get("WORK_DIR", "/root/workspace"))
     """Create a comprehensive penetration testing directory structure."""
     
     # Main engagement directory
@@ -301,9 +303,9 @@ def create_pentest_structure(base_name="/root/operator"):
         f.write(f"TrashPanda Engagement Log\n")
         f.write(f"========================\n")
         f.write(f"Started: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"Operator: operator\n")
+        f.write(f"Operator: {os.environ.get('USER', 'operator')}\n")
         f.write(f"Tool: TrashPanda v2.4\n\n")
-    
+
     # Create initial target file
     target_template = os.path.join(base_dir, "targets", "targets.txt")
     if not os.path.exists(target_template):
@@ -2663,7 +2665,7 @@ def run_enhanced_web_enumeration(base_dir, targets, stealth=False, debug=False):
             f"gobuster dir -u {base_url}/ -w /usr/share/seclists/Discovery/Web-Content/raft-large-directories.txt -x txt,html,php,asp,aspx,jsp -t 50",
             f"hydra -L /usr/share/seclists/Usernames/top-usernames-shortlist.txt -P /usr/share/seclists/Passwords/darkweb2017-top100.txt {ip} http-post-form '/login.php:username=^USER^&password=^PASS^:invalid'",
             f"sqlmap -u '{base_url}/?id=1' --batch --banner",
-            f"nuclei -u {base_url} -t /root/nuclei-templates/"
+            f"nuclei -u {base_url} -H 'User-Agent: homelab-security-scan/nuclei' -t /root/nuclei-templates/"
         ]
         
         add_manual_command(base_dir, f"Web Service {base_url}", manual_commands)
@@ -3044,9 +3046,9 @@ def generate_summary_report(base_dir):
         f.write("TRASHPANDA COMPREHENSIVE PENETRATION TESTING REPORT\n")
         f.write("=" * 80 + "\n\n")
         f.write(f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"Operator: operator\n")
+        f.write(f"Operator: {os.environ.get('USER', 'operator')}\n")
         f.write(f"Engagement Directory: {base_dir}\n\n")
-        
+
         # Enhanced directory structure overview
         f.write("DIRECTORY STRUCTURE:\n")
         f.write("-" * 20 + "\n")
@@ -3153,7 +3155,8 @@ Examples:
     parser.add_argument("targets", nargs='?', help="Target file, IP, IP range, or CIDR")
     
     # Directory options
-    parser.add_argument("-d", "--directory", help="Engagement directory name", default="/root/operator")
+    parser.add_argument("-d", "--directory", help="Engagement directory name",
+                        default=os.environ.get("WORK_DIR", os.environ.get("WORK_DIR", "/root/workspace")))
     parser.add_argument("-c", "--create-dirs", action="store_true", help="Only create directory structure and exit")
     
     # Scan modes
