@@ -207,9 +207,7 @@ def print_banner():
     """
     print(banner)
 
-def create_pentest_structure(base_name=None):
-    if base_name is None:
-        base_name = os.environ.get("WORK_DIR", os.environ.get("WORK_DIR", "/root/workspace"))
+def create_pentest_structure(base_name="/root/operator"):
     """Create a comprehensive penetration testing directory structure."""
     
     # Main engagement directory
@@ -303,9 +301,9 @@ def create_pentest_structure(base_name=None):
         f.write(f"TrashPanda Engagement Log\n")
         f.write(f"========================\n")
         f.write(f"Started: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"Operator: {os.environ.get('USER', 'operator')}\n")
+        f.write(f"Operator: operator\n")
         f.write(f"Tool: TrashPanda v2.4\n\n")
-
+    
     # Create initial target file
     target_template = os.path.join(base_dir, "targets", "targets.txt")
     if not os.path.exists(target_template):
@@ -3046,9 +3044,9 @@ def generate_summary_report(base_dir):
         f.write("TRASHPANDA COMPREHENSIVE PENETRATION TESTING REPORT\n")
         f.write("=" * 80 + "\n\n")
         f.write(f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"Operator: {os.environ.get('USER', 'operator')}\n")
+        f.write(f"Operator: operator\n")
         f.write(f"Engagement Directory: {base_dir}\n\n")
-
+        
         # Enhanced directory structure overview
         f.write("DIRECTORY STRUCTURE:\n")
         f.write("-" * 20 + "\n")
@@ -3155,8 +3153,7 @@ Examples:
     parser.add_argument("targets", nargs='?', help="Target file, IP, IP range, or CIDR")
     
     # Directory options
-    parser.add_argument("-d", "--directory", help="Engagement directory name",
-                        default=os.environ.get("WORK_DIR", os.environ.get("WORK_DIR", "/root/workspace")))
+    parser.add_argument("-d", "--directory", help="Engagement directory name", default="/root/operator")
     parser.add_argument("-c", "--create-dirs", action="store_true", help="Only create directory structure and exit")
     
     # Scan modes
