@@ -79,7 +79,7 @@ done < live_subdomains.txt
 
 # Vulnerability scanning with Nuclei
 echo -e "${GREEN}[+] Phase 7: Vulnerability Scanning${NC}"
-log_and_run "Running Nuclei" "nuclei -l live_subdomains.txt -H 'User-Agent: homelab-security-scan/nuclei' -t ~/nuclei-templates/ -o nuclei_results.txt"
+log_and_run "Running Nuclei" "nuclei -l live_subdomains.txt -H 'User-Agent: ${NUCLEI_UA:-homelab-security-scan/nuclei}' -t ~/nuclei-templates/ -o nuclei_results.txt"
 
 # Summary
 echo -e "${GREEN}[+] Reconnaissance Complete!${NC}"

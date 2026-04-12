@@ -2672,7 +2672,7 @@ def run_enhanced_web_enumeration(base_dir, targets, stealth=False, debug=False):
             f"gobuster dir -u {base_url}/ -w /usr/share/seclists/Discovery/Web-Content/raft-large-directories.txt -x txt,html,php,asp,aspx,jsp -t 50",
             f"hydra -L /usr/share/seclists/Usernames/top-usernames-shortlist.txt -P /usr/share/seclists/Passwords/darkweb2017-top100.txt {ip} http-post-form '/login.php:username=^USER^&password=^PASS^:invalid'",
             f"sqlmap -u '{base_url}/?id=1' --batch --banner",
-            f"nuclei -u {base_url} -H 'User-Agent: homelab-security-scan/nuclei' -t /root/nuclei-templates/"
+            f"nuclei -u {base_url} -t /root/nuclei-templates/"
         ]
         
         add_manual_command(base_dir, f"Web Service {base_url}", manual_commands)

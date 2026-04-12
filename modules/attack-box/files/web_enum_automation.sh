@@ -91,7 +91,7 @@ log_and_run "Nikto scan" "nikto -h $TARGET_URL -o nikto_results.txt"
 
 # Nuclei web templates
 if command -v nuclei &> /dev/null; then
-    log_and_run "Nuclei web vulnerability scan" "nuclei -u $TARGET_URL -H 'User-Agent: homelab-security-scan/nuclei' -t ~/nuclei-templates/http/ -o nuclei_web_results.txt"
+    log_and_run "Nuclei web vulnerability scan" "nuclei -u $TARGET_URL -H 'User-Agent: ${NUCLEI_UA:-homelab-security-scan/nuclei}' -t ~/nuclei-templates/http/ -o nuclei_web_results.txt"
 fi
 
 # SSL/TLS testing (for HTTPS)
