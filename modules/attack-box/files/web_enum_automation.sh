@@ -14,8 +14,7 @@ fi
 TARGET_URL="$1"
 # Extract domain/IP for workspace naming
 TARGET_CLEAN=$(echo "$TARGET_URL" | sed 's|https\?://||g' | sed 's|/.*||g' | tr ':' '_')
-BASE_DIR="${WORK_DIR:-${WORK_DIR:-/root/workspace}}"
-WORKSPACE="$BASE_DIR/scans/web/$TARGET_CLEAN"
+WORKSPACE="/root/operator/scans/web/$TARGET_CLEAN"
 DATE=$(date +%Y%m%d_%H%M%S)
 
 # Colors for output
@@ -91,7 +90,7 @@ log_and_run "Nikto scan" "nikto -h $TARGET_URL -o nikto_results.txt"
 
 # Nuclei web templates
 if command -v nuclei &> /dev/null; then
-    log_and_run "Nuclei web vulnerability scan" "nuclei -u $TARGET_URL -H 'User-Agent: ${NUCLEI_UA:-homelab-security-scan/nuclei}' -t ~/nuclei-templates/http/ -o nuclei_web_results.txt"
+    log_and_run "Nuclei web vulnerability scan" "nuclei -u $TARGET_URL -t ~/nuclei-templates/http/ -o nuclei_web_results.txt"
 fi
 
 # SSL/TLS testing (for HTTPS)
