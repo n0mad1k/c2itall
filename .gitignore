@@ -104,3 +104,4 @@ test-output/
 
 # Ignore personal scripts
 scripts/dev/*
+.claude/
