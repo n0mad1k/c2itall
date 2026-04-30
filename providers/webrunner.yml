@@ -99,7 +99,6 @@
   hosts: localhost
   connection: local
   gather_facts: false
-  when: teardown_after_scan | default(true) | bool
 
   tasks:
     - name: Teardown Linode nodes
@@ -107,10 +106,11 @@
         url: "https://api.linode.com/v4/linode/instances/{{ hostvars[item]['linode_instance_id'] }}"
         method: DELETE
         headers:
-          Authorization: "Bearer {{ linode_token }}"
+          Authorization: "Bearer {{ lookup('env', 'LINODE_TOKEN') }}"
         status_code: [200, 204]
       loop: "{{ groups['webrunner_nodes'] | default([]) }}"
       when:
+        - teardown_after_scan | default(true) | bool
         - hostvars[item]['provider'] == 'linode'
         - hostvars[item]['linode_instance_id'] is defined
       ignore_errors: true
@@ -120,11 +120,10 @@
         instance_ids:
           - "{{ hostvars[item]['ec2_instance_id'] }}"
         region: "{{ aws_region | default('us-east-1') }}"
-        aws_access_key: "{{ aws_access_key | default('') }}"
-        aws_secret_key: "{{ aws_secret_key | default('') }}"
         state: terminated
       loop: "{{ groups['webrunner_nodes'] | default([]) }}"
       when:
+        - teardown_after_scan | default(true) | bool
         - hostvars[item]['provider'] == 'aws'
         - hostvars[item]['ec2_instance_id'] is defined
       ignore_errors: true
@@ -132,4 +131,7 @@
     - name: Teardown complete
       debug:
         msg: "All WEBRUNNER scan nodes destroyed."
-      when: groups['webrunner_nodes'] is defined and groups['webrunner_nodes'] | length > 0
+      when:
+        - teardown_after_scan | default(true) | bool
+        - groups['webrunner_nodes'] is defined
+        - groups['webrunner_nodes'] | length > 0
