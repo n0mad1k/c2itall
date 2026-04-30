@@ -15,12 +15,13 @@ if _base not in sys.path:
     sys.path.insert(0, _base)
 
 from utils.common import (
-    COLORS, clear_screen, print_banner, wait_for_input,
-    get_public_ip, load_vars_file,
+    COLORS, clear_screen, print_banner, generate_deployment_id,
+    setup_logging, get_public_ip, confirm_action, wait_for_input,
+    load_vars_file,
 )
+from utils.provider_utils import select_provider, gather_provider_config
 from utils.ssh_utils import generate_ssh_key
-from utils.name_generator import generate_deployment_id
-from utils.naming_utils import get_deployment_name_with_options
+from utils.naming_utils import get_deployment_name_with_options, show_naming_relationship
 from utils.deployment_engine import execute_playbook, set_provider_environment
 from utils.chunk_utils import get_country_cidrs, chunk_cidrs, ip_count
 from utils.provider_rates import (
@@ -28,7 +29,7 @@ from utils.provider_rates import (
     build_estimate_table, fmt_hours, fmt_ip_count,
 )
 
-GEO_SCOUT_INPUTS = Path(__file__).parents[3] / 'geo-scout' / 'inputs'
+WEBRUNNER_INPUTS = Path(__file__).parent / 'inputs'
 
 SUPPORTED_PROVIDERS = ['linode', 'aws', 'flokinet']
 PROVIDER_LABELS = {'linode': 'Linode', 'aws': 'AWS', 'flokinet': 'FlokiNET'}
@@ -50,7 +51,6 @@ def webrunner_menu():
             config = gather_webrunner_parameters()
             if config:
                 execute_webrunner_deployment(config)
-                wait_for_input()
         elif choice == "99":
             break
         else:
@@ -58,61 +58,12 @@ def webrunner_menu():
             wait_for_input()
 
 
-# ── parameter gathering ───────────────────────────────────────────────────────
-
-def _select_countries() -> tuple[list[str], dict[str, list], str]:
-    print(f"\n{COLORS['BLUE']}Country Selection:{COLORS['RESET']}")
-    print(f"1) Use geo-scout countries.yaml")
-    print(f"2) Enter country codes manually")
-
-    choice = input("Select [1]: ").strip() or "1"
-    exclude_map: dict[str, list] = {}
-
-    if choice == "1":
-        default_path = str(GEO_SCOUT_INPUTS / 'countries.yaml')
-        raw = input(f"Path [{default_path}]: ").strip()
-        path = Path(raw) if raw else GEO_SCOUT_INPUTS / 'countries.yaml'
-
-        if not path.exists():
-            print(f"{COLORS['RED']}File not found: {path}{COLORS['RESET']}")
-            return [], {}, ""
-
-        import yaml
-        with open(path) as f:
-            data = yaml.safe_load(f)
-
-        countries = data.get('countries', [])
-        codes = [c['code'].upper() for c in countries]
-        for c in countries:
-            if c.get('exclude_cidrs'):
-                exclude_map[c['code'].upper()] = c['exclude_cidrs']
-        return codes, exclude_map, str(path)
-
-    raw = input("Country codes (comma-separated, e.g. RU,IR,CN): ").strip()
-    codes = [c.strip().upper() for c in raw.split(',') if c.strip()]
-    return codes, exclude_map, "manual"
-
-
-def _select_scan_mode() -> str:
-    print(f"\n{COLORS['BLUE']}Scan Mode:{COLORS['RESET']}")
-    modes = list(SCAN_MODES.items())
-    for i, (key, val) in enumerate(modes, 1):
-        print(f"{i}) {key:<20} {val['desc']}")
-
-    choice = input("Select [1]: ").strip() or "1"
-    try:
-        idx = int(choice) - 1
-        if 0 <= idx < len(modes):
-            return modes[idx][0]
-    except ValueError:
-        pass
-    return 'geo-scout'
-
+# ── helpers ───────────────────────────────────────────────────────────────────
 
 def _select_providers() -> list[str]:
     print(f"\n{COLORS['BLUE']}Provider Selection (multi-select):{COLORS['RESET']}")
     for i, key in enumerate(SUPPORTED_PROVIDERS, 1):
-        print(f"{i}) {PROVIDER_LABELS[key]}")
+        print(f"  {i}) {PROVIDER_LABELS[key]}")
 
     raw = input("Select providers (e.g. 1 or 1,2) [1]: ").strip() or "1"
     selected = []
@@ -128,9 +79,58 @@ def _select_providers() -> list[str]:
     return selected or ['linode']
 
 
+def _select_countries() -> tuple[list[str], dict[str, list]]:
+    print(f"\n{COLORS['BLUE']}Country Selection:{COLORS['RESET']}")
+    print(f"1) Use bundled countries.yaml")
+    print(f"2) Enter country codes manually")
+
+    choice = input("Select [1]: ").strip() or "1"
+    exclude_map: dict[str, list] = {}
+
+    if choice == "1":
+        default_path = str(WEBRUNNER_INPUTS / 'countries.yaml')
+        raw = input(f"Path [{default_path}]: ").strip()
+        path = Path(raw) if raw else WEBRUNNER_INPUTS / 'countries.yaml'
+
+        if not path.exists():
+            print(f"{COLORS['RED']}File not found: {path}{COLORS['RESET']}")
+            return [], {}
+
+        import yaml
+        with open(path) as f:
+            data = yaml.safe_load(f)
+
+        countries = data.get('countries', [])
+        codes = [c['code'].upper() for c in countries]
+        for c in countries:
+            if c.get('exclude_cidrs'):
+                exclude_map[c['code'].upper()] = c['exclude_cidrs']
+        return codes, exclude_map
+
+    raw = input("Country codes (comma-separated, e.g. RU,IR,CN): ").strip()
+    codes = [c.strip().upper() for c in raw.split(',') if c.strip()]
+    return codes, exclude_map
+
+
+def _select_scan_mode() -> str:
+    print(f"\n{COLORS['BLUE']}Scan Mode:{COLORS['RESET']}")
+    modes = list(SCAN_MODES.items())
+    for i, (key, val) in enumerate(modes, 1):
+        print(f"  {i}) {key:<20} {val['desc']}")
+
+    choice = input("Select [1]: ").strip() or "1"
+    try:
+        idx = int(choice) - 1
+        if 0 <= idx < len(modes):
+            return modes[idx][0]
+    except ValueError:
+        pass
+    return 'geo-scout'
+
+
 def _get_targets_info(scan_mode: str) -> tuple[str, list[int]]:
     if scan_mode == 'geo-scout':
-        default = str(GEO_SCOUT_INPUTS / 'targets.yaml')
+        default = str(WEBRUNNER_INPUTS / 'targets.yaml')
         raw = input(f"Path to targets.yaml [{default}]: ").strip()
         path = raw or default
 
@@ -160,8 +160,8 @@ def _get_targets_info(scan_mode: str) -> tuple[str, list[int]]:
 def _show_estimate_table(total_ips: int, n_ports: int, providers: list[str], scan_mode: str):
     rows = build_estimate_table(total_ips, n_ports, providers, scan_mode)
 
-    W = COLORS['WHITE']
     C = COLORS['CYAN']
+    W = COLORS['WHITE']
     Y = COLORS['YELLOW']
     G = COLORS['GREEN']
     R = COLORS['RESET']
@@ -189,54 +189,97 @@ def _show_estimate_table(total_ips: int, n_ports: int, providers: list[str], sca
     print(f"{Y}  * = recommended (Pareto-optimal: speed vs. billing minimum){R}\n")
 
 
+# ── parameter gathering ───────────────────────────────────────────────────────
+
 def gather_webrunner_parameters() -> dict | None:
     clear_screen()
     print_banner()
-    print(f"{COLORS['CYAN']}WEBRUNNER — New Scan Deployment{COLORS['RESET']}")
-    print(f"{COLORS['CYAN']}================================{COLORS['RESET']}\n")
+    print(f"{COLORS['WHITE']}WEBRUNNER SETUP{COLORS['RESET']}")
+    print(f"{COLORS['WHITE']}==============={COLORS['RESET']}")
 
-    engagement = input("Engagement name: ").strip()
-    if not engagement:
-        print(f"{COLORS['RED']}Engagement name required.{COLORS['RESET']}")
-        wait_for_input()
-        return None
+    config: dict = {}
 
-    country_codes, exclude_map, _ = _select_countries()
-    if not country_codes:
-        print(f"{COLORS['RED']}No countries selected.{COLORS['RESET']}")
-        wait_for_input()
-        return None
+    # Deployment ID
+    config['deployment_id'] = generate_deployment_id()
+    print(f"Deployment ID: {COLORS['CYAN']}{config['deployment_id']}{COLORS['RESET']}")
 
-    print(f"{COLORS['GREEN']}Countries: {', '.join(country_codes)}{COLORS['RESET']}")
+    # Engagement name — auto if blank
+    raw_eng = input(f"Engagement name [{config['deployment_id']}]: ").strip()
+    config['engagement'] = raw_eng or config['deployment_id']
 
-    scan_mode = _select_scan_mode()
+    # Provider selection — multi-select, each provider prompts for creds + region
     providers = _select_providers()
+    config['providers'] = providers
+
+    for provider in providers:
+        provider_config = gather_provider_config(provider)
+        if not provider_config:
+            return None
+        config.update(provider_config)
+
     print(f"{COLORS['GREEN']}Providers: {', '.join(PROVIDER_LABELS[p] for p in providers)}{COLORS['RESET']}")
 
-    targets_file, ports = _get_targets_info(scan_mode)
+    # Deployment type
+    config['deployment_type'] = 'webrunner'
+    config['webrunner_deployment'] = True
 
-    print(f"\n{COLORS['CYAN']}[*] Resolving CIDR data for {len(country_codes)} countries...{COLORS['RESET']}")
-    cc_cidrs = get_country_cidrs(country_codes, exclude_map)
-    total_ips = sum(
-        sum(ip_count(c) for c in cidrs)
-        for cidrs in cc_cidrs.values()
+    # Naming
+    config['webrunner_name'] = get_deployment_name_with_options(
+        deployment_type='webrunner',
+        deployment_id=config['deployment_id'],
+        prefix='wr-',
     )
 
+    # SSH key
+    ssh_key_path = generate_ssh_key(config['webrunner_name'])
+    if not ssh_key_path:
+        print(f"{COLORS['RED']}Failed to generate SSH key.{COLORS['RESET']}")
+        return None
+    config['ssh_key_path'] = f"{ssh_key_path}.pub"
+    config['ssh_key_name'] = os.path.basename(ssh_key_path)
+    print(f"{COLORS['GREEN']}SSH key generated: {ssh_key_path}{COLORS['RESET']}")
+
+    # Country / CIDR selection
+    country_codes, exclude_map = _select_countries()
+    if not country_codes:
+        print(f"{COLORS['RED']}No countries selected.{COLORS['RESET']}")
+        return None
+    config['country_codes'] = country_codes
+    print(f"{COLORS['GREEN']}Countries: {', '.join(country_codes)}{COLORS['RESET']}")
+
+    # Scan mode
+    scan_mode = _select_scan_mode()
+    config['scan_mode'] = scan_mode
+
+    # Targets / ports
+    targets_file, ports = _get_targets_info(scan_mode)
+    config['targets_file'] = targets_file
+    config['ports'] = ports
+    config['ports_str'] = ','.join(str(p) for p in ports)
+    config['masscan_rate'] = SCAN_MODES.get(scan_mode, {}).get('rate', 3000)
+
+    # Resolve CIDR data
+    print(f"\n{COLORS['CYAN']}[*] Resolving CIDR data for {len(country_codes)} countries...{COLORS['RESET']}")
+    cc_cidrs = get_country_cidrs(country_codes, exclude_map)
+    total_ips = sum(sum(ip_count(c) for c in cidrs) for cidrs in cc_cidrs.values())
+
     if total_ips == 0:
-        print(f"{COLORS['RED']}No IPs resolved. Ensure geo-scout RIR data is available.{COLORS['RESET']}")
-        wait_for_input()
+        print(f"{COLORS['RED']}No IPs resolved. Check your country codes or network connectivity.{COLORS['RESET']}")
         return None
 
     print(f"{COLORS['GREEN']}Total: {fmt_ip_count(total_ips)} IPs across {len(country_codes)} countries{COLORS['RESET']}")
+    config['total_ips'] = total_ips
 
+    # Cost / time estimate
     _show_estimate_table(total_ips, len(ports), providers, scan_mode)
 
+    # Preset selection
     print(f"{COLORS['BLUE']}Select deployment preset:{COLORS['RESET']}")
     preset_list = list(PRESETS.items())
     for i, (key, val) in enumerate(preset_list, 1):
         star = " (recommended)" if key == 'balanced' else ""
-        print(f"{i}) {val['label']}{star} — {val['desc']}")
-    print(f"4) Custom chunk size")
+        print(f"  {i}) {val['label']}{star} — {val['desc']}")
+    print(f"  4) Custom chunk size")
 
     preset_choice = input("Select [2]: ").strip() or "2"
 
@@ -261,54 +304,10 @@ def gather_webrunner_parameters() -> dict | None:
             preset_key = 'balanced'
             chunk_size = PRESETS['balanced']['chunk_size']
 
-    opsec_raw = input(f"\nEnhanced OPSEC mode? (randomize names, auto-teardown) [y/N]: ").strip().lower()
-    enhanced_opsec = opsec_raw in ['y', 'yes']
+    config['preset'] = preset_key
+    config['chunk_size'] = chunk_size
 
-    print(f"\n{COLORS['CYAN']}[*] Generating deployment assets...{COLORS['RESET']}")
-    deployment_id = generate_deployment_id()
-    webrunner_name = get_deployment_name_with_options('webrunner', deployment_id, prefix='wr-')
-
-    raw_key_path = generate_ssh_key(webrunner_name)
-    if not raw_key_path:
-        print(f"{COLORS['RED']}Failed to generate SSH key.{COLORS['RESET']}")
-        wait_for_input()
-        return None
-
-    config: dict = {
-        'engagement': engagement,
-        'deployment_id': deployment_id,
-        'deployment_type': 'webrunner',
-        'webrunner_deployment': True,
-        'webrunner_name': webrunner_name,
-        'ssh_key_path': f"{raw_key_path}.pub",
-        'ssh_key_name': os.path.basename(raw_key_path),
-        'providers': providers,
-        'scan_mode': scan_mode,
-        'preset': preset_key,
-        'chunk_size': chunk_size,
-        'country_codes': country_codes,
-        'ports': ports,
-        'ports_str': ','.join(str(p) for p in ports),
-        'targets_file': targets_file,
-        'masscan_rate': SCAN_MODES.get(scan_mode, {}).get('rate', 3000),
-        'enhanced_opsec': enhanced_opsec,
-        'linode_instance_type': DEFAULT_INSTANCE.get('linode', 'g6-standard-2'),
-        'linode_region': 'us-east',
-        'aws_instance_type': DEFAULT_INSTANCE.get('aws', 't3.small'),
-        'aws_region': 'us-east-1',
-    }
-
-    operator_ip = get_public_ip()
-    if operator_ip:
-        config['operator_ip'] = operator_ip
-        print(f"{COLORS['GREEN']}Operator IP: {operator_ip}{COLORS['RESET']}")
-
-    for provider in providers:
-        vars_data = load_vars_file(provider)
-        if vars_data:
-            config.update({k: v for k, v in vars_data.items() if k not in config})
-
-    print(f"{COLORS['CYAN']}[*] Distributing {fmt_ip_count(total_ips)} IPs across nodes...{COLORS['RESET']}")
+    # Distribute CIDRs into node chunks
     all_cidrs: list[str] = []
     for cc in country_codes:
         all_cidrs.extend(cc_cidrs.get(cc.upper(), []))
@@ -317,54 +316,109 @@ def gather_webrunner_parameters() -> dict | None:
     node_chunks = [
         {
             'idx': i,
-            'node_name': f"{webrunner_name}-{i + 1:02d}",
+            'node_name': f"{config['webrunner_name']}-{i + 1:02d}",
             'provider': providers[i % len(providers)],
             'cidrs': chunk['cidrs'],
             'ip_count': chunk['ip_count'],
         }
         for i, chunk in enumerate(chunks)
     ]
-
+    config['node_chunks'] = node_chunks
     print(f"{COLORS['GREEN']}Nodes: {len(node_chunks)} ({preset_key}, {fmt_ip_count(chunk_size)}/node){COLORS['RESET']}")
 
-    print(f"\n{COLORS['YELLOW']}{'─' * 50}{COLORS['RESET']}")
-    print(f"  Deployment:  {webrunner_name}")
-    print(f"  Nodes:       {len(node_chunks)}")
-    print(f"  Providers:   {', '.join(PROVIDER_LABELS[p] for p in providers)}")
-    print(f"  Scan mode:   {scan_mode}")
-    print(f"  Ports:       {', '.join(str(p) for p in ports[:8])}{'...' if len(ports) > 8 else ''}")
-    print(f"  Total IPs:   {fmt_ip_count(total_ips)}")
-    print(f"{COLORS['YELLOW']}{'─' * 50}{COLORS['RESET']}")
+    # Tor routing
+    tor_raw = input(f"\nRoute scans through Tor? [y/N]: ").strip().lower()
+    config['use_tor'] = tor_raw in ['y', 'yes']
+    if config['use_tor']:
+        print(f"{COLORS['YELLOW']}  Tor routing enabled — masscan/nmap will use proxychains{COLORS['RESET']}")
 
-    confirm = input(f"\nDeploy {len(node_chunks)} nodes? [y/N]: ").strip().lower()
-    if confirm not in ['y', 'yes']:
-        print(f"{COLORS['YELLOW']}Deployment cancelled.{COLORS['RESET']}")
-        return None
+    # Operator IP
+    config['operator_ip'] = get_public_ip()
+    if config['operator_ip']:
+        print(f"{COLORS['GREEN']}Operator IP: {config['operator_ip']}{COLORS['RESET']}")
 
-    config['node_chunks'] = node_chunks
-    config['total_ips'] = total_ips
+    # OPSEC / teardown options
+    print(f"\n{COLORS['BLUE']}Deployment Options:{COLORS['RESET']}")
+
+    opsec_raw = input(f"Enhanced OPSEC mode? (randomize node names, minimal logging) [y/N]: ").strip().lower()
+    config['enhanced_opsec'] = opsec_raw in ['y', 'yes']
+
+    teardown_raw = input(f"Teardown nodes after scan completes? [Y/n]: ").strip().lower()
+    config['teardown_after_scan'] = teardown_raw not in ['n', 'no']
+
+    if config['teardown_after_scan']:
+        print(f"{COLORS['YELLOW']}  Nodes will be destroyed automatically when scan completes.{COLORS['RESET']}")
+    else:
+        print(f"{COLORS['CYAN']}  Nodes will remain running after scan — remember to teardown manually.{COLORS['RESET']}")
+
+    # Merge any provider vars not already set
+    for provider in providers:
+        vars_data = load_vars_file(provider)
+        if vars_data:
+            config.update({k: v for k, v in vars_data.items() if k not in config})
+
+    # Apply per-provider instance defaults if not set by gather_provider_config
+    if 'linode_instance_type' not in config:
+        config['linode_instance_type'] = DEFAULT_INSTANCE.get('linode', 'g6-standard-2')
+    if 'aws_instance_type' not in config:
+        config['aws_instance_type'] = DEFAULT_INSTANCE.get('aws', 't3.small')
+
     return config
 
 
 # ── execution ─────────────────────────────────────────────────────────────────
 
 def execute_webrunner_deployment(config: dict):
-    deployment_id = config['deployment_id']
-    node_chunks = config.pop('node_chunks')
+    clear_screen()
+    print_banner()
+    print(f"\n{COLORS['GREEN']}Starting WEBRUNNER deployment...{COLORS['RESET']}")
 
+    log_file = setup_logging(config['deployment_id'], "webrunner_deployment")
+
+    node_chunks = config.pop('node_chunks')
+    n_nodes = len(node_chunks)
+
+    # Summary
+    print(f"\n{COLORS['CYAN']}Deployment Summary:{COLORS['RESET']}")
+    print(f"  Deployment ID:  {config['deployment_id']}")
+    print(f"  Name:           {config['webrunner_name']}")
+
+    naming_info = show_naming_relationship(config['webrunner_name'], config['deployment_id'], 'webrunner')
+    if naming_info:
+        print(f"  └─ {naming_info['relationship_text']}")
+
+    print(f"  Engagement:     {config['engagement']}")
+    print(f"  Providers:      {', '.join(PROVIDER_LABELS[p] for p in config['providers'])}")
+    print(f"  Nodes:          {n_nodes} ({config['preset']}, {fmt_ip_count(config['chunk_size'])}/node)")
+    print(f"  Scan mode:      {config['scan_mode']}")
+    print(f"  Ports:          {', '.join(str(p) for p in config['ports'][:8])}{'...' if len(config['ports']) > 8 else ''}")
+    print(f"  Total IPs:      {fmt_ip_count(config['total_ips'])}")
+    print(f"  Tor routing:    {'Yes' if config['use_tor'] else 'No'}")
+    print(f"  Enhanced OPSEC: {'Yes' if config['enhanced_opsec'] else 'No'}")
+    print(f"  Teardown after: {'Yes' if config['teardown_after_scan'] else 'No'}")
+
+    if config.get('ssh_key_path'):
+        key_name = os.path.basename(config['ssh_key_path']).replace('.pub', '')
+        print(f"  SSH Key:        {key_name}")
+
+    if not confirm_action(f"\n{COLORS['YELLOW']}Proceed with WEBRUNNER deployment?{COLORS['RESET']}", default=True):
+        print(f"\n{COLORS['YELLOW']}Deployment cancelled.{COLORS['RESET']}")
+        return
+
+    # Write node chunks file
     os.makedirs('logs', exist_ok=True)
-    chunks_file = f"logs/node_chunks_{deployment_id}.json"
+    chunks_file = f"logs/node_chunks_{config['deployment_id']}.json"
     with open(chunks_file, 'w') as f:
         json.dump(node_chunks, f)
+
     config['node_chunks_file'] = chunks_file
     config['scanner_ip_log'] = f"logs/scanner_ips_{config['webrunner_name']}.txt"
-    config['results_dir'] = f"logs/webrunner_{deployment_id}"
+    config['results_dir'] = f"logs/webrunner_{config['deployment_id']}"
 
     for provider in config['providers']:
         set_provider_environment({**config, 'provider': provider})
 
     playbook = 'providers/webrunner.yml'
-    n_nodes = len(node_chunks)
 
     print(f"\n{COLORS['CYAN']}[*] Launching WEBRUNNER — {n_nodes} nodes across "
           f"{', '.join(PROVIDER_LABELS[p] for p in config['providers'])}{COLORS['RESET']}")
@@ -374,8 +428,10 @@ def execute_webrunner_deployment(config: dict):
 
     if success:
         print(f"\n{COLORS['GREEN']}[+] WEBRUNNER complete.{COLORS['RESET']}")
-        print(f"    Results:     logs/webrunner_{deployment_id}/")
+        print(f"    Results:     logs/webrunner_{config['deployment_id']}/")
         print(f"    Scanner IPs: logs/scanner_ips_{config['webrunner_name']}.txt")
-        print(f"    Log:         logs/deployment_{deployment_id}.log")
+        print(f"    Log:         logs/deployment_{config['deployment_id']}.log")
     else:
-        print(f"\n{COLORS['RED']}[-] WEBRUNNER failed. Check: logs/deployment_{deployment_id}.log{COLORS['RESET']}")
+        print(f"\n{COLORS['RED']}[-] WEBRUNNER failed. Check: logs/deployment_{config['deployment_id']}.log{COLORS['RESET']}")
+
+    wait_for_input()

@@ -1,0 +1,55 @@
+---
+# WEBRUNNER — default scan targets
+# Define services of interest with ports and match criteria
+targets:
+  - name: SSH
+    description: OpenSSH / SSH servers
+    ports: [22]
+
+  - name: HTTP
+    description: Web servers (plain)
+    ports: [80, 8080, 8000, 8888]
+
+  - name: HTTPS
+    description: Web servers (TLS)
+    ports: [443, 8443, 4443]
+
+  - name: RDP
+    description: Remote Desktop Protocol
+    ports: [3389]
+
+  - name: SMB
+    description: Windows file sharing
+    ports: [445, 139]
+
+  - name: FTP
+    description: File Transfer Protocol
+    ports: [21]
+
+  - name: Telnet
+    description: Legacy telnet
+    ports: [23]
+
+  - name: VNC
+    description: VNC remote desktop
+    ports: [5900, 5901, 5902]
+
+  - name: Proxy
+    description: HTTP/SOCKS proxies
+    ports: [3128, 8888, 1080, 1081]
+
+  - name: Database
+    description: Common database ports
+    ports: [3306, 5432, 1433, 27017, 6379]
+
+  - name: Kubernetes
+    description: K8s API server
+    ports: [6443, 8001]
+
+  - name: Docker
+    description: Docker daemon API
+    ports: [2375, 2376]
+
+  - name: SCADA
+    description: Industrial control systems
+    ports: [102, 502, 44818, 47808]

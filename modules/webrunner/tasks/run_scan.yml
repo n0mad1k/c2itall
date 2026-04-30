@@ -1,7 +1,7 @@
 ---
 # Run the assigned scan on this WEBRUNNER node
 # Per-node vars: node_name, node_cidrs, node_ip_count, node_idx
-# Global vars (from extra-vars): scan_mode, ports_str, masscan_rate, webrunner_name, deployment_id
+# Global vars (from extra-vars): scan_mode, ports_str, masscan_rate, webrunner_name, deployment_id, use_tor
 
 - name: Write CIDR list for {{ node_name }}
   copy:
@@ -11,6 +11,7 @@
 
 - name: Run scan on {{ node_name }} ({{ node_ip_count }} IPs, mode={{ scan_mode }})
   command: >
+    {{ 'proxychains4 -f /etc/proxychains4.conf' if (use_tor | default(false) | bool) else '' }}
     python3 /root/webrunner/node_scanner.py
     --mode {{ scan_mode }}
     --ports {{ ports_str }}

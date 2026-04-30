@@ -47,7 +47,6 @@ def main_menu():
         print(f"11) Deploy Privacy Server {COLORS['GREEN']}(Phantom — VPN, DNS, Matrix, etc.){COLORS['RESET']}")
         print(f"12) Tools & Utilities")
         print(f"13) Cleanup & Teardown")
-        print(f"14) WEBRUNNER {COLORS['CYAN']}(Distributed Geo-Targeted Recon){COLORS['RESET']}")
         print(f"\n99) Exit")
         
         choice = input(f"\nSelect an option: ")
@@ -75,8 +74,6 @@ def main_menu():
             tools_menu()
         elif choice == "13":
             cleanup_menu()
-        elif choice == "14":
-            deploy_webrunner()
         elif choice == "99":
             print(f"\n{COLORS['GREEN']}Exiting C2ingRed. Goodbye!{COLORS['RESET']}")
             sys.exit(0)
@@ -247,6 +244,7 @@ def tools_menu():
         print(f"7) Ops Dashboard {COLORS['CYAN']}(Real-Time Engagement Monitor){COLORS['RESET']}")
         print(f"8) Claude Bot {COLORS['CYAN']}(Matrix-Claude Code Bridge){COLORS['RESET']}")
         print(f"9) Chaos C2 {COLORS['CYAN']}(Deploy / Manage Chaos teamserver){COLORS['RESET']}")
+        print(f"10) WEBRUNNER {COLORS['CYAN']}(Distributed Geo-Targeted Recon){COLORS['RESET']}")
         print(f"99) Return to Main Menu")
         
         choice = input(f"\nSelect an option: ")
@@ -279,6 +277,8 @@ def tools_menu():
             chaos_module = import_module_from_path('deploy_chaos', chaos_module_path)
             if chaos_module:
                 chaos_module.chaos_menu()
+        elif choice == "10":
+            deploy_webrunner()
         elif choice == "99":
             return
         else:

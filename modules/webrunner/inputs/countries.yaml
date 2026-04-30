@@ -1,0 +1,36 @@
+---
+# WEBRUNNER — default country target list
+# Adjust to match your engagement scope
+countries:
+  - code: RU
+    name: Russia
+  - code: CN
+    name: China
+  - code: IR
+    name: Iran
+  - code: KP
+    name: North Korea
+  - code: BY
+    name: Belarus
+  - code: SY
+    name: Syria
+  - code: CU
+    name: Cuba
+  - code: VE
+    name: Venezuela
+  - code: MM
+    name: Myanmar
+  - code: SD
+    name: Sudan
+  - code: IQ
+    name: Iraq
+  - code: UA
+    name: Ukraine
+  - code: AZ
+    name: Azerbaijan
+  - code: GE
+    name: Georgia
+  - code: AM
+    name: Armenia
+  - code: MD
+    name: Moldova
