@@ -29,17 +29,20 @@
     - name: Provision Linode nodes
       include_tasks: "Linode/webrunner_provision_tasks.yml"
       loop: "{{ all_node_chunks | selectattr('provider', 'equalto', 'linode') | list }}"
-      loop_var: node_chunk
+      loop_control:
+        loop_var: node_chunk
 
     - name: Provision AWS nodes
       include_tasks: "AWS/webrunner_provision_tasks.yml"
       loop: "{{ all_node_chunks | selectattr('provider', 'equalto', 'aws') | list }}"
-      loop_var: node_chunk
+      loop_control:
+        loop_var: node_chunk
 
     - name: Provision FlokiNET nodes
       include_tasks: "FlokiNET/webrunner_provision_tasks.yml"
       loop: "{{ all_node_chunks | selectattr('provider', 'equalto', 'flokinet') | list }}"
-      loop_var: node_chunk
+      loop_control:
+        loop_var: node_chunk
 
 
 - name: WEBRUNNER — Configure and scan

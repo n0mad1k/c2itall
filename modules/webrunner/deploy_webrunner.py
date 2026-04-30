@@ -17,9 +17,8 @@ if _base not in sys.path:
 from utils.common import (
     COLORS, clear_screen, print_banner, generate_deployment_id,
     setup_logging, get_public_ip, confirm_action, wait_for_input,
-    load_vars_file,
 )
-from utils.provider_utils import select_provider, gather_provider_config
+from utils.provider_utils import gather_provider_config
 from utils.ssh_utils import generate_ssh_key
 from utils.naming_utils import show_naming_relationship
 from utils.deployment_engine import execute_playbook, set_provider_environment
@@ -352,12 +351,6 @@ def gather_webrunner_parameters() -> dict | None:
         print(f"{COLORS['YELLOW']}  Nodes will be destroyed automatically when scan completes.{COLORS['RESET']}")
     else:
         print(f"{COLORS['CYAN']}  Nodes will remain running after scan — remember to teardown manually.{COLORS['RESET']}")
-
-    # Merge any provider vars not already set
-    for provider in providers:
-        vars_data = load_vars_file(provider)
-        if vars_data:
-            config.update({k: v for k, v in vars_data.items() if k not in config})
 
     # Apply per-provider instance defaults if not set by gather_provider_config
     if 'linode_instance_type' not in config:

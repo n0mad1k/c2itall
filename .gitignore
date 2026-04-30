@@ -1,6 +1,9 @@
 vars.yaml
 venv
-deployment*
+deployment_*.log
+deployment_info_*.txt
+node_chunks_*.json
+scanner_ips_*.txt
 config.yml
 logs/
 domainhunter/
