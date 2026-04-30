@@ -1,36 +1,51 @@
----
-# WEBRUNNER — default country target list
-# Adjust to match your engagement scope
+scan_profile:
+  name: "adversarial-nations-panos"
+  rate: 3000
+  max_hosts_per_country: null
+
 countries:
+  # Largest internet footprint first — most likely to surface exposed devices
   - code: RU
-    name: Russia
-  - code: CN
-    name: China
+    priority: high
+    exclude_cidrs: []
+    notes: "Russia"
+
   - code: IR
-    name: Iran
-  - code: KP
-    name: North Korea
+    priority: high
+    exclude_cidrs: []
+    notes: "Iran"
+
   - code: BY
-    name: Belarus
-  - code: SY
-    name: Syria
-  - code: CU
-    name: Cuba
+    priority: medium
+    exclude_cidrs: []
+    notes: "Belarus"
+
   - code: VE
-    name: Venezuela
+    priority: medium
+    exclude_cidrs: []
+    notes: "Venezuela"
+
+  - code: SY
+    priority: medium
+    exclude_cidrs: []
+    notes: "Syria"
+
+  - code: NI
+    priority: low
+    exclude_cidrs: []
+    notes: "Nicaragua"
+
+  - code: CU
+    priority: low
+    exclude_cidrs: []
+    notes: "Cuba"
+
   - code: MM
-    name: Myanmar
-  - code: SD
-    name: Sudan
-  - code: IQ
-    name: Iraq
-  - code: UA
-    name: Ukraine
-  - code: AZ
-    name: Azerbaijan
-  - code: GE
-    name: Georgia
-  - code: AM
-    name: Armenia
-  - code: MD
-    name: Moldova
+    priority: low
+    exclude_cidrs: []
+    notes: "Myanmar"
+
+  - code: KP
+    priority: low
+    exclude_cidrs: []
+    notes: "North Korea — minimal public internet, low yield expected"
