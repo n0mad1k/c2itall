@@ -21,7 +21,7 @@ from utils.common import (
 )
 from utils.provider_utils import select_provider, gather_provider_config
 from utils.ssh_utils import generate_ssh_key
-from utils.naming_utils import get_deployment_name_with_options, show_naming_relationship
+from utils.naming_utils import show_naming_relationship
 from utils.deployment_engine import execute_playbook, set_provider_environment
 from utils.chunk_utils import get_country_cidrs, chunk_cidrs, ip_count
 from utils.provider_rates import (
@@ -223,12 +223,8 @@ def gather_webrunner_parameters() -> dict | None:
     config['deployment_type'] = 'webrunner'
     config['webrunner_deployment'] = True
 
-    # Naming
-    config['webrunner_name'] = get_deployment_name_with_options(
-        deployment_type='webrunner',
-        deployment_id=config['deployment_id'],
-        prefix='wr-',
-    )
+    # Naming — auto-derive from deployment_id, no second prompt
+    config['webrunner_name'] = f"wr-{config['deployment_id']}"
 
     # SSH key
     ssh_key_path = generate_ssh_key(config['webrunner_name'])
