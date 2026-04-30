@@ -47,6 +47,7 @@ def main_menu():
         print(f"11) Deploy Privacy Server {COLORS['GREEN']}(Phantom — VPN, DNS, Matrix, etc.){COLORS['RESET']}")
         print(f"12) Tools & Utilities")
         print(f"13) Cleanup & Teardown")
+        print(f"14) WEBRUNNER {COLORS['CYAN']}(Distributed Geo-Targeted Recon){COLORS['RESET']}")
         print(f"\n99) Exit")
         
         choice = input(f"\nSelect an option: ")
@@ -74,6 +75,8 @@ def main_menu():
             tools_menu()
         elif choice == "13":
             cleanup_menu()
+        elif choice == "14":
+            deploy_webrunner()
         elif choice == "99":
             print(f"\n{COLORS['GREEN']}Exiting C2ingRed. Goodbye!{COLORS['RESET']}")
             sys.exit(0)
@@ -211,6 +214,22 @@ def deploy_attack_box():
     attack_box_module = import_module_from_path('deploy_attack_box', attack_box_module_path)
     if attack_box_module:
         attack_box_module.attack_box_menu()
+
+def deploy_webrunner():
+    """Launch the WEBRUNNER distributed geo-targeted recon module"""
+    archive_logs_before_deployment()
+
+    wr_module_path = os.path.join(os.path.dirname(__file__), 'modules', 'webrunner', 'deploy_webrunner.py')
+
+    if not os.path.exists(wr_module_path):
+        print(f"\n{COLORS['RED']}WEBRUNNER module not found at: {wr_module_path}{COLORS['RESET']}")
+        wait_for_input()
+        return
+
+    wr_module = import_module_from_path('deploy_webrunner', wr_module_path)
+    if wr_module:
+        wr_module.webrunner_menu()
+
 
 def tools_menu():
     """Display the tools submenu"""

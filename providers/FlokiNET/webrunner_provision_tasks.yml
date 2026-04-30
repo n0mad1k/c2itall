@@ -1,0 +1,12 @@
+---
+# FlokiNET provision tasks for WEBRUNNER nodes
+# FlokiNET does not expose a public API — manual provisioning required.
+
+- name: FlokiNET not supported for automated WEBRUNNER deployment
+  fail:
+    msg: >
+      FlokiNET does not provide a public provisioning API.
+      To use FlokiNET nodes with WEBRUNNER, provision VPS instances manually,
+      add their IPs to the [webrunner_nodes] inventory group, and re-run
+      the scan plays directly. Node chunk {{ node_chunk.node_name }} assigned
+      {{ node_chunk.ip_count }} IPs.

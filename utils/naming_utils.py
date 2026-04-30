@@ -215,9 +215,10 @@ def show_naming_relationship(name, deployment_id, deployment_type):
         'c2': 's-',  # s for server
         'tracker': 't-',
         'attack_box': 'a-',
-        'payload': 'p-'
+        'payload': 'p-',
+        'webrunner': 'wr-',
     }
-    
+
     expected_prefix = prefix_map.get(deployment_type, '')
     
     if expected_prefix and name.startswith(expected_prefix):
@@ -239,6 +240,7 @@ def get_deployment_type_prefix(deployment_type):
         'tracker': 't-',
         'attack_box': 'a-',
         'payload': 'p-',
-        'phishing': 'p-'
+        'phishing': 'p-',
+        'webrunner': 'wr-',
     }
     return prefix_map.get(deployment_type, '')

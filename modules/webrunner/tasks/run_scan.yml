@@ -1,0 +1,29 @@
+---
+# Run the assigned scan on this WEBRUNNER node
+# Per-node vars: node_name, node_cidrs, node_ip_count, node_idx
+# Global vars (from extra-vars): scan_mode, ports_str, masscan_rate, webrunner_name, deployment_id
+
+- name: Write CIDR list for {{ node_name }}
+  copy:
+    content: "{{ node_cidrs | join('\n') }}\n"
+    dest: /root/webrunner/cidrs.txt
+    mode: '0644'
+
+- name: Run scan on {{ node_name }} ({{ node_ip_count }} IPs, mode={{ scan_mode }})
+  command: >
+    python3 /root/webrunner/node_scanner.py
+    --mode {{ scan_mode }}
+    --ports {{ ports_str }}
+    --rate {{ masscan_rate }}
+    --node-name {{ node_name }}
+  args:
+    chdir: /root/webrunner
+  register: scan_output
+  async: 43200
+  poll: 60
+  ignore_errors: true
+
+- name: Show scan output for {{ node_name }}
+  debug:
+    var: scan_output.stdout_lines
+  when: scan_output.stdout_lines is defined

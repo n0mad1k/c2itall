@@ -1,0 +1,40 @@
+---
+# Configure a WEBRUNNER scan node — install deps, create workspace
+
+- name: Update apt cache
+  apt:
+    update_cache: true
+    cache_valid_time: 3600
+  retries: 3
+  delay: 10
+
+- name: Install scan tools
+  apt:
+    name:
+      - masscan
+      - nmap
+      - python3
+      - python3-pip
+    state: present
+  retries: 3
+  delay: 10
+
+- name: Create webrunner workspace
+  file:
+    path: /root/webrunner
+    state: directory
+    mode: '0700'
+
+- name: Copy node scanner script
+  copy:
+    src: "{{ playbook_dir }}/../modules/webrunner/tasks/node_scanner.py"
+    dest: /root/webrunner/node_scanner.py
+    mode: '0755'
+
+- name: Copy targets.yaml for geo-scout mode
+  copy:
+    src: "{{ targets_file }}"
+    dest: /root/webrunner/targets.yaml
+    mode: '0644'
+  when: scan_mode == 'geo-scout' and targets_file != ""
+  ignore_errors: true

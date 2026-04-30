@@ -1,0 +1,98 @@
+---
+# AWS provision tasks for one WEBRUNNER node
+# Called in a loop — loop_var: node_chunk
+# Requires: aws_access_key, aws_secret_key, aws_region, aws_instance_type,
+#           ssh_key_name, webrunner_name, deployment_id, operator_ip,
+#           scanner_ip_log, results_dir
+
+- name: Read public key for {{ node_chunk.node_name }}
+  slurp:
+    src: "~/.ssh/{{ ssh_key_name }}.pub"
+  register: wr_pubkey_aws
+
+- name: Import SSH key to AWS ({{ node_chunk.node_name }})
+  amazon.aws.ec2_key:
+    name: "{{ webrunner_name }}"
+    key_material: "{{ wr_pubkey_aws.content | b64decode | trim }}"
+    region: "{{ aws_region | default('us-east-1') }}"
+    aws_access_key: "{{ aws_access_key }}"
+    aws_secret_key: "{{ aws_secret_key }}"
+    state: present
+  ignore_errors: true
+
+- name: Create security group for {{ node_chunk.node_name }}
+  amazon.aws.ec2_security_group:
+    name: "wr-{{ deployment_id }}-sg"
+    description: "WEBRUNNER {{ deployment_id }} scanner nodes"
+    region: "{{ aws_region | default('us-east-1') }}"
+    aws_access_key: "{{ aws_access_key }}"
+    aws_secret_key: "{{ aws_secret_key }}"
+    rules:
+      - proto: tcp
+        ports: [22]
+        cidr_ip: "{{ operator_ip | default('0.0.0.0/0') }}/32"
+    rules_egress:
+      - proto: all
+        cidr_ip: "0.0.0.0/0"
+    tags:
+      Name: "wr-{{ deployment_id }}-sg"
+      DeploymentID: "{{ deployment_id }}"
+    state: present
+  register: wr_sg
+  ignore_errors: true
+
+- name: Launch EC2 instance {{ node_chunk.node_name }}
+  amazon.aws.ec2_instance:
+    name: "{{ node_chunk.node_name }}"
+    key_name: "{{ webrunner_name }}"
+    instance_type: "{{ aws_instance_type | default('t3.small') }}"
+    image_id: "{{ aws_ami | default('ami-0c55b159cbfafe1f0') }}"
+    region: "{{ aws_region | default('us-east-1') }}"
+    aws_access_key: "{{ aws_access_key }}"
+    aws_secret_key: "{{ aws_secret_key }}"
+    security_group: "wr-{{ deployment_id }}-sg"
+    network:
+      assign_public_ip: true
+    tags:
+      Name: "{{ node_chunk.node_name }}"
+      DeploymentID: "{{ deployment_id }}"
+      webrunner: "{{ webrunner_name }}"
+    wait: true
+    state: running
+  register: wr_ec2
+
+- name: Extract EC2 public IP
+  set_fact:
+    wr_node_ip: "{{ wr_ec2.instances[0].public_ip_address }}"
+
+- name: Log scanner IP
+  lineinfile:
+    path: "{{ scanner_ip_log }}"
+    line: "{{ node_chunk.node_name }}: {{ wr_node_ip }}"
+    create: true
+
+- name: Wait for SSH on {{ node_chunk.node_name }} ({{ wr_node_ip }})
+  wait_for:
+    host: "{{ wr_node_ip }}"
+    port: 22
+    delay: 30
+    timeout: 300
+
+- name: Add {{ node_chunk.node_name }} to inventory
+  add_host:
+    name: "{{ wr_node_ip }}"
+    groups: webrunner_nodes
+    ansible_host: "{{ wr_node_ip }}"
+    ansible_user: admin
+    ansible_ssh_private_key_file: "~/.ssh/{{ ssh_key_name }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+    node_name: "{{ node_chunk.node_name }}"
+    node_cidrs: "{{ node_chunk.cidrs }}"
+    node_ip_count: "{{ node_chunk.ip_count }}"
+    node_idx: "{{ node_chunk.idx }}"
+    ec2_instance_id: "{{ wr_ec2.instances[0].instance_id }}"
+    provider: aws
+
+- name: Show {{ node_chunk.node_name }} ready
+  debug:
+    msg: "AWS node ready: {{ node_chunk.node_name }} @ {{ wr_node_ip }} ({{ node_chunk.ip_count | int | string }} IPs)"
