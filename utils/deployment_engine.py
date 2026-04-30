@@ -126,15 +126,17 @@ def set_provider_environment(config):
         if config.get('linode_token'):
             os.environ['LINODE_TOKEN'] = config['linode_token']
         else:
-            # Try to load from vars file
+            # Pull from Infisical at runtime
             try:
-                from utils.common import load_vars_file
-                vars_data = load_vars_file(provider)
-                if vars_data and vars_data.get('linode_token'):
-                    os.environ['LINODE_TOKEN'] = vars_data['linode_token']
-                    config['linode_token'] = vars_data['linode_token']
+                token = subprocess.check_output(
+                    [os.path.expanduser('~/.local/bin/creds'), 'get', 'LINODE_TOKEN', 'homelab'],
+                    text=True, stderr=subprocess.DEVNULL,
+                ).strip()
+                if token:
+                    os.environ['LINODE_TOKEN'] = token
+                    config['linode_token'] = token
             except Exception as e:
-                logging.warning(f"Failed to load Linode token from vars file: {e}")
+                logging.warning(f"Failed to load Linode token from Infisical: {e}")
 
     elif provider == "flokinet":
         if config.get('flokinet_api_key'):
