@@ -157,8 +157,8 @@ def _get_targets_info(scan_mode: str) -> tuple[str, list[int]]:
     return "", sorted(set(ports_list)) or [80, 443, 22]
 
 
-def _show_estimate_table(total_ips: int, n_ports: int, providers: list[str], scan_mode: str):
-    rows = build_estimate_table(total_ips, n_ports, providers, scan_mode)
+def _show_estimate_table(total_ips: int, n_ports: int, providers: list[str], scan_mode: str, use_tor: bool = False):
+    rows = build_estimate_table(total_ips, n_ports, providers, scan_mode, use_tor=use_tor)
 
     C = COLORS['CYAN']
     W = COLORS['WHITE']
@@ -166,10 +166,11 @@ def _show_estimate_table(total_ips: int, n_ports: int, providers: list[str], sca
     G = COLORS['GREEN']
     R = COLORS['RESET']
 
+    tor_note = "  [Tor: estimates reflect nmap/probe latency]" if use_tor else ""
     print(f"\n{C}{'─' * 70}{R}")
     print(f"{C}  WEBRUNNER — Cost & Time Estimate{R}")
     print(f"{W}  Total: {fmt_ip_count(total_ips)} IPs   {n_ports} ports   Mode: {scan_mode}{R}")
-    print(f"{W}  Providers: {', '.join(PROVIDER_LABELS[p] for p in providers)}{R}")
+    print(f"{W}  Providers: {', '.join(PROVIDER_LABELS[p] for p in providers)}{Y}{tor_note}{R}")
     print(f"{C}{'─' * 70}{R}")
     print(f"  {'Preset':<14} {'Nodes':>6} {'IPs/Node':>10} {'Time/Node':>12} {'Total $':>10}")
     print(f"  {'─' * 56}")
@@ -266,8 +267,19 @@ def gather_webrunner_parameters() -> dict | None:
     print(f"{COLORS['GREEN']}Total: {fmt_ip_count(total_ips)} IPs across {len(country_codes)} countries{COLORS['RESET']}")
     config['total_ips'] = total_ips
 
-    # Cost / time estimate
-    _show_estimate_table(total_ips, len(ports), providers, scan_mode)
+    # Tor routing — ask before estimate so table reflects the slowdown
+    tor_raw = input(f"\nRoute scans through Tor? [y/N]: ").strip().lower()
+    config['use_tor'] = tor_raw in ['y', 'yes']
+    if config['use_tor']:
+        if scan_mode == 'masscan-only':
+            print(f"{COLORS['YELLOW']}  Warning: masscan uses raw sockets and bypasses proxychains — Tor has no effect in masscan-only mode.{COLORS['RESET']}")
+        elif scan_mode in ('geo-scout', 'masscan+nmap'):
+            print(f"{COLORS['YELLOW']}  Note: masscan phase bypasses Tor (raw sockets); nmap and probe phases will use Tor.{COLORS['RESET']}")
+        else:
+            print(f"{COLORS['YELLOW']}  Tor routing enabled — all nmap traffic will use proxychains → SOCKS5 9050.{COLORS['RESET']}")
+
+    # Cost / time estimate — reflects Tor throughput impact
+    _show_estimate_table(total_ips, len(ports), providers, scan_mode, use_tor=config['use_tor'])
 
     # Preset selection
     print(f"{COLORS['BLUE']}Select deployment preset:{COLORS['RESET']}")
@@ -321,12 +333,6 @@ def gather_webrunner_parameters() -> dict | None:
     ]
     config['node_chunks'] = node_chunks
     print(f"{COLORS['GREEN']}Nodes: {len(node_chunks)} ({preset_key}, {fmt_ip_count(chunk_size)}/node){COLORS['RESET']}")
-
-    # Tor routing
-    tor_raw = input(f"\nRoute scans through Tor? [y/N]: ").strip().lower()
-    config['use_tor'] = tor_raw in ['y', 'yes']
-    if config['use_tor']:
-        print(f"{COLORS['YELLOW']}  Tor routing enabled — masscan/nmap will use proxychains{COLORS['RESET']}")
 
     # Operator IP
     config['operator_ip'] = get_public_ip()

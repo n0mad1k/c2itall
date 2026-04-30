@@ -73,13 +73,21 @@ def fmt_ip_count(n: int) -> str:
     return str(n)
 
 
+# Tor adds ~5x latency overhead for TCP probes; masscan bypasses proxychains (raw sockets)
+# so only nmap/probe phases are affected — modes that include masscan see partial impact
+TOR_RATE_MULTIPLIER = 0.2
+
+
 def build_estimate_table(
     total_ips: int,
     n_ports: int,
     providers: list[str],
     scan_mode: str,
+    use_tor: bool = False,
 ) -> list[dict]:
     mode_rate = SCAN_MODES.get(scan_mode, {'rate': 3000})['rate']
+    if use_tor and scan_mode != 'masscan-only':
+        mode_rate = int(mode_rate * TOR_RATE_MULTIPLIER)
     rows = []
     for preset_key, preset in PRESETS.items():
         n_chunks = max(1, math.ceil(total_ips / preset['chunk_size']))
