@@ -385,15 +385,17 @@ def execute_webrunner_deployment(config: dict):
         print(f"\n{COLORS['YELLOW']}Deployment cancelled.{COLORS['RESET']}")
         return
 
-    # Write node chunks file
-    os.makedirs('logs', exist_ok=True)
-    chunks_file = f"logs/node_chunks_{config['deployment_id']}.json"
+    # Write node chunks file — absolute paths so Ansible lookup('file',...) works
+    # regardless of playbook-relative CWD
+    logs_dir = os.path.abspath(os.path.join(_base, 'logs'))
+    os.makedirs(logs_dir, exist_ok=True)
+    chunks_file = os.path.join(logs_dir, f"node_chunks_{config['deployment_id']}.json")
     with open(chunks_file, 'w') as f:
         json.dump(node_chunks, f)
 
     config['node_chunks_file'] = chunks_file
-    config['scanner_ip_log'] = f"logs/scanner_ips_{config['webrunner_name']}.txt"
-    config['results_dir'] = f"logs/webrunner_{config['deployment_id']}"
+    config['scanner_ip_log'] = os.path.join(logs_dir, f"scanner_ips_{config['webrunner_name']}.txt")
+    config['results_dir'] = os.path.join(logs_dir, f"webrunner_{config['deployment_id']}")
 
     for provider in config['providers']:
         set_provider_environment({**config, 'provider': provider})
