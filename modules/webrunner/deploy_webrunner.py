@@ -36,79 +36,10 @@ PROVIDER_LABELS = {'linode': 'Linode', 'aws': 'AWS', 'flokinet': 'FlokiNET'}
 
 # ── menu ──────────────────────────────────────────────────────────────────────
 
-def _available_providers() -> list[str]:
-    """Return providers that have credentials available."""
-    import subprocess
-    available = []
-    creds_bin = os.path.expanduser('~/.local/bin/creds')
-
-    # Linode — check env first, then Infisical
-    if os.environ.get('LINODE_TOKEN'):
-        available.append('linode')
-    else:
-        try:
-            token = subprocess.check_output(
-                [creds_bin, 'get', 'LINODE_TOKEN', 'homelab'],
-                text=True, stderr=subprocess.DEVNULL,
-            ).strip()
-            if token:
-                available.append('linode')
-        except Exception:
-            pass
-
-    # AWS
-    if os.environ.get('AWS_ACCESS_KEY_ID') and os.environ.get('AWS_SECRET_ACCESS_KEY'):
-        available.append('aws')
-
-    # FlokiNET
-    if os.environ.get('FLOKINET_API_KEY'):
-        available.append('flokinet')
-    else:
-        try:
-            key = subprocess.check_output(
-                [creds_bin, 'get', 'FLOKINET_API_KEY', 'homelab'],
-                text=True, stderr=subprocess.DEVNULL,
-            ).strip()
-            if key:
-                available.append('flokinet')
-        except Exception:
-            pass
-
-    return available
-
-
 def webrunner_menu():
-    while True:
-        clear_screen()
-        print_banner()
-        print(f"{COLORS['CYAN']}WEBRUNNER — Distributed Geo-Targeted Recon{COLORS['RESET']}")
-        print(f"{COLORS['CYAN']}==========================================={COLORS['RESET']}")
-
-        available = _available_providers()
-        if available:
-            providers_str = ', '.join(PROVIDER_LABELS[p] for p in available)
-            print(f"1) New Scan Deployment  [{providers_str}]")
-        else:
-            print(f"{COLORS['YELLOW']}  No provider credentials found.{COLORS['RESET']}")
-            print(f"  Set a token in Infisical to enable deployments:")
-            print(f"    creds set LINODE_TOKEN <token> homelab")
-
-        print(f"\n99) Return to Main Menu")
-
-        choice = input(f"\nSelect: ").strip()
-        if choice == "1":
-            if not available:
-                print(f"{COLORS['RED']}No credentials configured. Add a provider token first.{COLORS['RESET']}")
-                wait_for_input()
-                continue
-            config = gather_webrunner_parameters()
-            if config:
-                execute_webrunner_deployment(config)
-        elif choice == "99":
-            break
-        else:
-            print(f"{COLORS['RED']}Invalid option.{COLORS['RESET']}")
-            wait_for_input()
+    config = gather_webrunner_parameters()
+    if config:
+        execute_webrunner_deployment(config)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

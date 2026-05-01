@@ -3,24 +3,38 @@
 Linode provider utilities for C2ingRed deployment system
 """
 
+import os
 import random
 import logging
+import subprocess
 from .common import COLORS, load_vars_file
 
 def get_linode_credentials(provider_vars=None):
-    """Get Linode API token from user or vars file"""
-    if not provider_vars:
-        provider_vars = load_vars_file('linode')
-    
-    default_token = provider_vars.get('linode_token', '')
-    
+    """Get Linode API token — Infisical first, vars.yaml fallback, then prompt."""
+    default_token = ''
+
+    # Try Infisical first
+    try:
+        default_token = subprocess.check_output(
+            [os.path.expanduser('~/.local/bin/creds'), 'get', 'LINODE_TOKEN', 'homelab'],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        pass
+
+    # Fall back to vars.yaml
+    if not default_token:
+        if not provider_vars:
+            provider_vars = load_vars_file('linode')
+        default_token = provider_vars.get('linode_token', '')
+
     print(f"\n{COLORS['BLUE']}Linode Configuration{COLORS['RESET']}")
     token = input(f"Linode API Token [{'*****' if default_token else 'required'}]: ") or default_token
-    
+
     if not token:
         print(f"{COLORS['RED']}Linode API token is required{COLORS['RESET']}")
         return None
-    
+
     return {'linode_token': token}
 
 def select_linode_region(provider_vars=None, component=None):
