@@ -11,6 +11,7 @@
     ansible_python_interpreter: "{{ ansible_playbook_python }}"
     ssh_key_name: "{{ ssh_key_path | basename | regex_replace('\\.pub$', '') }}"
     all_node_chunks: "{{ lookup('file', node_chunks_file) | from_json }}"
+    linode_chunks: "{{ all_node_chunks | selectattr('provider', 'equalto', 'linode') | list }}"
 
   tasks:
     - name: Ensure results directory
@@ -26,11 +27,107 @@
         mode: '0644'
         force: false
 
-    - name: Provision Linode nodes
-      include_tasks: "Linode/webrunner_provision_tasks.yml"
-      loop: "{{ all_node_chunks | selectattr('provider', 'equalto', 'linode') | list }}"
-      loop_control:
-        loop_var: node_chunk
+    # ── Linode — all nodes created in parallel ────────────────────────────────
+
+    - block:
+        - name: Generate shared root password
+          set_fact:
+            wr_root_pass: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
+
+        - name: Read SSH public key
+          slurp:
+            src: "~/.ssh/{{ ssh_key_name }}.pub"
+          register: wr_pubkey
+
+        - name: Register SSH key with Linode
+          uri:
+            url: "https://api.linode.com/v4/profile/sshkeys"
+            method: POST
+            headers:
+              Authorization: "Bearer {{ lookup('env', 'LINODE_TOKEN') }}"
+              Content-Type: "application/json"
+            body_format: json
+            body:
+              label: "{{ webrunner_name }}"
+              ssh_key: "{{ wr_pubkey.content | b64decode | trim }}"
+            status_code: [200, 201, 422]
+          ignore_errors: true
+
+        - name: Fire all Linode instance creates
+          uri:
+            url: "https://api.linode.com/v4/linode/instances"
+            method: POST
+            headers:
+              Authorization: "Bearer {{ lookup('env', 'LINODE_TOKEN') }}"
+              Content-Type: "application/json"
+            body_format: json
+            body:
+              label: "{{ item.node_name }}"
+              type: "{{ linode_instance_type | default('g6-standard-2') }}"
+              region: "{{ linode_region | default('us-east') }}"
+              image: "linode/debian12"
+              root_pass: "{{ wr_root_pass }}"
+              authorized_keys:
+                - "{{ wr_pubkey.content | b64decode | trim }}"
+              booted: true
+              backups_enabled: false
+              private_ip: false
+              tags:
+                - "webrunner"
+                - "{{ webrunner_name }}"
+                - "{{ deployment_id }}"
+            status_code: [200, 201]
+          loop: "{{ linode_chunks }}"
+          async: 300
+          poll: 0
+          register: wr_create_jobs
+
+        - name: Wait for all creates to confirm
+          async_status:
+            jid: "{{ item.ansible_job_id }}"
+          loop: "{{ wr_create_jobs.results }}"
+          register: wr_create_results
+          until: wr_create_results.finished
+          retries: 30
+          delay: 10
+
+        - name: Add all Linode nodes to inventory
+          add_host:
+            name: "{{ item.json.ipv4[0] }}"
+            groups: webrunner_nodes
+            ansible_host: "{{ item.json.ipv4[0] }}"
+            ansible_user: root
+            ansible_ssh_private_key_file: "~/.ssh/{{ ssh_key_name }}"
+            ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+            node_name: "{{ linode_chunks[idx].node_name }}"
+            node_cidrs: "{{ linode_chunks[idx].cidrs }}"
+            node_ip_count: "{{ linode_chunks[idx].ip_count }}"
+            node_idx: "{{ linode_chunks[idx].idx }}"
+            linode_instance_id: "{{ item.json.id }}"
+            provider: linode
+          loop: "{{ wr_create_results.results }}"
+          loop_control:
+            index_var: idx
+
+        - name: Log scanner IPs
+          lineinfile:
+            path: "{{ scanner_ip_log }}"
+            line: "{{ linode_chunks[idx].node_name }}: {{ item.json.ipv4[0] }}"
+            create: true
+          loop: "{{ wr_create_results.results }}"
+          loop_control:
+            index_var: idx
+
+        - name: Show provisioned nodes
+          debug:
+            msg: "Node ready: {{ linode_chunks[idx].node_name }} @ {{ item.json.ipv4[0] }}"
+          loop: "{{ wr_create_results.results }}"
+          loop_control:
+            index_var: idx
+
+      when: linode_chunks | length > 0
+
+    # ── AWS / FlokiNET remain serial until those providers are implemented ─────
 
     - name: Provision AWS nodes
       include_tasks: "AWS/webrunner_provision_tasks.yml"
@@ -49,6 +146,7 @@
   hosts: webrunner_nodes
   gather_facts: false
   become: true
+  strategy: free
 
   tasks:
     - name: Wait for SSH

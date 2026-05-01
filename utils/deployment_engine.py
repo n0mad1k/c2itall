@@ -164,6 +164,10 @@ def execute_playbook(playbook, config):
             '--extra-vars', create_extra_vars(config)
         ]
 
+        # Webrunner runs many nodes in parallel — increase fork count
+        if 'webrunner' in playbook:
+            cmd += ['-f', '50']
+
         # Write sensitive vars to a temp file (0o600) so they reach Ansible as
         # variables without appearing in process listings or the main extra-vars JSON.
         # Read from environment (set by set_provider_environment) so this works even
