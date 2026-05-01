@@ -35,7 +35,7 @@ PRESETS = {
 }
 
 DEFAULT_INSTANCE = {
-    'linode':   'g6-standard-2',
+    'linode':   'g6-nanode-1',
     'aws':      't3.small',
     'flokinet': 'vps-2',
 }

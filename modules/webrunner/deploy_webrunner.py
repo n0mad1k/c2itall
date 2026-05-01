@@ -339,7 +339,7 @@ def gather_webrunner_parameters() -> dict | None:
 
     # Apply per-provider instance defaults if not set by gather_provider_config
     if 'linode_instance_type' not in config:
-        config['linode_instance_type'] = DEFAULT_INSTANCE.get('linode', 'g6-standard-2')
+        config['linode_instance_type'] = DEFAULT_INSTANCE.get('linode', 'g6-nanode-1')
     if 'aws_instance_type' not in config:
         config['aws_instance_type'] = DEFAULT_INSTANCE.get('aws', 't3.small')
 
