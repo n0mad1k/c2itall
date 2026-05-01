@@ -6,13 +6,16 @@ Reads cidrs.txt, runs scan pipeline, writes results.json.
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 WORKDIR = Path("/root/webrunner")
+NMAP_WORKERS = int(os.environ.get("WEBRUNNER_NMAP_WORKERS", "10"))
 
 
 def log(msg: str):
@@ -120,7 +123,7 @@ def probe_service(ip: str, port: int) -> str:
         with socket.create_connection((ip, port), timeout=3) as s:
             s.settimeout(3)
             try:
-                s.send(b"HEAD / HTTP/1.0\r\nHost: %b\r\n\r\n" % ip.encode())
+                s.send(b"HEAD / HTTP/1.0\r\nHost: " + ip.encode() + b"\r\n\r\n")
                 banner = s.recv(512).decode(errors="replace").strip()
                 return banner[:200]
             except Exception:
@@ -145,7 +148,6 @@ def scan_nmap_only(ports: str, node_name: str) -> list[dict]:
     port_str = ports
     out_file = WORKDIR / "nmap_sweep.xml"
 
-    targets_arg = " ".join(cidrs[:50])  # nmap handles CIDRs natively
     cmd = [
         "nmap", "-sV", "--version-intensity", "3",
         "-p", port_str, "-T4", "--open",
@@ -196,17 +198,22 @@ def scan_masscan_nmap(ports: str, rate: int, node_name: str) -> list[dict]:
         return []
 
     by_ip = group_hits_by_ip(hits)
-    log(f"nmap fingerprinting {len(by_ip)} hosts...")
+    log(f"nmap fingerprinting {len(by_ip)} hosts (workers={NMAP_WORKERS})...")
     results = []
-    for idx, (ip, ip_ports) in enumerate(by_ip.items()):
-        nmap_info = run_nmap(ip, ip_ports)
-        for port in ip_ports:
-            entry: dict = {"ip": ip, "port": port}
-            if port in nmap_info:
-                entry.update(nmap_info[port])
-            results.append(entry)
-        if (idx + 1) % 50 == 0:
-            log(f"  nmap: {idx + 1}/{len(by_ip)} hosts done")
+    done = 0
+    with ThreadPoolExecutor(max_workers=NMAP_WORKERS) as pool:
+        futures = {pool.submit(run_nmap, ip, ip_ports): (ip, ip_ports) for ip, ip_ports in by_ip.items()}
+        for future in as_completed(futures):
+            ip, ip_ports = futures[future]
+            nmap_info = future.result()
+            for port in ip_ports:
+                entry: dict = {"ip": ip, "port": port}
+                if port in nmap_info:
+                    entry.update(nmap_info[port])
+                results.append(entry)
+            done += 1
+            if done % 50 == 0:
+                log(f"  nmap: {done}/{len(by_ip)} hosts done")
     return results
 
 
@@ -231,25 +238,32 @@ def scan_geo_scout(ports: str, rate: int, node_name: str) -> list[dict]:
         except Exception:
             pass
 
-    results = []
-    for idx, (ip, ip_ports) in enumerate(by_ip.items()):
+    def scan_one(ip: str, ip_ports: list[int]) -> list[dict]:
         nmap_info = run_nmap(ip, ip_ports)
+        entries = []
         for port in ip_ports:
             entry: dict = {"ip": ip, "port": port}
             if port in nmap_info:
                 entry.update(nmap_info[port])
-            # Banner grab / probe
             banner = probe_service(ip, port)
             if banner:
                 entry["probe_banner"] = banner
-            # Match against target profile
             if port in target_ports:
                 t = target_ports[port]
                 entry["target_name"] = t.get("name", "")
                 entry["target_desc"] = t.get("description", "")
-            results.append(entry)
-        if (idx + 1) % 50 == 0:
-            log(f"  geo-scout: {idx + 1}/{len(by_ip)} hosts done")
+            entries.append(entry)
+        return entries
+
+    results = []
+    done = 0
+    with ThreadPoolExecutor(max_workers=NMAP_WORKERS) as pool:
+        futures = {pool.submit(scan_one, ip, ip_ports): ip for ip, ip_ports in by_ip.items()}
+        for future in as_completed(futures):
+            results.extend(future.result())
+            done += 1
+            if done % 50 == 0:
+                log(f"  geo-scout: {done}/{len(by_ip)} hosts done")
     return results
 
 

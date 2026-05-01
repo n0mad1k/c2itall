@@ -10,12 +10,18 @@
     mode: '0644'
 
 - name: Run scan on {{ node_name }} ({{ node_ip_count }} IPs, mode={{ scan_mode }})
-  command: >
-    python3 /root/webrunner/node_scanner.py
-    --mode {{ scan_mode }}
-    --ports {{ ports_str }}
-    --rate {{ masscan_rate }}
-    --node-name {{ node_name }}
+  command:
+    argv:
+      - python3
+      - /root/webrunner/node_scanner.py
+      - --mode
+      - "{{ scan_mode }}"
+      - --ports
+      - "{{ ports_str }}"
+      - --rate
+      - "{{ masscan_rate }}"
+      - --node-name
+      - "{{ node_name }}"
   args:
     chdir: /root/webrunner
   register: scan_output
@@ -25,13 +31,21 @@
   when: not (use_tor | default(false) | bool)
 
 - name: Run scan via Tor on {{ node_name }} ({{ node_ip_count }} IPs, mode={{ scan_mode }})
-  command: >
-    proxychains4 -f /etc/proxychains4.conf
-    python3 /root/webrunner/node_scanner.py
-    --mode {{ scan_mode }}
-    --ports {{ ports_str }}
-    --rate {{ masscan_rate }}
-    --node-name {{ node_name }}
+  command:
+    argv:
+      - proxychains4
+      - -f
+      - /etc/proxychains4.conf
+      - python3
+      - /root/webrunner/node_scanner.py
+      - --mode
+      - "{{ scan_mode }}"
+      - --ports
+      - "{{ ports_str }}"
+      - --rate
+      - "{{ masscan_rate }}"
+      - --node-name
+      - "{{ node_name }}"
   args:
     chdir: /root/webrunner
   register: scan_output
