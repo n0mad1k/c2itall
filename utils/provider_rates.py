@@ -47,10 +47,20 @@ BILLING_MINIMUM = {
 }
 
 
-def estimate_scan_hours(ip_count: int, n_ports: int, rate: int) -> float:
+NMAP_TIME_PER_HOST_SEC = 10   # empirical: nmap -sV -T4 per host, seconds
+MASSCAN_HIT_RATE = 0.01       # fraction of scanned IPs that have open ports
+_NMAP_WORKERS = 10            # must match WEBRUNNER_NMAP_WORKERS default
+
+
+def estimate_scan_hours(ip_count: int, n_ports: int, rate: int, scan_mode: str = 'masscan-only') -> float:
     if rate <= 0:
         return 0.0
-    return (ip_count * n_ports / rate) / 3600
+    masscan_hours = (ip_count * n_ports / rate) / 3600
+    if scan_mode in ('masscan+nmap', 'geo-scout'):
+        nmap_hosts = ip_count * MASSCAN_HIT_RATE
+        nmap_hours = (nmap_hosts * NMAP_TIME_PER_HOST_SEC) / (_NMAP_WORKERS * 3600)
+        return masscan_hours + nmap_hours
+    return masscan_hours
 
 
 def node_cost(provider: str, instance_type: str, scan_hours: float) -> float:
@@ -91,18 +101,21 @@ def build_estimate_table(
     rows = []
     for preset_key, preset in PRESETS.items():
         n_chunks = max(1, math.ceil(total_ips / preset['chunk_size']))
-        hours = estimate_scan_hours(preset['chunk_size'], n_ports, mode_rate)
+        typical_ips = min(preset['chunk_size'], total_ips)
+        hours_per_node = estimate_scan_hours(typical_ips, n_ports, mode_rate, scan_mode)
         total_cost = 0.0
         for i in range(n_chunks):
+            chunk_ips = min(preset['chunk_size'], total_ips - i * preset['chunk_size'])
+            chunk_hours = estimate_scan_hours(chunk_ips, n_ports, mode_rate, scan_mode)
             provider = providers[i % len(providers)]
             instance = DEFAULT_INSTANCE.get(provider, 'g6-standard-2')
-            total_cost += node_cost(provider, instance, hours)
+            total_cost += node_cost(provider, instance, chunk_hours)
         rows.append({
             'preset': preset_key,
             'label': preset['label'],
             'desc': preset['desc'],
             'n_nodes': n_chunks,
-            'hours_per_node': hours,
+            'hours_per_node': hours_per_node,
             'total_cost_usd': total_cost,
         })
     return rows
