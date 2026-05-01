@@ -154,6 +154,8 @@ def execute_playbook(playbook, config):
     Returns:
         bool: True if playbook executed successfully, False otherwise
     """
+    import tempfile
+    secret_vars_file = None
     try:
         # Build the ansible-playbook command
         cmd = [
@@ -161,6 +163,18 @@ def execute_playbook(playbook, config):
             playbook,
             '--extra-vars', create_extra_vars(config)
         ]
+
+        # Write sensitive vars to a temp file (0o600) so they reach Ansible as
+        # variables without appearing in process listings or the main extra-vars JSON.
+        secret_vars = {k: v for k, v in config.items()
+                       if v is not None
+                       and any(s in k.lower() for s in _SECRET_KEYS)}
+        if secret_vars:
+            fd, secret_vars_file = tempfile.mkstemp(suffix='.json', prefix='ansible_secret_')
+            os.chmod(secret_vars_file, 0o600)
+            with os.fdopen(fd, 'w') as f:
+                json.dump(secret_vars, f)
+            cmd += ['--extra-vars', f'@{secret_vars_file}']
 
         # Add verbosity if debug mode is enabled
         if config.get('debug'):
@@ -202,10 +216,7 @@ def execute_playbook(playbook, config):
 
             if process.returncode == 0:
                 logging.info("Playbook executed successfully")
-
-                # Save deployment info
                 save_deployment_info(config)
-
                 return True
             else:
                 logging.error(f"Playbook failed with return code {process.returncode}")
@@ -220,6 +231,9 @@ def execute_playbook(playbook, config):
         logging.error(f"Error executing playbook: {e}")
         print(f"{COLORS['RED']}Error executing playbook: {e}{COLORS['RESET']}")
         return False
+    finally:
+        if secret_vars_file and os.path.exists(secret_vars_file):
+            os.unlink(secret_vars_file)
 
 
 def should_print_line(line):
