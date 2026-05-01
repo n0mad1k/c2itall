@@ -305,18 +305,50 @@ def gather_webrunner_parameters() -> dict | None:
         all_cidrs.extend(cc_cidrs.get(cc.upper(), []))
 
     chunks = chunk_cidrs(all_cidrs, chunk_size)
-    node_chunks = [
-        {
+
+    # Build per-provider region pools for round-robin assignment
+    provider_regions: dict[str, list[str]] = {}
+    for p in providers:
+        if p == 'linode':
+            provider_regions[p] = config.get('linode_regions', [config.get('linode_region', 'us-east')])
+        elif p == 'aws':
+            provider_regions[p] = config.get('aws_regions', [config.get('aws_region', 'us-east-1')])
+        elif p == 'flokinet':
+            provider_regions[p] = [config.get('flokinet_region', 'default')]
+        else:
+            provider_regions[p] = ['default']
+
+    provider_counters: dict[str, int] = {p: 0 for p in providers}
+    node_chunks = []
+    for i, chunk in enumerate(chunks):
+        provider = providers[i % len(providers)]
+        regions = provider_regions[provider]
+        region = regions[provider_counters[provider] % len(regions)]
+        provider_counters[provider] += 1
+        node_chunks.append({
             'idx': i,
             'node_name': f"{config['webrunner_name']}-{i + 1:02d}",
-            'provider': providers[i % len(providers)],
+            'provider': provider,
+            'region': region,
             'cidrs': chunk['cidrs'],
             'ip_count': chunk['ip_count'],
-        }
-        for i, chunk in enumerate(chunks)
-    ]
+        })
+
     config['node_chunks'] = node_chunks
     print(f"{COLORS['GREEN']}Nodes: {len(node_chunks)} ({preset_key}, {fmt_ip_count(chunk_size)}/node){COLORS['RESET']}")
+
+    # Warn if any provider's node count exceeds safe per-region quota
+    _PROVIDER_CAPS = {'linode': 20, 'aws': 32, 'flokinet': 10}
+    provider_node_counts: dict[str, int] = {}
+    for nc in node_chunks:
+        provider_node_counts[nc['provider']] = provider_node_counts.get(nc['provider'], 0) + 1
+    for p, count in provider_node_counts.items():
+        n_regions = len(provider_regions.get(p, ['default']))
+        cap = _PROVIDER_CAPS.get(p, 20)
+        per_region = (count + n_regions - 1) // n_regions
+        if per_region > cap:
+            print(f"{COLORS['YELLOW']}  Warning: {count} {PROVIDER_LABELS[p]} nodes across {n_regions} region(s) "
+                  f"= ~{per_region}/region; default quota is ~{cap}/region.{COLORS['RESET']}")
 
     # Operator IP
     config['operator_ip'] = get_public_ip()

@@ -12,6 +12,7 @@
     ssh_key_name: "{{ ssh_key_path | basename | regex_replace('\\.pub$', '') }}"
     all_node_chunks: "{{ lookup('file', node_chunks_file) | from_json }}"
     linode_chunks: "{{ all_node_chunks | selectattr('provider', 'equalto', 'linode') | list }}"
+    aws_chunks: "{{ all_node_chunks | selectattr('provider', 'equalto', 'aws') | list }}"
 
   tasks:
     - name: Ensure results directory
@@ -64,7 +65,7 @@
             body:
               label: "{{ item.node_name }}"
               type: "{{ linode_instance_type | default('g6-nanode-1') }}"
-              region: "{{ linode_region | default('us-east') }}"
+              region: "{{ item.region | default('us-east') }}"
               image: "linode/debian12"
               root_pass: "{{ wr_root_pass }}"
               authorized_keys:
@@ -120,20 +121,126 @@
 
         - name: Show provisioned nodes
           debug:
-            msg: "Node ready: {{ linode_chunks[idx].node_name }} @ {{ item.json.ipv4[0] }}"
+            msg: "Node ready: {{ linode_chunks[idx].node_name }} @ {{ item.json.ipv4[0] }} ({{ linode_chunks[idx].region }})"
           loop: "{{ wr_create_results.results }}"
           loop_control:
             index_var: idx
 
       when: linode_chunks | length > 0
 
-    # ── AWS / FlokiNET remain serial until those providers are implemented ─────
+    # ── AWS — per-unique-region setup then parallel creates ───────────────────
 
-    - name: Provision AWS nodes
-      include_tasks: "AWS/webrunner_provision_tasks.yml"
-      loop: "{{ all_node_chunks | selectattr('provider', 'equalto', 'aws') | list }}"
-      loop_control:
-        loop_var: node_chunk
+    - block:
+        - name: Read SSH public key for AWS
+          slurp:
+            src: "~/.ssh/{{ ssh_key_name }}.pub"
+          register: aws_pubkey
+
+        - name: Get unique AWS regions
+          set_fact:
+            aws_unique_regions: "{{ aws_chunks | map(attribute='region') | unique | list }}"
+
+        - name: Import SSH key pair per region
+          amazon.aws.ec2_key:
+            access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') }}"
+            secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') }}"
+            name: "{{ webrunner_name }}"
+            key_material: "{{ aws_pubkey.content | b64decode | trim }}"
+            region: "{{ item }}"
+            state: present
+          loop: "{{ aws_unique_regions }}"
+          ignore_errors: true
+
+        - name: Create security group per region
+          amazon.aws.ec2_security_group:
+            access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') }}"
+            secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') }}"
+            name: "webrunner-{{ webrunner_name }}"
+            description: "WEBRUNNER scan node SG"
+            region: "{{ item }}"
+            rules:
+              - proto: tcp
+                ports: [22]
+                cidr_ip: "{{ (operator_ip ~ '/32') if operator_ip else '0.0.0.0/0' }}"
+            rules_egress:
+              - proto: all
+                cidr_ip: "0.0.0.0/0"
+            state: present
+          loop: "{{ aws_unique_regions }}"
+          ignore_errors: true
+
+        - name: Fire all AWS instance creates
+          amazon.aws.ec2_instance:
+            access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') }}"
+            secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') }}"
+            name: "{{ item.node_name }}"
+            instance_type: "{{ aws_instance_type | default('t3.micro') }}"
+            region: "{{ item.region }}"
+            image_id: "{{ ami_map[item.region] }}"
+            key_name: "{{ webrunner_name }}"
+            security_groups:
+              - "webrunner-{{ webrunner_name }}"
+            network:
+              assign_public_ip: true
+            tags:
+              Name: "{{ item.node_name }}"
+              webrunner: "{{ webrunner_name }}"
+              deployment_id: "{{ deployment_id }}"
+            state: running
+            wait: true
+            wait_timeout: 300
+          loop: "{{ aws_chunks }}"
+          async: 600
+          poll: 0
+          register: aws_create_jobs
+
+        - name: Wait for all AWS creates to confirm
+          async_status:
+            jid: "{{ item.ansible_job_id }}"
+          loop: "{{ aws_create_jobs.results }}"
+          register: aws_create_results
+          until: aws_create_results.finished
+          retries: 60
+          delay: 10
+
+        - name: Add all AWS nodes to inventory
+          add_host:
+            name: "{{ item.instances[0].public_ip_address }}"
+            groups: webrunner_nodes
+            ansible_host: "{{ item.instances[0].public_ip_address }}"
+            ansible_user: admin
+            ansible_ssh_private_key_file: "~/.ssh/{{ ssh_key_name }}"
+            ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+            node_name: "{{ aws_chunks[idx].node_name }}"
+            node_cidrs: "{{ aws_chunks[idx].cidrs }}"
+            node_ip_count: "{{ aws_chunks[idx].ip_count }}"
+            node_idx: "{{ aws_chunks[idx].idx }}"
+            ec2_instance_id: "{{ item.instances[0].instance_id }}"
+            ec2_region: "{{ aws_chunks[idx].region }}"
+            provider: aws
+          loop: "{{ aws_create_results.results }}"
+          loop_control:
+            index_var: idx
+
+        - name: Log AWS scanner IPs
+          lineinfile:
+            path: "{{ scanner_ip_log }}"
+            line: "{{ aws_chunks[idx].node_name }}: {{ item.instances[0].public_ip_address }}"
+            create: true
+          loop: "{{ aws_create_results.results }}"
+          loop_control:
+            index_var: idx
+
+        - name: Show provisioned AWS nodes
+          debug:
+            msg: "Node ready: {{ aws_chunks[idx].node_name }} @ {{ item.instances[0].public_ip_address }} ({{ aws_chunks[idx].region }})"
+          loop: "{{ aws_create_results.results }}"
+          loop_control:
+            index_var: idx
+
+      when: aws_chunks | length > 0
+
+    # ── FlokiNET ──────────────────────────────────────────────────────────────
 
     - name: Provision FlokiNET nodes
       include_tasks: "FlokiNET/webrunner_provision_tasks.yml"
@@ -215,9 +322,11 @@
 
     - name: Teardown AWS nodes
       amazon.aws.ec2_instance:
+        access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') }}"
+        secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') }}"
         instance_ids:
           - "{{ hostvars[item]['ec2_instance_id'] }}"
-        region: "{{ aws_region | default('us-east-1') }}"
+        region: "{{ hostvars[item]['ec2_region'] }}"
         state: terminated
       loop: "{{ groups['webrunner_nodes'] | default([]) }}"
       when:
