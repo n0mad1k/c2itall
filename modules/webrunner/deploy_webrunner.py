@@ -112,6 +112,24 @@ def _select_scan_mode() -> str:
     return 'geo-scout'
 
 
+def _load_vars_file(path: str) -> dict:
+    if not path:
+        return {}
+    p = Path(path)
+    if not p.exists():
+        print(f"{COLORS['YELLOW']}  Vars file not found: {path} — continuing interactively{COLORS['RESET']}")
+        return {}
+    import yaml
+    try:
+        with open(p) as f:
+            data = yaml.safe_load(f) or {}
+        print(f"{COLORS['GREEN']}  Loaded vars: {p.name}{COLORS['RESET']}")
+        return data
+    except Exception as e:
+        print(f"{COLORS['YELLOW']}  Could not parse vars file ({e}) — continuing interactively{COLORS['RESET']}")
+        return {}
+
+
 def _get_targets_info(scan_mode: str) -> tuple[str, list[int]]:
     if scan_mode == 'geo-scout':
         default = str(WEBRUNNER_INPUTS / 'targets.yaml')
@@ -139,6 +157,55 @@ def _get_targets_info(scan_mode: str) -> tuple[str, list[int]]:
         except ValueError:
             pass
     return "", sorted(set(ports_list)) or [80, 443, 22]
+
+
+def _get_nuclei_info(vars_overrides: dict) -> tuple[str, str]:
+    """Returns (local_template_path, remote_template_path)."""
+    print(f"\n{COLORS['BLUE']}Nuclei Template:{COLORS['RESET']}")
+    if 'nuclei_template' in vars_overrides:
+        local_path = vars_overrides['nuclei_template']
+        print(f"  Template: {local_path} (from vars file)")
+    else:
+        local_path = input("  Path to nuclei template (.yaml): ").strip()
+    if not local_path or not Path(local_path).exists():
+        print(f"{COLORS['RED']}  Template not found: {local_path}{COLORS['RESET']}")
+        return "", ""
+    return local_path, "/root/webrunner/nuclei_template.yaml"
+
+
+def _get_tuning_params(scan_mode: str, default_rate: int, vars_overrides: dict) -> dict:
+    """Gather advanced tuning params. Returns dict of tuning config keys."""
+    tuning: dict = {}
+    show_header = True
+
+    def _prompt(label: str, key: str, default, cast=int) -> None:
+        nonlocal show_header
+        if show_header:
+            print(f"\n{COLORS['BLUE']}Advanced Tuning (Enter = use default):{COLORS['RESET']}")
+            show_header = False
+        if key in vars_overrides:
+            tuning[key] = cast(vars_overrides[key])
+            print(f"  {label}: {tuning[key]} (vars file)")
+        else:
+            raw = input(f"  {label} [{default}]: ").strip()
+            tuning[key] = cast(raw) if raw else default
+
+    _prompt("masscan rate (pkt/s)", "masscan_rate", default_rate)
+
+    if scan_mode in ('masscan+nmap', 'geo-scout', 'masscan+nuclei'):
+        pass  # masscan_rate already handled
+
+    if scan_mode in ('masscan+nmap', 'geo-scout'):
+        _prompt("nmap timing T1-T4", "nmap_timing", 4)
+        _prompt("nmap per-host timeout (s)", "nmap_timeout", 60)
+        _prompt("nmap parallel workers", "nmap_workers", 10)
+
+    if scan_mode == 'masscan+nuclei':
+        _prompt("nuclei rate limit (req/s)", "nuclei_rate", 150)
+        _prompt("nuclei concurrency", "nuclei_concurrency", 25)
+        _prompt("nuclei timeout (s)", "nuclei_timeout", 10)
+
+    return tuning
 
 
 def _show_estimate_table(total_ips: int, n_ports: int, providers: list[str], scan_mode: str, use_tor: bool = False):
@@ -188,6 +255,10 @@ def gather_webrunner_parameters() -> dict | None:
     config['deployment_id'] = generate_deployment_id()
     print(f"Deployment ID: {COLORS['CYAN']}{config['deployment_id']}{COLORS['RESET']}")
 
+    # Optional vars file — pre-fills tuning defaults
+    vars_raw = input("Vars file (optional, skip to configure interactively): ").strip()
+    vars_overrides = _load_vars_file(vars_raw)
+
     # Engagement name — auto if blank
     raw_eng = input(f"Engagement name [{config['deployment_id']}]: ").strip()
     config['engagement'] = raw_eng or config['deployment_id']
@@ -231,6 +302,16 @@ def gather_webrunner_parameters() -> dict | None:
     # Scan mode
     scan_mode = _select_scan_mode()
     config['scan_mode'] = scan_mode
+
+    # Nuclei template (masscan+nuclei only)
+    config['nuclei_template_local'] = ''
+    config['nuclei_template_remote'] = ''
+    if scan_mode == 'masscan+nuclei':
+        local_tmpl, remote_tmpl = _get_nuclei_info(vars_overrides)
+        if not local_tmpl:
+            return None
+        config['nuclei_template_local'] = local_tmpl
+        config['nuclei_template_remote'] = remote_tmpl
 
     # Targets / ports
     targets_file, ports = _get_targets_info(scan_mode)
@@ -299,6 +380,8 @@ def gather_webrunner_parameters() -> dict | None:
     config['preset'] = preset_key
     config['chunk_size'] = chunk_size
 
+    config['cidr_country_map_file'] = ''  # filled in execute_webrunner_deployment
+
     # Distribute CIDRs into node chunks
     all_cidrs: list[str] = []
     for cc in country_codes:
@@ -355,6 +438,11 @@ def gather_webrunner_parameters() -> dict | None:
     if config['operator_ip']:
         print(f"{COLORS['GREEN']}Operator IP: {config['operator_ip']}{COLORS['RESET']}")
 
+    # Advanced tuning
+    default_rate = config['masscan_rate']
+    tuning = _get_tuning_params(scan_mode, default_rate, vars_overrides)
+    config.update(tuning)
+
     # OPSEC / teardown options
     print(f"\n{COLORS['BLUE']}Deployment Options:{COLORS['RESET']}")
 
@@ -404,6 +492,12 @@ def execute_webrunner_deployment(config: dict):
     print(f"  Nodes:          {n_nodes} ({config['preset']}, {fmt_ip_count(config['chunk_size'])}/node)")
     print(f"  Scan mode:      {config['scan_mode']}")
     print(f"  Ports:          {', '.join(str(p) for p in config['ports'][:8])}{'...' if len(config['ports']) > 8 else ''}")
+    print(f"  masscan rate:   {config.get('masscan_rate', '—')} pkt/s")
+    if config['scan_mode'] in ('masscan+nmap', 'geo-scout'):
+        print(f"  nmap:           T{config.get('nmap_timing', 4)}  timeout={config.get('nmap_timeout', 60)}s  workers={config.get('nmap_workers', 10)}")
+    if config['scan_mode'] == 'masscan+nuclei':
+        tmpl_name = os.path.basename(config.get('nuclei_template_local', ''))
+        print(f"  nuclei:         {tmpl_name}  rate={config.get('nuclei_rate', 150)}  concurrency={config.get('nuclei_concurrency', 25)}  timeout={config.get('nuclei_timeout', 10)}s")
     print(f"  Total IPs:      {fmt_ip_count(config['total_ips'])}")
     print(f"  Tor routing:    {'Yes' if config['use_tor'] else 'No'}")
     print(f"  Enhanced OPSEC: {'Yes' if config['enhanced_opsec'] else 'No'}")
@@ -421,6 +515,16 @@ def execute_webrunner_deployment(config: dict):
     # regardless of playbook-relative CWD
     logs_dir = os.path.abspath(os.path.join(_base, 'logs'))
     os.makedirs(logs_dir, exist_ok=True)
+
+    # Save CIDR→country map for merge_results per-country attribution
+    cc_map_file = os.path.join(logs_dir, f"cidr_country_map_{config['deployment_id']}.json")
+    if config.get('country_codes'):
+        from utils.chunk_utils import get_country_cidrs
+        cc_cidrs_saved = get_country_cidrs(config['country_codes'], {})
+        with open(cc_map_file, 'w') as f:
+            json.dump(cc_cidrs_saved, f)
+        config['cidr_country_map_file'] = cc_map_file
+
     chunks_file = os.path.join(logs_dir, f"node_chunks_{config['deployment_id']}.json")
     with open(chunks_file, 'w') as f:
         json.dump(node_chunks, f)
