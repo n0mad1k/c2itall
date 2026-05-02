@@ -15,6 +15,7 @@
       - nmap
       - python3
       - python3-pip
+      - curl
     state: present
   retries: 3
   delay: 10
@@ -76,3 +77,22 @@
     mode: '0644'
   when: scan_mode == 'geo-scout' and targets_file != ""
   ignore_errors: true
+
+- name: Install nuclei vulnerability scanner
+  shell: |
+    if ! command -v nuclei &>/dev/null; then
+      curl -sL "https://github.com/projectdiscovery/nuclei/releases/download/v3.3.9/nuclei_3.3.9_linux_amd64.tar.gz" | tar -xz -C /usr/local/bin nuclei
+      chmod +x /usr/local/bin/nuclei
+    fi
+  args:
+    executable: /bin/bash
+  when: scan_mode == 'masscan+nuclei'
+  retries: 2
+  delay: 5
+
+- name: Upload nuclei template
+  copy:
+    src: "{{ nuclei_template_local }}"
+    dest: /root/webrunner/nuclei_template.yaml
+    mode: '0644'
+  when: scan_mode == 'masscan+nuclei' and nuclei_template_local | default('') != ''

@@ -1,0 +1,31 @@
+# scan_vars.yaml — WEBRUNNER pre-configuration
+# Copy this file, fill in values, and provide the path at the "Vars file" prompt.
+# All fields are optional. Omit any field to be prompted interactively.
+
+# ── masscan ───────────────────────────────────────────────────────────────────
+masscan_rate: 5000          # packets/sec (default: mode-dependent, 3000–10000)
+                            # Lower for clients with strict IPS/rate-limiting
+
+# ── nmap (masscan+nmap and geo-scout modes) ───────────────────────────────────
+nmap_timing: 3              # T1=sneaky  T2=polite  T3=normal  T4=aggressive (default: 4)
+nmap_timeout: 120           # per-host timeout in seconds (default: 60)
+                            # Increase for slow/filtered networks
+nmap_workers: 10            # parallel nmap threads per node (default: 10)
+
+# ── nuclei (masscan+nuclei mode only) ─────────────────────────────────────────
+nuclei_template: "/path/to/your/cve-template.yaml"
+                            # Local path — copied to nodes at provision time
+                            # Never fetched from the internet during scans
+nuclei_rate: 150            # requests/sec rate limit (default: 150)
+                            # Lower for clients with WAF/rate-limiting
+nuclei_concurrency: 25      # concurrent goroutines (default: 25)
+nuclei_timeout: 10          # per-request timeout in seconds (default: 10)
+
+# ── example: conservative client profile ─────────────────────────────────────
+# masscan_rate: 1000
+# nmap_timing: 2
+# nmap_timeout: 180
+# nmap_workers: 5
+# nuclei_rate: 50
+# nuclei_concurrency: 10
+# nuclei_timeout: 20

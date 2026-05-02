@@ -1,9 +1,45 @@
 # targets.yaml — Format Specification
 
 ## Purpose
-Defines what to look for during a scan. Each target is a fingerprint with
-one or more probes. The scanner runs masscan to find open ports, then fires
-each probe against matching hosts, and applies pattern/version matching.
+Defines what to look for during **geo-scout** mode scans. Each target is a
+fingerprint with one or more probes. The scanner runs masscan to find open
+ports, then fires each probe against matching hosts, and applies
+pattern/version matching.
+
+For **masscan+nuclei** mode, use a nuclei template instead (see below).
+targets.yaml is ignored in nuclei mode.
+
+## Nuclei template mode (masscan+nuclei)
+Provide a standard nuclei YAML template file. WEBRUNNER:
+1. Runs masscan to find open `ip:port` pairs
+2. Feeds those pairs as targets to nuclei with your template
+3. Outputs per-host match results + per-country vulnerable host counts
+
+**OPSEC note:** Templates are copied to nodes at provision time from your
+local path. No live template fetches happen during scans.
+
+**Template path:** Specify in `scan_vars.yaml` (`nuclei_template: /path/to/template.yaml`)
+or enter the path at the interactive prompt.
+
+### Minimal nuclei template structure
+```yaml
+id: cve-2024-example
+info:
+  name: Example CVE
+  severity: critical
+  tags: [cve, rce]
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/vulnerable/endpoint"
+    matchers:
+      - type: word
+        words:
+          - "vulnerable_string"
+```
+
+---
 
 ## Schema
 

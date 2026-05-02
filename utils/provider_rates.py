@@ -22,10 +22,11 @@ INSTANCE_RATES = {
 }
 
 SCAN_MODES = {
-    'geo-scout':    {'rate': 3000,  'desc': 'masscan + nmap + probe fingerprinting'},
-    'masscan-only': {'rate': 10000, 'desc': 'masscan port discovery only'},
-    'nmap-only':    {'rate': 500,   'desc': 'nmap full fingerprint only'},
-    'masscan+nmap': {'rate': 5000,  'desc': 'masscan + nmap (no probes)'},
+    'geo-scout':      {'rate': 3000,  'desc': 'masscan + nmap + probe fingerprinting'},
+    'masscan-only':   {'rate': 10000, 'desc': 'masscan port discovery only'},
+    'nmap-only':      {'rate': 500,   'desc': 'nmap full fingerprint only'},
+    'masscan+nmap':   {'rate': 5000,  'desc': 'masscan + nmap (no probes)'},
+    'masscan+nuclei': {'rate': 5000,  'desc': 'masscan discovery + nuclei CVE template'},
 }
 
 PRESETS = {

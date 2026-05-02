@@ -1,9 +1,21 @@
 # countries.yaml — Format Specification
 
 ## Purpose
-Defines which countries to scan and scan parameters per country.
-This file is read by WEBRUNNER at runtime. The scanner resolves each
-country code to its CIDR ranges using RIR delegated stats files.
+Defines which countries to scan and optional per-country exclusions.
+Used by all WEBRUNNER scan modes. The scanner resolves each country code
+to its CIDR ranges using RIR delegated stats files (ARIN, RIPE, APNIC,
+LACNIC, AFRINIC — cached 24h locally).
+
+## Scope options
+- **Targeted countries**: list specific ISO codes in this file
+- **Single country**: just one entry
+- **Global sweep**: include every country you want — WEBRUNNER distributes
+  CIDRs across nodes automatically regardless of count
+
+## Relationship to scan_vars.yaml
+`scan_profile.rate` in this file sets the masscan default, but it is
+overridden by `masscan_rate` in `scan_vars.yaml` or the interactive tuning
+prompt. Prefer `scan_vars.yaml` for operator-level tuning.
 
 ## Schema
 

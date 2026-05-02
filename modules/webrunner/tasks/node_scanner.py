@@ -7,6 +7,7 @@ Reads cidrs.txt, runs scan pipeline, writes results.json.
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -16,6 +17,8 @@ from pathlib import Path
 
 WORKDIR = Path("/root/webrunner")
 NMAP_WORKERS = int(os.environ.get("WEBRUNNER_NMAP_WORKERS", "10"))
+NMAP_TIMING = int(os.environ.get("WEBRUNNER_NMAP_TIMING", "4"))
+NMAP_TIMEOUT = int(os.environ.get("WEBRUNNER_NMAP_TIMEOUT", "60"))
 
 
 def log(msg: str):
@@ -83,11 +86,11 @@ def run_nmap(ip: str, ports: list[int]) -> dict:
 
     cmd = [
         "nmap", "-sV", "--version-intensity", "5",
-        "-p", port_str, "-T4", "--open",
+        "-p", port_str, f"-T{NMAP_TIMING}", "--open",
         "-oX", str(out_file), ip,
     ]
     try:
-        subprocess.run(cmd, capture_output=True, timeout=60, check=False)
+        subprocess.run(cmd, capture_output=True, timeout=NMAP_TIMEOUT, check=False)
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return {}
 
@@ -267,14 +270,115 @@ def scan_geo_scout(ports: str, rate: int, node_name: str) -> list[dict]:
     return results
 
 
+def run_nuclei(targets: list[str], template: str, rate: int, concurrency: int, timeout: int) -> list[dict]:
+    targets_file = WORKDIR / "nuclei_targets.txt"
+    targets_file.write_text("\n".join(targets) + "\n")
+
+    out_file = WORKDIR / "nuclei_results.jsonl"
+    out_file.unlink(missing_ok=True)
+
+    cmd = [
+        "nuclei",
+        "-t", template,
+        "-l", str(targets_file),
+        "-rl", str(rate),
+        "-c", str(concurrency),
+        "-timeout", str(timeout),
+        "-j",
+        "-o", str(out_file),
+        "-silent",
+        "-no-color",
+        "-disable-update-check",
+    ]
+
+    log(f"nuclei starting: template={template} targets={len(targets)} rate={rate} concurrency={concurrency}")
+    try:
+        subprocess.run(cmd, timeout=43200, check=False)
+    except subprocess.TimeoutExpired:
+        log("nuclei timed out after 12h")
+
+    if not out_file.exists():
+        return []
+
+    results = []
+    for line in out_file.read_text(errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        host = entry.get("host", "")
+        ip = entry.get("ip", "")
+
+        if not ip and host:
+            raw = host.split("//")[-1].split("/")[0]
+            ip_part = raw.rsplit(":", 1)[0] if ":" in raw else raw
+            m = re.match(r"^(\d+\.\d+\.\d+\.\d+)$", ip_part)
+            ip = m.group(1) if m else ip_part
+
+        port = 0
+        matched_at = entry.get("matched-at", host)
+        raw_host = matched_at.split("//")[-1].split("/")[0]
+        if ":" in raw_host:
+            try:
+                port = int(raw_host.rsplit(":", 1)[1])
+            except (ValueError, IndexError):
+                pass
+
+        results.append({
+            "ip": ip,
+            "port": port,
+            "template_id": entry.get("template-id", ""),
+            "vuln_name": entry.get("info", {}).get("name", ""),
+            "severity": entry.get("info", {}).get("severity", ""),
+            "matched_at": entry.get("matched-at", ""),
+            "vuln": True,
+        })
+
+    log(f"nuclei found {len(results)} vulnerable hosts/services")
+    return results
+
+
+def scan_masscan_nuclei(ports: str, rate: int, template: str, nuclei_rate: int, nuclei_concurrency: int, nuclei_timeout: int, node_name: str) -> list[dict]:
+    if not template:
+        log("ERROR: --template required for masscan+nuclei mode")
+        return []
+
+    hits = run_masscan(ports, rate)
+    if not hits:
+        return []
+
+    targets = [f"{h['ip']}:{h['port']}" for h in hits]
+    log(f"nuclei scanning {len(targets)} ip:port targets from masscan...")
+    return run_nuclei(targets, template, nuclei_rate, nuclei_concurrency, nuclei_timeout)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", required=True,
-                        choices=["masscan-only", "nmap-only", "masscan+nmap", "geo-scout"])
+                        choices=["masscan-only", "nmap-only", "masscan+nmap", "geo-scout", "masscan+nuclei"])
     parser.add_argument("--ports", required=True)
     parser.add_argument("--rate", type=int, default=3000)
     parser.add_argument("--node-name", default="node")
+    parser.add_argument("--template", default="")
+    parser.add_argument("--nmap-timing", type=int, default=None, choices=[1, 2, 3, 4])
+    parser.add_argument("--nmap-timeout", type=int, default=None)
+    parser.add_argument("--nmap-workers", type=int, default=None)
+    parser.add_argument("--nuclei-rate", type=int, default=150)
+    parser.add_argument("--nuclei-concurrency", type=int, default=25)
+    parser.add_argument("--nuclei-timeout", type=int, default=10)
     args = parser.parse_args()
+
+    global NMAP_WORKERS, NMAP_TIMING, NMAP_TIMEOUT
+    if args.nmap_workers is not None:
+        NMAP_WORKERS = args.nmap_workers
+    if args.nmap_timing is not None:
+        NMAP_TIMING = args.nmap_timing
+    if args.nmap_timeout is not None:
+        NMAP_TIMEOUT = args.nmap_timeout
 
     log(f"WEBRUNNER node scanner starting — mode={args.mode} node={args.node_name}")
 
@@ -286,6 +390,12 @@ def main():
         results = scan_masscan_nmap(args.ports, args.rate, args.node_name)
     elif args.mode == "geo-scout":
         results = scan_geo_scout(args.ports, args.rate, args.node_name)
+    elif args.mode == "masscan+nuclei":
+        results = scan_masscan_nuclei(
+            args.ports, args.rate, args.template,
+            args.nuclei_rate, args.nuclei_concurrency, args.nuclei_timeout,
+            args.node_name,
+        )
     else:
         log(f"Unknown mode: {args.mode}")
         sys.exit(1)
