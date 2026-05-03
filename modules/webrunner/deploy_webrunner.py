@@ -208,8 +208,53 @@ def _get_tuning_params(scan_mode: str, default_rate: int, vars_overrides: dict) 
     return tuning
 
 
-def _show_estimate_table(total_ips: int, n_ports: int, providers: list[str], scan_mode: str, use_tor: bool = False):
-    rows = build_estimate_table(total_ips, n_ports, providers, scan_mode, use_tor=use_tor)
+def _show_masscan_tor_warning():
+    R = COLORS['RED']
+    Y = COLORS['YELLOW']
+    W = COLORS['WHITE']
+    Z = COLORS['RESET']
+    print(f"\n{R}{'█' * 70}{Z}")
+    print(f"{R}█  ⚠  CRITICAL OPSEC WARNING — MASSCAN BYPASSES TOR                  █{Z}")
+    print(f"{R}{'█' * 70}{Z}")
+    print(f"{W}  masscan uses raw sockets and CANNOT be tunneled through Tor or")
+    print(f"  proxychains. Every SYN packet sent during the masscan phase reveals")
+    print(f"  THIS CLOUD NODE'S IP to the targets and any monitoring along the path.{Z}")
+    print()
+    print(f"{Y}  Tor will protect:    {Z}{W}nmap fingerprinting, nuclei requests, probe banners{Z}")
+    print(f"{Y}  Tor will NOT protect: {Z}{R}masscan SYN scan (bypasses the proxy entirely){Z}")
+    print()
+    print(f"{W}  If you need full Tor coverage, use 'nmap-only' mode (slow but fully")
+    print(f"  proxied via -sT). The masscan phase is fundamentally incompatible.{Z}\n")
+
+
+def _show_caveats_block(scan_mode: str, use_tor: bool):
+    Y = COLORS['YELLOW']
+    W = COLORS['WHITE']
+    R = COLORS['RED']
+    Z = COLORS['RESET']
+    print(f"{Y}  Caveats — empirical estimates, real scans vary ±30%:{Z}")
+    print(f"{W}  • Hit rate assumes ~1% of IPs have open ports on selected ports.")
+    print(f"    Real range: 0.5%–5% (higher for SSH/HTTP/HTTPS, lower for niche")
+    print(f"    ports). Override via vars file: hit_rate: 0.03{Z}")
+    if scan_mode in ('masscan+nuclei',):
+        print(f"{W}  • Nuclei estimate assumes 5s/target (typical CVE template, 1–3 HTTP")
+        print(f"    requests). Heavy templates with many requests/matchers run 2–5×")
+        print(f"    longer.{Z}")
+    if scan_mode in ('masscan+nmap', 'geo-scout', 'nmap-only'):
+        print(f"{W}  • nmap timing: T1=60s/host, T2=30s, T3=15s, T4=10s. Lower T values")
+        print(f"    evade rate-limit detection but multiply scan time accordingly.{Z}")
+    if use_tor:
+        print(f"{R}  • Tor adds 5× latency to nmap/nuclei/probe phases. Real overhead")
+        print(f"    varies 3×–10× depending on circuit quality. Masscan is NOT")
+        print(f"    proxied — see the warning banner above.{Z}")
+    print(f"{W}  • Provisioning: ~5 min/node included. Add 5–10 min for first-time")
+    print(f"    cloud-provider auth or new region.")
+    print(f"  • Cost: Linode/FlokiNET bill minimum 1h per node. AWS bills per")
+    print(f"    second. Short scans still incur the per-provider minimum.{Z}\n")
+
+
+def _show_estimate_table(total_ips: int, n_ports: int, providers: list[str], scan_mode: str, use_tor: bool = False, tuning: dict | None = None):
+    rows = build_estimate_table(total_ips, n_ports, providers, scan_mode, use_tor=use_tor, tuning=tuning)
 
     C = COLORS['CYAN']
     W = COLORS['WHITE']
@@ -217,11 +262,25 @@ def _show_estimate_table(total_ips: int, n_ports: int, providers: list[str], sca
     G = COLORS['GREEN']
     R = COLORS['RESET']
 
-    tor_note = "  [Tor: estimates reflect nmap/probe latency]" if use_tor else ""
+    masscan_modes = ('masscan-only', 'masscan+nmap', 'geo-scout', 'masscan+nuclei')
+    if use_tor and scan_mode in masscan_modes:
+        _show_masscan_tor_warning()
+
+    tor_note = "  [Tor: estimates reflect nmap/probe latency only]" if use_tor else ""
     print(f"\n{C}{'─' * 70}{R}")
     print(f"{C}  WEBRUNNER — Cost & Time Estimate{R}")
     print(f"{W}  Total: {fmt_ip_count(total_ips)} IPs   {n_ports} ports   Mode: {scan_mode}{R}")
     print(f"{W}  Providers: {', '.join(PROVIDER_LABELS[p] for p in providers)}{Y}{tor_note}{R}")
+    if tuning:
+        bits = []
+        if 'masscan_rate' in tuning:
+            bits.append(f"masscan={tuning['masscan_rate']}pps")
+        if 'nmap_timing' in tuning:
+            bits.append(f"nmap=T{tuning['nmap_timing']}/{tuning.get('nmap_workers', 10)}w")
+        if 'nuclei_rate' in tuning and scan_mode == 'masscan+nuclei':
+            bits.append(f"nuclei={tuning['nuclei_rate']}rps/{tuning.get('nuclei_concurrency', 25)}c")
+        if bits:
+            print(f"{W}  Tuning: {' · '.join(bits)}{R}")
     print(f"{C}{'─' * 70}{R}")
     print(f"  {'Preset':<14} {'Nodes':>6} {'IPs/Node':>10} {'Time/Node':>12} {'Total $':>10}")
     print(f"  {'─' * 56}")
@@ -239,6 +298,7 @@ def _show_estimate_table(total_ips: int, n_ports: int, providers: list[str], sca
 
     print(f"{C}{'─' * 70}{R}")
     print(f"{Y}  * = recommended (Pareto-optimal: speed vs. billing minimum){R}\n")
+    _show_caveats_block(scan_mode, use_tor)
 
 
 # ── parameter gathering ───────────────────────────────────────────────────────
@@ -335,16 +395,23 @@ def gather_webrunner_parameters() -> dict | None:
     # Tor routing — ask before estimate so table reflects the slowdown
     tor_raw = input(f"\nRoute scans through Tor? [y/N]: ").strip().lower()
     config['use_tor'] = tor_raw in ['y', 'yes']
-    if config['use_tor']:
-        if scan_mode == 'masscan-only':
-            print(f"{COLORS['YELLOW']}  Warning: masscan uses raw sockets and bypasses proxychains — Tor has no effect in masscan-only mode.{COLORS['RESET']}")
-        elif scan_mode in ('geo-scout', 'masscan+nmap'):
-            print(f"{COLORS['YELLOW']}  Note: masscan phase bypasses Tor (raw sockets); nmap and probe phases will use Tor.{COLORS['RESET']}")
-        else:
-            print(f"{COLORS['YELLOW']}  Tor routing enabled — all nmap traffic will use proxychains → SOCKS5 9050.{COLORS['RESET']}")
+    masscan_modes = ('masscan-only', 'masscan+nmap', 'geo-scout', 'masscan+nuclei')
+    if config['use_tor'] and scan_mode in masscan_modes:
+        _show_masscan_tor_warning()
+        confirm = input(f"{COLORS['RED']}  Continue with Tor enabled, knowing masscan will leak this node's IP? [y/N]: {COLORS['RESET']}").strip().lower()
+        if confirm not in ['y', 'yes']:
+            print(f"{COLORS['YELLOW']}  Tor disabled. To get full Tor coverage, re-run with scan mode 'nmap-only'.{COLORS['RESET']}")
+            config['use_tor'] = False
+    elif config['use_tor']:
+        print(f"{COLORS['GREEN']}  Tor routing enabled — all nmap traffic will use proxychains → SOCKS5 9050.{COLORS['RESET']}")
 
-    # Cost / time estimate — reflects Tor throughput impact
-    _show_estimate_table(total_ips, len(ports), providers, scan_mode, use_tor=config['use_tor'])
+    # Advanced tuning — gather BEFORE estimate so table reflects operator choices
+    default_rate = config['masscan_rate']
+    tuning = _get_tuning_params(scan_mode, default_rate, vars_overrides)
+    config.update(tuning)
+
+    # Cost / time estimate — reflects tuning + Tor throughput impact
+    _show_estimate_table(total_ips, len(ports), providers, scan_mode, use_tor=config['use_tor'], tuning=tuning)
 
     # Preset selection
     print(f"{COLORS['BLUE']}Select deployment preset:{COLORS['RESET']}")
@@ -437,11 +504,6 @@ def gather_webrunner_parameters() -> dict | None:
     config['operator_ip'] = get_public_ip()
     if config['operator_ip']:
         print(f"{COLORS['GREEN']}Operator IP: {config['operator_ip']}{COLORS['RESET']}")
-
-    # Advanced tuning
-    default_rate = config['masscan_rate']
-    tuning = _get_tuning_params(scan_mode, default_rate, vars_overrides)
-    config.update(tuning)
 
     # OPSEC / teardown options
     print(f"\n{COLORS['BLUE']}Deployment Options:{COLORS['RESET']}")
