@@ -184,16 +184,20 @@ def _get_tuning_params(scan_mode: str, default_rate: int, vars_overrides: dict) 
             print(f"\n{COLORS['BLUE']}Advanced Tuning (Enter = use default):{COLORS['RESET']}")
             show_header = False
         if key in vars_overrides:
-            tuning[key] = cast(vars_overrides[key])
-            print(f"  {label}: {tuning[key]} (vars file)")
+            value = cast(vars_overrides[key])
+            source = "vars file"
         else:
             raw = input(f"  {label} [{default}]: ").strip()
-            tuning[key] = cast(raw) if raw else default
+            value = cast(raw) if raw else default
+            source = None
+        if isinstance(value, (int, float)) and value <= 0:
+            print(f"{COLORS['YELLOW']}    {label}={value} invalid (must be > 0); using default {default}{COLORS['RESET']}")
+            value = default
+        tuning[key] = value
+        if source:
+            print(f"  {label}: {value} ({source})")
 
     _prompt("masscan rate (pkt/s)", "masscan_rate", default_rate)
-
-    if scan_mode in ('masscan+nmap', 'geo-scout', 'masscan+nuclei'):
-        pass  # masscan_rate already handled
 
     if scan_mode in ('masscan+nmap', 'geo-scout'):
         _prompt("nmap timing T1-T4", "nmap_timing", 4)
