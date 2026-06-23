@@ -1,0 +1,69 @@
+{
+  "deployment_id": "{{ deployment_id }}",
+  "deployment_time": "{{ ansible_date_time.iso8601 }}",
+  "provider": "{{ provider }}",
+  "region": "{{ aws_region | default(linode_region) | default('') }}",
+  
+  "infrastructure": {
+    "mta_front": {
+      "name": "{{ mta_front_name | default('mta-' + deployment_id) }}",
+      "ip": "{{ mta_front_ip | default('') }}",
+      "instance_id": "{{ mta_instance_id | default('') }}"
+    },
+    "gophish_server": {
+      "name": "{{ gophish_server_name | default('gophish-' + deployment_id) }}",
+      "ip": "{{ gophish_server_ip | default('') }}",
+      "instance_id": "{{ gophish_instance_id | default('') }}",
+      "admin_port": "{{ gophish_admin_port | default('8090') }}"
+    },
+    "phishing_webserver": {
+      "name": "{{ phishing_web_name | default('web-' + deployment_id) }}",
+      "ip": "{{ phishing_web_ip | default('') }}",
+      "instance_id": "{{ phishing_web_instance_id | default('') }}"
+    },
+    "phishing_redirector": {
+      "name": "{{ phishing_redirector_name | default('redirector-' + deployment_id) }}",
+      "ip": "{{ phishing_redirector_ip | default('') }}",
+      "instance_id": "{{ phishing_redirector_instance_id | default('') }}"
+    },
+    {% if deploy_payload_infra | default(false) %}
+    "payload_server": {
+      "name": "{{ payload_server_name | default('payload-' + deployment_id) }}",
+      "ip": "{{ payload_server_ip | default('') }}",
+      "instance_id": "{{ payload_server_instance_id | default('') }}"
+    },
+    "payload_redirector": {
+      "name": "{{ payload_redirector_name | default('payload-redir-' + deployment_id) }}",
+      "ip": "{{ payload_redirector_ip | default('') }}",
+      "instance_id": "{{ payload_redirector_instance_id | default('') }}"
+    },
+    {% endif %}
+  },
+  
+  "domains": {
+    "phishing_domain": "{{ phishing_domain | default('N/A') }}",
+    "mta_domain": "{{ mta_hostname | default('mail.' + (phishing_domain | default('example.com'))) }}",
+    {% if deploy_payload_infra | default(false) %}
+    "payload_domain": "{{ payload_subdomain | default('payload') }}.{{ phishing_domain | default('example.com') }}",
+    {% endif %}
+  },
+  
+  "credentials": {
+    "gophish_url": "https://{{ gophish_server_ip | default('TBD') }}:{{ gophish_admin_port | default('8090') }}",
+    "smtp_auth_user": "{{ smtp_auth_user | default('admin') }}",
+    "smtp_settings": {
+      "host": "{{ mta_front_ip | default('TBD') }}",
+      "port": 25,
+      "from_address": "{{ smtp_from_address | default('noreply@' + (phishing_domain | default('example.com'))) }}"
+    }
+  },
+  
+  "security_groups": {
+    {% if provider == 'aws' %}
+    "mta_sg": "{{ mta_security_group_id | default('') }}",
+    "gophish_sg": "{{ gophish_security_group_id | default('') }}",
+    "web_sg": "{{ web_security_group_id | default('') }}",
+    "redirector_sg": "{{ redirector_security_group_id | default('') }}"
+    {% endif %}
+  }
+}

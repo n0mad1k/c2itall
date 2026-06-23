@@ -1,0 +1,22 @@
+---
+# Common web server configuration tasks
+
+- name: Configure web servers
+  debug:
+    msg: |
+      Configuring web servers for deployment {{ deployment_id }}
+      Phishing hostname: {{ phishing_hostname | default('portal.' + (phishing_domain | default(domain))) }}
+      
+- name: Install web server software
+  debug:
+    msg: "Would install and configure Apache/Nginx web servers on target hosts"
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['phishing_webserver'] | default([]) }}"
+  when: groups['phishing_webserver'] is defined
+
+- name: Deploy phishing pages
+  debug:
+    msg: |
+      Would deploy phishing pages:
+      - Template: {{ email_template | default('office365_login') }}
+      - Domain: {{ phishing_domain | default(domain) }}

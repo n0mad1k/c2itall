@@ -1,0 +1,150 @@
+---
+# Common task for configuring integrated email tracker on C2 server
+
+- name: Check if integrated tracker setup is requested
+  debug:
+    msg: "Setting up integrated email tracker on C2 server"
+  when: setup_integrated_tracker | default(false) | bool
+
+- name: Install required packages for tracker
+  apt:
+    name:
+      - python3-pip
+      - python3-venv
+      - python3-pillow
+      - nginx
+      - certbot
+      - python3-certbot-nginx
+      - jq
+    state: present
+    update_cache: yes
+  when: setup_integrated_tracker | default(false) | bool
+
+- name: Create tracker directory
+  file:
+    path: /root/Tools/tracker
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  when: setup_integrated_tracker | default(false) | bool
+
+- name: Create tracker data directory
+  file:
+    path: /root/Tools/tracker/data
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  when: setup_integrated_tracker | default(false) | bool
+
+- name: Create tracker system user
+  user:
+    name: tracker
+    system: yes
+    shell: /usr/sbin/nologin
+    home: /root/Tools/tracker
+    create_home: no
+  when: setup_integrated_tracker | default(false) | bool
+
+- name: Create Python virtual environment for tracker
+  pip:
+    virtualenv: /root/Tools/tracker/venv
+    name:
+      - flask
+      - pillow
+      - gunicorn
+    virtualenv_command: /usr/bin/python3 -m venv
+  environment:
+    PATH: "/usr/local/bin:/usr/bin:/bin"
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+  when: setup_integrated_tracker | default(false) | bool
+
+- name: Copy tracker application code
+  copy:
+    src: "../../tracker/files/simple_email_tracker.py"
+    dest: /root/Tools/tracker/simple_email_tracker.py
+    mode: '0755'
+    owner: root
+    group: root
+  when: setup_integrated_tracker | default(false) | bool
+
+- name: Copy tracker statistics CLI tool
+  copy:
+    src: "../../tracker/files/tracker-stats.sh"
+    dest: /root/Tools/tracker/tracker-stats.sh
+    mode: '0755'
+    owner: root
+    group: root
+  when: setup_integrated_tracker | default(false) | bool
+
+- name: Copy systemd service file for tracker
+  copy:
+    src: "../../tracker/files/tracker.service"
+    dest: /etc/systemd/system/tracker.service
+    mode: '0644'
+    owner: root
+    group: root
+  when: setup_integrated_tracker | default(false) | bool
+
+- name: Set correct permissions for tracker directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: tracker
+    group: tracker
+    recurse: yes
+  loop:
+    - /root/Tools/tracker
+    - /root/Tools/tracker/data
+  when: setup_integrated_tracker | default(false) | bool
+
+- name: Create NGINX site config for tracker
+  template:
+    src: "../../tracker/files/tracker-nginx.conf"
+    dest: /etc/nginx/sites-available/tracker
+    mode: '0644'
+    owner: root
+    group: root
+  vars:
+    tracker_domain: "{{ tracker_domain | default('track.' + domain) }}"
+  when: setup_integrated_tracker | default(false) | bool
+
+- name: Enable tracker NGINX site
+  file:
+    src: /etc/nginx/sites-available/tracker
+    dest: /etc/nginx/sites-enabled/tracker
+    state: link
+  when: setup_integrated_tracker | default(false) | bool
+
+- name: Configure redirector to proxy tracking requests
+  lineinfile:
+    path: /etc/nginx/sites-available/default
+    insertafter: "^\\s*location / {"
+    line: "    # Email tracker proxy path\n    location /px/(.*)\\.png$ {\n        proxy_pass http://{{ c2_ip }}:443/pixel/$1.png;\n        proxy_set_header Host {{ tracker_domain }};\n        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n        proxy_set_header X-Real-IP $remote_addr;\n        proxy_set_header X-Forwarded-Proto https;\n    }"
+  delegate_to: "{{ groups['redirectors'][0] }}"
+  when: setup_integrated_tracker | default(false) | bool and groups['redirectors'] is defined
+
+- name: Set up SSL if requested
+  shell: |
+    certbot --nginx -d {{ tracker_domain }} --non-interactive --agree-tos -m {{ tracker_email }}
+  args:
+    creates: /etc/letsencrypt/live/{{ tracker_domain }}/fullchain.pem
+  when: setup_integrated_tracker | default(false) | bool and tracker_setup_ssl | default(true) | bool
+  ignore_errors: yes
+
+- name: Start and enable tracker service
+  systemd:
+    name: tracker
+    state: started
+    enabled: yes
+    daemon_reload: yes
+  when: setup_integrated_tracker | default(false) | bool
+
+- name: Add tracker alias to bashrc for easy access
+  lineinfile:
+    path: /root/.bashrc
+    line: 'alias tracker="/root/Tools/tracker/tracker-stats.sh"'
+    state: present
+  when: setup_integrated_tracker | default(false) | bool

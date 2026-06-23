@@ -1,0 +1,75 @@
+---
+# FlokiNET Cleanup Playbook
+# Used for documentation since FlokiNET requires manual cleanup through their interface
+
+- name: Document FlokiNET cleanup procedure
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - vars.yaml
+  vars:
+    cleanup_redirector: "{{ (redirector_ip is defined and redirector_ip != '') | ternary(true, false) }}"
+    cleanup_c2: "{{ (c2_ip is defined and c2_ip != '') | ternary(true, false) }}"
+    confirm_cleanup: false  # Skip confirmation in automated teardown
+
+  tasks:
+    - name: Confirm cleanup if required
+      pause:
+        prompt: "WARNING: This script provides guidance for manual FlokiNET cleanup. Type 'yes' to continue"
+      register: confirmation
+      when: confirm_cleanup
+      
+    - name: Exit if not confirmed
+      meta: end_play
+      when: confirm_cleanup and confirmation.user_input != 'yes'
+
+    - name: Display cleanup instructions
+      debug:
+        msg:
+          - "FlokiNET Cleanup Instructions"
+          - "========================================"
+          - "Since FlokiNET resources must be manually terminated through their control panel,"
+          - "this playbook provides guidance on the steps needed for cleanup."
+          - ""
+          - "Resources to clean up:"
+          - "{{ cleanup_redirector | ternary('- Redirector server: ' + redirector_ip, '') }}"
+          - "{{ cleanup_c2 | ternary('- C2 server: ' + c2_ip, '') }}"
+          - ""
+          - "Steps to terminate FlokiNET servers:"
+          - "1. Log in to your FlokiNET control panel"
+          - "2. Navigate to the Virtual Servers section"
+          - "3. Select each server from the list"
+          - "4. Click 'Terminate' and confirm termination"
+          - ""
+          - "For security, consider also:"
+          - "- Manually executing the secure-exit.sh script on each server before termination"
+          - "- Removing DNS records associated with these servers"
+          - "- Ensuring any SSH keys used for these servers are removed or rotated"
+
+    - name: Remove SSH key file if it's not a shared key
+      file:
+        path: "{{ ssh_key_path | replace('.pub', '') }}"
+        state: absent
+      when: 
+        - ssh_key_path is defined
+        - ssh_key_path is search('c2deploy_')
+      ignore_errors: true
+
+    - name: Remove SSH public key file if it's not a shared key
+      file:
+        path: "{{ ssh_key_path }}"
+        state: absent
+      when: 
+        - ssh_key_path is defined
+        - ssh_key_path is search('c2deploy_')
+      ignore_errors: true
+
+    - name: Pre-termination security recommendations
+      debug:
+        msg:
+          - "Security Recommendations before manual termination:"
+          - "------------------------------------------------"
+          - "  SSH Command: ssh -i {{ ssh_key_path | replace('.pub', '') }} {{ ssh_user | default('root') }}@SERVER_IP -p {{ ssh_port | default('22') }}"
+          - "  Then run: /opt/c2/secure-exit.sh"
+      when: (cleanup_redirector or cleanup_c2) and ssh_key_path is defined

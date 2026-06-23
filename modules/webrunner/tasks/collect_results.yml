@@ -1,0 +1,19 @@
+---
+# Fetch scan results from node back to controller
+
+- name: Check results exist on {{ node_name }}
+  stat:
+    path: /root/webrunner/results.json
+  register: results_stat
+
+- name: Fetch results from {{ node_name }}
+  fetch:
+    src: /root/webrunner/results.json
+    dest: "{{ results_dir }}/{{ node_name }}_results.json"
+    flat: true
+  when: results_stat.stat.exists
+
+- name: Warn if no results from {{ node_name }}
+  debug:
+    msg: "No results.json found on {{ node_name }} — scan may have failed"
+  when: not results_stat.stat.exists

@@ -1,0 +1,111 @@
+---
+# FedRAMP compliance configuration for user awareness testing
+
+- name: Create FedRAMP compliant landing pages
+  template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: '0644'
+    owner: www-data
+    group: www-data
+  with_items:
+    - { src: "../templates/fedramp-success-page.html.j2", dest: "/var/www/phishing/fedramp-success.html" }
+    - { src: "../templates/fedramp-education-page.html.j2", dest: "/var/www/phishing/fedramp-education.html" }
+    - { src: "../templates/fedramp-training-materials.html.j2", dest: "/var/www/phishing/training.html" }
+
+- name: Create FedRAMP compliant email templates
+  template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: '0644'
+    owner: root
+    group: root
+  with_items:
+    - { src: "../templates/fedramp-email-template.html.j2", dest: "/root/Tools/phishing/templates/fedramp-email.html" }
+    - { src: "../templates/fedramp-notification-email.html.j2", dest: "/root/Tools/phishing/templates/fedramp-notification.html" }
+
+- name: Configure anonymized reporting
+  template:
+    src: "../templates/fedramp-reporting.py.j2"
+    dest: "/root/Tools/phishing/fedramp-reporting.py"
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Create role-based tracking system
+  template:
+    src: "../templates/role-tracking.py.j2"
+    dest: "/root/Tools/phishing/role-tracking.py"
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Set up immediate phish identification
+  template:
+    src: "../templates/immediate-identification.js.j2"
+    dest: "/var/www/phishing/assets/immediate-identification.js"
+    mode: '0644'
+    owner: www-data
+    group: www-data
+
+- name: Create educational content delivery system
+  template:
+    src: "../templates/education-delivery.php.j2"
+    dest: "/var/www/phishing/api/education.php"
+    mode: '0644'
+    owner: www-data
+    group: www-data
+
+- name: Configure compliance database schema
+  shell: |
+    sqlite3 /root/Tools/phishing/compliance.db << EOF
+    CREATE TABLE IF NOT EXISTS fedramp_campaigns (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        csp_organization TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        status TEXT DEFAULT 'active'
+    );
+    
+    CREATE TABLE IF NOT EXISTS role_interactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        campaign_id TEXT NOT NULL,
+        user_role TEXT NOT NULL,
+        interaction_type TEXT NOT NULL,
+        interaction_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+        education_completed BOOLEAN DEFAULT FALSE
+    );
+    
+    CREATE TABLE IF NOT EXISTS compliance_metrics (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        campaign_id TEXT NOT NULL,
+        metric_type TEXT NOT NULL,
+        metric_value INTEGER NOT NULL,
+        recorded_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    EOF
+  args:
+    creates: /root/Tools/phishing/compliance.db
+
+- name: Set database permissions for compliance
+  file:
+    path: /root/Tools/phishing/compliance.db
+    owner: www-data
+    group: www-data
+    mode: '0644'
+
+- name: Create compliance report generator
+  template:
+    src: "../templates/compliance-report-generator.py.j2"
+    dest: "/root/Tools/phishing/generate-compliance-report.py"
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Configure email allowlisting instructions
+  template:
+    src: "../templates/allowlist-instructions.md.j2"
+    dest: "/root/Tools/phishing/ALLOWLIST_INSTRUCTIONS.md"
+    mode: '0644'
+    owner: root
+    group: root

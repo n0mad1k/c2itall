@@ -1,0 +1,171 @@
+---
+# AWS Attack Box Deployment Playbook
+# Based on attk-box-setup but optimized for AWS deployment
+
+- name: Deploy Attack Box on AWS
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - vars.yaml
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    deployment_type: "attack_box"
+    attack_box_name: "{{ attack_box_name | default('a-' + deployment_id) }}"
+    attack_box_type: "{{ attack_box_type | default('kali') }}"
+    aws_region: "{{ aws_region | default(aws_region_choices | random) }}"
+    instance_type: "{{ aws_instance_type | default('t2.medium') }}"
+    ssh_key_name: "attack-box-{{ deployment_id }}"
+    
+    # Attack box AMI mapping (use Kali Linux AMIs)
+    attack_box_ami_map:
+      us-east-1: "{{ kali_ami_map['us-east-1'] | default('ami-061b17d332829ab1c') }}"
+      us-east-2: "{{ kali_ami_map['us-east-2'] | default('ami-061b17d332829ab1c') }}"
+      us-west-1: "{{ kali_ami_map['us-west-1'] | default('ami-061b17d332829ab1c') }}"
+      us-west-2: "{{ kali_ami_map['us-west-2'] | default('ami-061b17d332829ab1c') }}"
+    
+  tasks:
+    - name: Validate AWS credentials
+      assert:
+        that:
+          - aws_access_key is defined and aws_access_key != ""
+          - aws_secret_key is defined and aws_secret_key != ""
+        fail_msg: "AWS credentials are required"
+
+    - name: Debug attack box deployment
+      debug:
+        msg: "Deploying {{ attack_box_type }} attack box on AWS in {{ aws_region }}"
+
+    - name: Set attack box AMI
+      set_fact:
+        attack_box_ami: "{{ attack_box_ami_map[aws_region] | default(attack_box_ami_map['us-east-1']) }}"
+
+    - name: Generate SSH key pair for attack box
+      ec2_key:
+        name: "{{ ssh_key_name }}"
+        region: "{{ aws_region }}"
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+        state: present
+      register: ec2_key_result
+
+    - name: Save private key locally
+      copy:
+        content: "{{ ec2_key_result.key.private_key }}"
+        dest: "~/.ssh/{{ ssh_key_name }}"
+        mode: '0600'
+      when: ec2_key_result.key.private_key is defined
+
+    - name: Create security group for attack box
+      ec2_group:
+        name: "attack-box-sg-{{ deployment_id }}"
+        description: "Security group for attack box {{ deployment_id }}"
+        region: "{{ aws_region }}"
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+        rules:
+          - proto: tcp
+            ports:
+              - 22
+            cidr_ip: "{{ operator_ip | default('0.0.0.0/0') }}/32"
+            rule_desc: "SSH access from operator IP"
+          - proto: tcp
+            ports:
+              - 80
+              - 443
+            cidr_ip: 0.0.0.0/0
+            rule_desc: "HTTP/HTTPS for tools"
+        rules_egress:
+          - proto: all
+            cidr_ip: 0.0.0.0/0
+        tags:
+          Name: "attack-box-sg-{{ deployment_id }}"
+          DeploymentID: "{{ deployment_id }}"
+          Type: "attack-box"
+      register: security_group
+
+    - name: Launch attack box EC2 instance
+      ec2:
+        key_name: "{{ ssh_key_name }}"
+        group: "{{ security_group.group_name }}"
+        instance_type: "{{ instance_type }}"
+        image: "{{ attack_box_ami }}"
+        region: "{{ aws_region }}"
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+        wait: true
+        count: 1
+        instance_tags:
+          Name: "{{ attack_box_name }}"
+          DeploymentID: "{{ deployment_id }}"
+          Type: "attack-box"
+          Environment: "{{ attack_box_type }}"
+        user_data: |
+          #!/bin/bash
+          # Update system
+          apt-get update
+          apt-get upgrade -y
+          
+          # Install additional tools if needed
+          {% if attack_box_type == 'kali' %}
+          # Kali already has most tools
+          apt-get install -y nmap curl wget git
+          {% else %}
+          # Install basic pentest tools for other distros
+          apt-get install -y nmap curl wget git python3-pip
+          {% endif %}
+          
+          # Set hostname
+          echo "{{ attack_box_name }}" > /etc/hostname
+          hostname "{{ attack_box_name }}"
+          
+          # Create deployment info
+          mkdir -p /root/deployment-info
+          cat > /root/deployment-info/info.txt << EOF
+          Deployment ID: {{ deployment_id }}
+          Attack Box Name: {{ attack_box_name }}
+          Attack Box Type: {{ attack_box_type }}
+          Region: {{ aws_region }}
+          Instance Type: {{ instance_type }}
+          SSH Key: {{ ssh_key_name }}
+          EOF
+          
+      register: ec2_result
+
+    - name: Wait for SSH to be available
+      wait_for:
+        host: "{{ ec2_result.instances[0].public_ip }}"
+        port: 22
+        delay: 60
+        timeout: 300
+      
+    - name: Display attack box information
+      debug:
+        msg:
+          - "Attack box deployed successfully!"
+          - "Instance ID: {{ ec2_result.instances[0].id }}"
+          - "Public IP: {{ ec2_result.instances[0].public_ip }}"
+          - "Private IP: {{ ec2_result.instances[0].private_ip }}"
+          - "SSH Command: ssh -i ~/.ssh/{{ ssh_key_name }} root@{{ ec2_result.instances[0].public_ip }}"
+
+    - name: Save deployment information
+      copy:
+        content: |
+          # Attack Box Deployment Information
+          Instance ID: {{ ec2_result.instances[0].id }}
+          Public IP: {{ ec2_result.instances[0].public_ip }}
+          Private IP: {{ ec2_result.instances[0].private_ip }}
+          SSH Key: ~/.ssh/{{ ssh_key_name }}
+          SSH Command: ssh -i ~/.ssh/{{ ssh_key_name }} root@{{ ec2_result.instances[0].public_ip }}
+          Region: {{ aws_region }}
+          Instance Type: {{ instance_type }}
+          AMI: {{ attack_box_ami }}
+          Security Group: {{ security_group.group_name }}
+        dest: "logs/attack_box_{{ deployment_id }}_info.txt"
+
+    - name: Set attack box facts for other playbooks
+      set_fact:
+        attack_box_instance_id: "{{ ec2_result.instances[0].id }}"
+        attack_box_public_ip: "{{ ec2_result.instances[0].public_ip }}"
+        attack_box_private_ip: "{{ ec2_result.instances[0].private_ip }}"
+        attack_box_security_group: "{{ security_group.group_name }}"

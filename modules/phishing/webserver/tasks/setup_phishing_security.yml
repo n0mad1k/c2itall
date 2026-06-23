@@ -1,0 +1,183 @@
+---
+# Configure security groups and firewall rules for phishing infrastructure
+
+- name: Configure MTA Front security
+  block:
+    - name: Create MTA Front security group
+      amazon.aws.ec2_security_group:
+        name: "mta-front-{{ deployment_id }}"
+        description: "Security group for MTA Front server"
+        vpc_id: "{{ vpc_id }}"
+        region: "{{ aws_region }}"
+        rules:
+          # Management access
+          - proto: tcp
+            ports: 22
+            cidr_ip: "{{ operator_ip }}/32"
+            rule_desc: "SSH from operator"
+          
+          # SMTP services - public facing
+          - proto: tcp
+            ports: 25
+            cidr_ip: "0.0.0.0/0"
+            rule_desc: "SMTP from anywhere"
+          
+          - proto: tcp
+            ports: 587
+            cidr_ip: "0.0.0.0/0"
+            rule_desc: "SMTP submission"
+          
+          - proto: tcp
+            ports: 465
+            cidr_ip: "0.0.0.0/0"
+            rule_desc: "SMTPS"
+        
+        rules_egress:
+          - proto: -1
+            cidr_ip: "0.0.0.0/0"
+        state: present
+      when: deployment_components.mta_front | default(false) | bool
+
+- name: Configure Gophish security (hidden backend)
+  block:
+    - name: Create Gophish security group
+      amazon.aws.ec2_security_group:
+        name: "gophish-{{ deployment_id }}"
+        description: "Security group for Gophish server (hidden)"
+        vpc_id: "{{ vpc_id }}"
+        region: "{{ aws_region }}"
+        rules:
+          # Management access only
+          - proto: tcp
+            ports: 22
+            cidr_ip: "{{ operator_ip }}/32"
+            rule_desc: "SSH from operator"
+          
+          - proto: tcp
+            ports: 3333
+            cidr_ip: "{{ operator_ip }}/32"
+            rule_desc: "Gophish admin interface"
+          
+          # Internal communication only
+          - proto: tcp
+            ports: 80
+            cidr_ip: "{{ phishing_redirector_ip }}/32"
+            rule_desc: "HTTP from phishing redirector"
+          
+          - proto: tcp
+            ports: 25
+            cidr_ip: "{{ mta_front_ip }}/32"
+            rule_desc: "SMTP from MTA front"
+        
+        rules_egress:
+          - proto: -1
+            cidr_ip: "0.0.0.0/0"
+        state: present
+      when: deployment_components.gophish | default(false) | bool
+
+- name: Configure Phishing Redirector security (public facing)
+  block:
+    - name: Create Phishing Redirector security group
+      amazon.aws.ec2_security_group:
+        name: "phish-redirector-{{ deployment_id }}"
+        description: "Security group for Phishing Redirector"
+        vpc_id: "{{ vpc_id }}"
+        region: "{{ aws_region }}"
+        rules:
+          # Management access
+          - proto: tcp
+            ports: 22
+            cidr_ip: "{{ operator_ip }}/32"
+            rule_desc: "SSH from operator"
+          
+          # Public web access
+          - proto: tcp
+            ports: 80
+            cidr_ip: "0.0.0.0/0"
+            rule_desc: "HTTP from anywhere"
+          
+          - proto: tcp
+            ports: 443
+            cidr_ip: "0.0.0.0/0"
+            rule_desc: "HTTPS from anywhere"
+        
+        rules_egress:
+          - proto: -1
+            cidr_ip: "0.0.0.0/0"
+        state: present
+      when: deployment_components.phishing_redirector | default(false) | bool
+
+- name: Configure Phishing Web Server security (hidden backend)
+  block:
+    - name: Create Phishing Web Server security group
+      amazon.aws.ec2_security_group:
+        name: "phish-webserver-{{ deployment_id }}"
+        description: "Security group for Phishing Web Server (hidden)"
+        vpc_id: "{{ vpc_id }}"
+        region: "{{ aws_region }}"
+        rules:
+          # Management access only
+          - proto: tcp
+            ports: 22
+            cidr_ip: "{{ operator_ip }}/32"
+            rule_desc: "SSH from operator"
+          
+          # Internal communication only
+          - proto: tcp
+            ports: 80
+            cidr_ip: "{{ phishing_redirector_ip }}/32"
+            rule_desc: "HTTP from phishing redirector"
+          
+          - proto: tcp
+            ports: 443
+            cidr_ip: "{{ phishing_redirector_ip }}/32"
+            rule_desc: "HTTPS from phishing redirector"
+        
+        rules_egress:
+          - proto: -1
+            cidr_ip: "0.0.0.0/0"
+        state: present
+      when: deployment_components.phishing_webserver | default(false) | bool
+
+- name: Configure Payload Server security (hidden backend)
+  block:
+    - name: Create Payload Server security group
+      amazon.aws.ec2_security_group:
+        name: "payload-server-{{ deployment_id }}"
+        description: "Security group for Payload Server (hidden)"
+        vpc_id: "{{ vpc_id }}"
+        region: "{{ aws_region }}"
+        rules:
+          # Management access only
+          - proto: tcp
+            ports: 22
+            cidr_ip: "{{ operator_ip }}/32"
+            rule_desc: "SSH from operator"
+          
+          # Internal communication only
+          - proto: tcp
+            ports: 80
+            cidr_ip: "{{ payload_redirector_ip }}/32"
+            rule_desc: "HTTP from payload redirector"
+          
+          - proto: tcp
+            ports: 443
+            cidr_ip: "{{ payload_redirector_ip }}/32"
+            rule_desc: "HTTPS from payload redirector"
+        
+        rules_egress:
+          - proto: -1
+            cidr_ip: "0.0.0.0/0"
+        state: present
+      when: deployment_components.payload_server | default(false) | bool
+
+- name: Display security configuration summary
+  debug:
+    msg:
+      - "Phishing Infrastructure Security Configuration"
+      - "============================================="
+      - "✓ Least privilege access implemented"
+      - "✓ Backend servers hidden from public access"
+      - "✓ Only redirectors/MTA fronts are publicly accessible"
+      - "✓ Operator-only SSH access configured"
+      - "✓ Internal communication secured"

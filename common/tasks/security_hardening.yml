@@ -1,0 +1,402 @@
+---
+# Security hardening tasks for C2 server - Fixed AWS collection issues
+
+- name: Check if system is updated
+  apt:
+    update_cache: yes
+  register: apt_update_result
+  until: apt_update_result is success
+  retries: 5
+  delay: 5
+
+- name: Install security packages (non-UFW)
+  apt:
+    name:
+      - fail2ban
+      - unattended-upgrades
+      - debsums
+      - aide
+      - rkhunter
+      - logrotate
+    state: present
+  register: package_install
+  until: package_install is success
+  retries: 3
+  delay: 5
+
+# Provider and role detection - DRY principle
+- name: Determine deployment configuration
+  set_fact:
+    is_aws_provider: "{{ provider | default('unknown') == 'aws' }}"
+    is_c2_server: "{{ 'c2servers' in group_names }}"
+    is_redirector: "{{ 'redirectors' in group_names }}"
+
+# UFW Configuration Block - Non-AWS only
+- name: UFW detection and installation block
+  block:
+    - name: Check if UFW is installed
+      command: which ufw
+      register: ufw_check
+      failed_when: false
+      changed_when: false
+
+    - name: Install UFW if not present (non-AWS)
+      apt:
+        name: ufw
+        state: present
+        update_cache: yes
+      register: ufw_install
+      until: ufw_install is success
+      retries: 3
+      delay: 5
+      when: ufw_check.rc != 0
+  when: not is_aws_provider
+
+- name: Configure UFW for non-AWS deployments
+  block:
+    - name: Configure UFW default policies
+      community.general.ufw:
+        state: enabled
+        policy: deny
+        direction: incoming
+      ignore_errors: yes
+
+    - name: Configure UFW for C2 server
+      block:
+        - name: Reset UFW to default deny
+          community.general.ufw:
+            state: enabled
+            policy: deny
+            direction: incoming
+
+        - name: Allow SSH only from operator IP
+          community.general.ufw:
+            rule: allow
+            port: "22"
+            src: "{{ operator_ip }}"
+            proto: tcp
+
+        - name: Allow Havoc Teamserver only from operator IP
+          community.general.ufw:
+            rule: allow
+            port: "{{ havoc_teamserver_port | default('40056') }}"
+            src: "{{ operator_ip }}"
+            proto: tcp
+
+        - name: Allow traffic only from redirector
+          community.general.ufw:
+            rule: allow
+            port: "{{ item }}"
+            src: "{{ redirector_ip }}"
+            proto: tcp
+          loop:
+            - "80"
+            - "443"
+            - "{{ havoc_http_port | default('8080') }}"
+            - "{{ havoc_https_port | default('9443') }}"
+            - "{{ havoc_payload_port | default('8443') }}"
+            - "{{ gophish_admin_port }}"
+            - "{{ gophish_phish_port | default('8081') }}"
+            - "{{ tracker_port | default('5000') }}"
+      when: is_c2_server
+
+    - name: Configure UFW for redirector
+      block:
+        - name: Reset UFW to default deny
+          community.general.ufw:
+            state: enabled
+            policy: deny
+            direction: incoming
+
+        - name: Allow SSH only from operator IP
+          community.general.ufw:
+            rule: allow
+            port: "22"
+            src: "{{ operator_ip }}"
+            proto: tcp
+
+        - name: Allow public services from anywhere
+          community.general.ufw:
+            rule: allow
+            port: "{{ item }}"
+            proto: tcp
+          loop:
+            - "80"
+            - "443"
+            - "{{ shell_handler_port | default('4488') }}"
+      when: is_redirector
+  when: not is_aws_provider and (ufw_check.rc == 0 or ufw_install is success)
+
+# Iptables fallback configuration - Non-AWS only
+- name: Configure basic iptables rules if UFW unavailable
+  block:
+    - name: Set up basic iptables rules for C2 server
+      shell: |
+        iptables -F
+        iptables -P INPUT DROP
+        iptables -P FORWARD DROP
+        iptables -P OUTPUT ACCEPT
+        # Allow established connections
+        iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+        # Allow loopback
+        iptables -A INPUT -i lo -j ACCEPT
+        # Allow SSH from operator
+        iptables -A INPUT -p tcp --dport 22 -s {{ operator_ip }} -j ACCEPT
+        # Allow Havoc teamserver from operator
+        iptables -A INPUT -p tcp --dport {{ havoc_teamserver_port | default(40056) }} -s {{ operator_ip }} -j ACCEPT
+        # Allow traffic from redirector
+        iptables -A INPUT -p tcp --dport 80 -s {{ redirector_ip }} -j ACCEPT
+        iptables -A INPUT -p tcp --dport 443 -s {{ redirector_ip }} -j ACCEPT
+        iptables -A INPUT -p tcp --dport {{ havoc_http_port | default(8080) }} -s {{ redirector_ip }} -j ACCEPT
+        iptables -A INPUT -p tcp --dport {{ havoc_https_port | default(9443) }} -s {{ redirector_ip }} -j ACCEPT
+        iptables -A INPUT -p tcp --dport {{ havoc_payload_port | default(8443) }} -s {{ redirector_ip }} -j ACCEPT
+        iptables -A INPUT -p tcp --dport {{ gophish_admin_port }} -s {{ redirector_ip }} -j ACCEPT
+        iptables -A INPUT -p tcp --dport {{ gophish_phish_port | default(8081) }} -s {{ redirector_ip }} -j ACCEPT
+        iptables -A INPUT -p tcp --dport {{ tracker_port | default(5000) }} -s {{ redirector_ip }} -j ACCEPT
+      when: is_c2_server
+
+    - name: Set up basic iptables rules for redirector
+      shell: |
+        iptables -F
+        iptables -P INPUT DROP
+        iptables -P FORWARD DROP
+        iptables -P OUTPUT ACCEPT
+        # Allow established connections
+        iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+        # Allow loopback
+        iptables -A INPUT -i lo -j ACCEPT
+        # Allow SSH from operator
+        iptables -A INPUT -p tcp --dport 22 -s {{ operator_ip }} -j ACCEPT
+        # Allow public services
+        iptables -A INPUT -p tcp --dport 80 -j ACCEPT
+        iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+        iptables -A INPUT -p tcp --dport {{ shell_handler_port | default(4488) }} -j ACCEPT
+      when: is_redirector
+
+    - name: Save iptables rules
+      shell: |
+        iptables-save > /etc/iptables/rules.v4
+      ignore_errors: yes
+  when: not is_aws_provider and (ufw_check.rc != 0 and (ufw_install is undefined or ufw_install is failed))
+
+# SSH Hardening - Universal application
+- name: Harden SSH configuration
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    state: present
+    backup: yes
+  loop:
+    - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
+    - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
+    - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
+    - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 3' }
+    - { regexp: '^#?AllowTcpForwarding', line: 'AllowTcpForwarding yes' }
+    - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval 300' }
+    - { regexp: '^#?ClientAliveCountMax', line: 'ClientAliveCountMax 2' }
+    - { regexp: '^#?Protocol', line: 'Protocol 2' }
+    - { regexp: '^#?MaxStartups', line: 'MaxStartups 10:30:100' }
+    - { regexp: '^#?LoginGraceTime', line: 'LoginGraceTime 60' }
+  register: ssh_config_updated
+
+# System resource limits configuration
+- name: Configure system resource limits
+  community.general.pam_limits:
+    domain: "*"
+    limit_type: "{{ item.limit_type }}"
+    limit_item: "{{ item.limit_item }}"
+    value: "{{ item.value }}"
+  loop:
+    - { limit_type: soft, limit_item: nofile, value: 65535 }
+    - { limit_type: hard, limit_item: nofile, value: 65535 }
+    - { limit_type: soft, limit_item: nproc, value: 4096 }
+    - { limit_type: hard, limit_item: nproc, value: 4096 }
+
+# Fail2ban configuration - Universal
+- name: Set up fail2ban SSH jail
+  copy:
+    dest: /etc/fail2ban/jail.d/sshd.conf
+    content: |
+      [sshd]
+      enabled = true
+      port = ssh
+      filter = sshd
+      logpath = /var/log/auth.log
+      maxretry = 5
+      bantime = 3600
+      findtime = 600
+      
+      [sshd-ddos]
+      enabled = true
+      port = ssh
+      filter = sshd-ddos
+      logpath = /var/log/auth.log
+      maxretry = 2
+      bantime = 7200
+    mode: '0644'
+  register: fail2ban_config_updated
+
+# Automatic security updates
+- name: Enable automatic security updates
+  copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+      APT::Periodic::Download-Upgradeable-Packages "1";
+    mode: '0644'
+
+# Log cleaning functionality
+- name: Create Tools directory if it doesn't exist
+  file:
+    path: /root/Tools
+    state: directory
+    mode: '0700'
+  when: zero_logs | default(false) | bool
+
+- name: Create log cleaning script if zero-logs is enabled
+  copy:
+    dest: /root/Tools/clean-logs.sh
+    content: |
+      #!/bin/bash
+      # C2ingRed Log cleaning script for operational security
+      echo "Starting log cleaning at $(date)" >> /tmp/clean-logs.log
+      
+      # Clear authentication logs
+      echo "" > /var/log/auth.log
+      echo "" > /var/log/auth.log.1
+      
+      # Clear system logs
+      echo "" > /var/log/syslog
+      echo "" > /var/log/syslog.1
+      
+      # Clear kernel logs
+      echo "" > /var/log/kern.log
+      echo "" > /var/log/kern.log.1
+      
+      # Clear application specific logs
+      find /var/log -type f -name "*.log" -exec truncate -s 0 {} \;
+      find /var/log -type f -name "*.log.*" -exec truncate -s 0 {} \;
+      
+      # Clear journal logs
+      journalctl --vacuum-time=1s 2>/dev/null || true
+      
+      # Clear bash history for all users
+      for user_home in /home/*; do
+          if [ -d "$user_home" ]; then
+              echo "" > "$user_home/.bash_history" 2>/dev/null || true
+          fi
+      done
+      
+      # Clear root bash history
+      echo "" > /root/.bash_history 2>/dev/null || true
+      history -c 2>/dev/null || true
+      
+      # Clear tmp files
+      find /tmp -type f -mtime +1 -delete 2>/dev/null || true
+      
+      echo "Log cleaning completed at $(date)" >> /tmp/clean-logs.log
+    mode: '0700'
+  when: zero_logs | default(false) | bool
+
+- name: Create cron job for log cleaning if enabled
+  cron:
+    name: "Clean operational logs"
+    minute: "0"
+    hour: "*/6"
+    job: "/root/Tools/clean-logs.sh"
+    user: root
+  when: zero_logs | default(false) | bool
+
+# Service restart handlers
+- name: Restart SSH service if configuration changed
+  service:
+    name: ssh
+    state: restarted
+  when: ssh_config_updated.changed
+
+- name: Check if fail2ban service exists
+  stat:
+    path: "/etc/init.d/fail2ban"
+  register: fail2ban_service_stat
+
+- name: Restart fail2ban service if installed and configuration changed
+  service:
+    name: fail2ban
+    state: restarted
+    enabled: yes
+  when: fail2ban_service_stat.stat.exists and fail2ban_config_updated.changed
+
+# AWS-specific security updates - NO MODULES REQUIRED
+- name: Check if we're running on AWS provider
+  set_fact:
+    is_aws_provider: "{{ hostvars['localhost']['provider'] | default('') == 'aws' }}"
+
+- name: AWS-specific security updates
+  block:
+    - name: Get redirector security group information
+      block:
+      - name: Check if infrastructure state file exists
+        stat:
+          path: "{{ playbook_dir }}/infrastructure_state_{{ hostvars['localhost']['deployment_id'] }}.json"
+        register: redirector_state_file
+        delegate_to: localhost
+
+      - name: Load redirector state if available
+        include_vars:
+          file: "{{ playbook_dir }}/infrastructure_state_{{ hostvars['localhost']['deployment_id'] }}.json"
+          name: redirector_state
+        when: redirector_state_file.stat.exists
+        delegate_to: localhost
+      
+    - name: Update redirector security group via raw AWS CLI
+      delegate_to: localhost
+      shell: |
+        export AWS_ACCESS_KEY_ID="{{ hostvars['localhost']['aws_access_key'] }}"
+        export AWS_SECRET_ACCESS_KEY="{{ hostvars['localhost']['aws_secret_key'] }}"
+        export AWS_DEFAULT_REGION="{{ redirector_state.region | default(aws_region) }}"
+        
+        # Install AWS CLI if not present
+        if ! command -v aws &> /dev/null; then
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip -q awscliv2.zip
+          sudo ./aws/install --update
+          rm -rf aws awscliv2.zip
+        fi
+        
+        # Add security group rule (ignore if exists)
+        aws ec2 authorize-security-group-ingress \
+          --group-id {{ redirector_state.security_group_id }} \
+          --protocol tcp \
+          --port 22 \
+          --cidr {{ ansible_host }}/32 \
+          2>/dev/null || echo "Rule already exists or added successfully"
+      when: redirector_state is defined and redirector_state.security_group_id is defined
+      register: sg_update_result
+      ignore_errors: yes
+
+    - name: Display security group update result
+      debug:
+        msg: |
+          AWS Security Group Update: {{ 'SUCCESS' if sg_update_result.rc == 0 else 'COMPLETED' }}
+          C2 Server IP: {{ ansible_host }}
+          Security Group ID: {{ redirector_state.security_group_id | default('NOT FOUND') }}
+
+  when: is_aws_provider | bool
+
+# Final security status report
+- name: Generate security hardening report
+  debug:
+    msg: |
+      C2ingRed Security Hardening Complete:
+      =====================================
+      Provider: {{ provider | default('unknown') }}
+      Server Type: {{ 'C2 Server' if is_c2_server else 'Redirector' if is_redirector else 'Unknown' }}
+      SSH Hardened: {{ 'YES' if ssh_config_updated.changed else 'ALREADY CONFIGURED' }}
+      Fail2ban Configured: {{ 'YES' if fail2ban_config_updated.changed else 'ALREADY CONFIGURED' }}
+      Firewall: {{ 'AWS Security Groups' if is_aws_provider else 'UFW/iptables' }}
+      Log Cleaning: {{ 'ENABLED' if zero_logs | default(false) | bool else 'DISABLED' }}
+      Auto Updates: ENABLED
+      System Limits: CONFIGURED

@@ -1,0 +1,88 @@
+---
+# Run the assigned scan on this WEBRUNNER node
+# Per-node vars: node_name, node_cidrs, node_ip_count, node_idx
+# Global vars (from extra-vars): scan_mode, ports_str, masscan_rate, webrunner_name, deployment_id, use_tor
+
+- name: Write CIDR list for {{ node_name }}
+  copy:
+    content: "{{ node_cidrs | join('\n') }}\n"
+    dest: /root/webrunner/cidrs.txt
+    mode: '0644'
+
+- name: Run scan on {{ node_name }} ({{ node_ip_count }} IPs, mode={{ scan_mode }})
+  command:
+    argv:
+      - python3
+      - /root/webrunner/node_scanner.py
+      - --mode
+      - "{{ scan_mode }}"
+      - --ports
+      - "{{ ports_str }}"
+      - --rate
+      - "{{ masscan_rate }}"
+      - --node-name
+      - "{{ node_name }}"
+      - --nmap-timing
+      - "{{ nmap_timing | default(4) }}"
+      - --nmap-timeout
+      - "{{ nmap_timeout | default(60) }}"
+      - --nmap-workers
+      - "{{ nmap_workers | default(10) }}"
+      - --nuclei-rate
+      - "{{ nuclei_rate | default(150) }}"
+      - --nuclei-concurrency
+      - "{{ nuclei_concurrency | default(25) }}"
+      - --nuclei-timeout
+      - "{{ nuclei_timeout | default(10) }}"
+      - --template
+      - "{{ nuclei_template_remote | default('') }}"
+  args:
+    chdir: /root/webrunner
+  register: scan_output
+  async: 43200
+  poll: 60
+  ignore_errors: true
+  when: not (use_tor | default(false) | bool)
+
+- name: Run scan via Tor on {{ node_name }} ({{ node_ip_count }} IPs, mode={{ scan_mode }})
+  command:
+    argv:
+      - proxychains4
+      - -f
+      - /etc/proxychains4.conf
+      - python3
+      - /root/webrunner/node_scanner.py
+      - --mode
+      - "{{ scan_mode }}"
+      - --ports
+      - "{{ ports_str }}"
+      - --rate
+      - "{{ masscan_rate }}"
+      - --node-name
+      - "{{ node_name }}"
+      - --nmap-timing
+      - "{{ nmap_timing | default(4) }}"
+      - --nmap-timeout
+      - "{{ nmap_timeout | default(60) }}"
+      - --nmap-workers
+      - "{{ nmap_workers | default(10) }}"
+      - --nuclei-rate
+      - "{{ nuclei_rate | default(150) }}"
+      - --nuclei-concurrency
+      - "{{ nuclei_concurrency | default(25) }}"
+      - --nuclei-timeout
+      - "{{ nuclei_timeout | default(10) }}"
+      - --template
+      - "{{ nuclei_template_remote | default('') }}"
+  args:
+    chdir: /root/webrunner
+  register: scan_output
+  async: 43200
+  poll: 60
+  ignore_errors: true
+  when: use_tor | default(false) | bool
+
+- name: Show scan output for {{ node_name }}
+  debug:
+    var: scan_output.stdout_lines
+  when: scan_output.stdout_lines is defined

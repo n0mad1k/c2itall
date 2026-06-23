@@ -1,0 +1,4 @@
+OMITTED — HID injection payload
+
+This file contains a Rubber Ducky / Bash Bunny script for physical-access
+scenarios. Payloads are engagement-specific and omitted from public release.

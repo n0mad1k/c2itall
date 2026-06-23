@@ -1,0 +1,24 @@
+---
+# Payload Redirector Deployment Playbook
+- name: Deploy payload redirector
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars_files:
+    - vars.yaml
+  vars:
+    deployment_id: "{{ deployment_id | default('') }}"
+    payload_redirector_name: "{{ payload_redirector_name | default('pr-' + deployment_id) }}"
+    provider: "{{ provider | default('aws') }}"
+    
+  tasks:
+    - name: Deploy payload redirector based on provider
+      include_tasks: "../providers/{{ provider | upper }}/redirector.yml"
+      vars:
+        redirector_name: "{{ payload_redirector_name }}"
+        redirector_type: "payload"
+        redirector_subdomain: "{{ payload_subdomain | default('files') }}"
+        
+    - name: Configure payload redirector
+      include_tasks: "tasks/configure_payload_redirector.yml"
+      when: not skip_configuration | default(false)

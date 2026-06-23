@@ -1,0 +1,51 @@
+---
+# MTA Front server deployment for email relay and SMTP smuggling
+
+- name: Deploy MTA Front server
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars_files:
+    - vars.yaml
+  vars:
+    mta_instance_type: "{{ mta_instance_type | default('t3.medium') }}"
+    mta_region: "{{ mta_region | default(aws_region) }}"
+
+  tasks:
+    - name: Create MTA Front instance
+      include_tasks: "../tasks/create_instance.yml"
+      vars:
+        instance_name: "{{ server_name }}"
+        instance_type: "{{ mta_instance_type }}"
+        region: "{{ mta_region }}"
+        security_group_rules:
+          - { proto: tcp, port: 22, cidr: "{{ operator_ip }}/32", desc: "SSH from operator" }
+          - { proto: tcp, port: 25, cidr: "0.0.0.0/0", desc: "SMTP from anywhere" }
+          - { proto: tcp, port: 587, cidr: "0.0.0.0/0", desc: "SMTP submission" }
+          - { proto: tcp, port: 465, cidr: "0.0.0.0/0", desc: "SMTPS" }
+
+    - name: Add MTA Front to inventory
+      add_host:
+        name: "mta_front"
+        groups: "mta_fronts"
+        ansible_host: "{{ instance_ip }}"
+        ansible_user: "{{ ansible_user | default('ubuntu') }}"
+        ansible_ssh_private_key_file: "{{ ssh_key_path }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Configure MTA Front server
+  hosts: mta_fronts
+  become: true
+  gather_facts: true
+  vars_files:
+    - vars.yaml
+  tasks:
+    - name: Include MTA Front configuration
+      include_tasks: "../tasks/configure_mta_front.yml"
+
+    - name: Include security hardening
+      include_tasks: "../tasks/security_hardening.yml"
+
+    - name: Include tracker setup
+      include_tasks: "../tasks/configure_integrated_tracker.yml"
+      when: deploy_tracker | default(true) | bool

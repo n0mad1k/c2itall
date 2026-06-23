@@ -1,0 +1,59 @@
+---
+# Phishing Infrastructure Cleanup Playbook
+- name: Clean up phishing infrastructure
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars_files:
+    - vars.yaml
+  vars:
+    deployment_id: "{{ deployment_id | default('') }}"
+    confirm_cleanup: "{{ confirm_cleanup | default(true) }}"
+    
+  tasks:
+    - name: Load deployment state
+      include_vars:
+        file: "phishing_deployment_state_{{ deployment_id }}.json"
+      register: deployment_state
+      ignore_errors: yes
+      
+    - name: Show cleanup information
+      debug:
+        msg: |
+          ************************************************
+          *         PHISHING CLEANUP OPERATION           *
+          ************************************************
+          The following resources will be DELETED PERMANENTLY:
+          - MTA Front: {{ mta_front_name | default('mta-' + deployment_id) }}
+          - GoPhish Server: {{ gophish_server_name | default('gp-' + deployment_id) }}
+          - Phishing Web Server: {{ phishing_web_name | default('pw-' + deployment_id) }}
+          - Phishing Redirector: {{ phishing_redirector_name | default('phr-' + deployment_id) }}
+          {% if cleanup_payload_infra | default(false) %}
+          - Payload Server: {{ payload_server_name | default('ps-' + deployment_id) }}
+          - Payload Redirector: {{ payload_redirector_name | default('pr-' + deployment_id) }}
+          {% endif %}
+      when: confirm_cleanup | bool
+      
+    - name: Confirm cleanup operation
+      pause:
+        prompt: "\n>>> Type 'yes' to confirm deletion or press Ctrl+C to abort <<<"
+      register: confirmation
+      when: confirm_cleanup | bool
+      
+    - name: Skip cleanup if not confirmed
+      meta: end_play
+      when: confirm_cleanup | bool and confirmation.user_input != 'yes'
+      
+    - name: Run provider-specific cleanup
+      include_tasks: "../{{ provider | upper }}/cleanup.yml"
+      vars:
+        cleanup_redirector: true
+        cleanup_c2: true
+        cleanup_tracker: false
+        redirector_name: "{{ phishing_redirector_name }}"
+        c2_name: "{{ gophish_server_name }}"
+        
+    - name: Remove deployment state file
+      file:
+        path: "phishing_deployment_state_{{ deployment_id }}.json"
+        state: absent

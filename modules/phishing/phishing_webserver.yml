@@ -1,0 +1,50 @@
+---
+# Phishing web server for credential harvesting
+
+- name: Deploy phishing web server
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars_files:
+    - vars.yaml
+  vars:
+    webserver_instance_type: "{{ webserver_instance_type | default('t3.medium') }}"
+    webserver_region: "{{ webserver_region | default(aws_region) }}"
+
+  tasks:
+    - name: Create phishing web server instance
+      include_tasks: "../tasks/create_instance.yml"
+      vars:
+        instance_name: "{{ server_name }}"
+        instance_type: "{{ webserver_instance_type }}"
+        region: "{{ webserver_region }}"
+        security_group_rules:
+          - { proto: tcp, port: 22, cidr: "{{ operator_ip }}/32", desc: "SSH from operator" }
+          - { proto: tcp, port: 80, cidr: "{{ phishing_redirector_ip | default('10.0.0.0/8') }}/32", desc: "HTTP from redirector" }
+          - { proto: tcp, port: 443, cidr: "{{ phishing_redirector_ip | default('10.0.0.0/8') }}/32", desc: "HTTPS from redirector" }
+
+    - name: Add phishing web server to inventory
+      add_host:
+        name: "phishing_webserver"
+        groups: "phishing_webservers"
+        ansible_host: "{{ instance_ip }}"
+        ansible_user: "{{ ansible_user | default('ubuntu') }}"
+        ansible_ssh_private_key_file: "{{ ssh_key_path }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Configure phishing web server
+  hosts: phishing_webservers
+  become: true
+  gather_facts: true
+  vars_files:
+    - vars.yaml
+  tasks:
+    - name: Include phishing web server configuration
+      include_tasks: "../tasks/configure_phishing_webserver.yml"
+
+    - name: Include security hardening
+      include_tasks: "../tasks/security_hardening.yml"
+
+    - name: Include tracker setup
+      include_tasks: "../tasks/configure_integrated_tracker.yml"
+      when: deploy_tracker | default(true) | bool

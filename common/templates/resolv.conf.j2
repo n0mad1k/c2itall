@@ -1,0 +1,18 @@
+# FlokiNET/templates/resolv.conf.j2
+# Secure DNS configuration
+# Uses privacy-respecting DNS servers
+
+nameserver 9.9.9.9
+nameserver 1.1.1.1
+options edns0 single-request-reopen
+options timeout:1
+options attempts:2
+
+# FlokiNET/templates/dnscrypt.conf.j2
+[Resolve]
+DNS=9.9.9.9 1.1.1.1
+FallbackDNS=8.8.8.8 8.8.4.4
+DNSSEC=yes
+DNSOverTLS=yes
+Cache=yes
+DNSStubListener=yes

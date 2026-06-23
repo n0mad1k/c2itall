@@ -1,0 +1,23 @@
+[Unit]
+Description=Email Tracking Server
+After=network.target
+
+[Service]
+User=tracker
+Group=tracker
+WorkingDirectory=/root/Tools/tracker
+ExecStart=/root/Tools/tracker/venv/bin/python /root/Tools/tracker/simple_email_tracker.py
+Restart=always
+RestartSec=10
+
+# Security settings
+PrivateTmp=true
+ProtectSystem=full
+NoNewPrivileges=true
+
+# Hide process information
+StandardOutput=null
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

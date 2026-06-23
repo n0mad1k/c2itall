@@ -1,0 +1,17 @@
+C2 Server Details:
+- C2 IP: C2_HOST
+- Redirector Domain: REDIRECTOR_HOST
+
+Beacons Generated (GENERATED_DATE):
+- Windows EXE: WINDOWS_EXE (Profile: WIN_PROFILE)
+- Windows DLL: WINDOWS_DLL (Profile: DLL_PROFILE)
+- Linux Binary: LINUX_BINARY (Profile: LINUX_PROFILE)
+- macOS Binary: MACOS_BINARY (Profile: MAC_PROFILE)
+- Windows Stager: staged/WINDOWS_STAGER (Profile: STAGER_PROFILE)
+
+Usage:
+1. Ensure your redirector is properly configured to forward requests to the C2 server
+2. Update DNS for REDIRECTOR_HOST to point to your redirector IP
+3. Test connectivity before deployment in target environment
+
+IMPORTANT: These beacons will connect to REDIRECTOR_HOST on port REDIRECTOR_PORT

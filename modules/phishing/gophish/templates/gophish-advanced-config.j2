@@ -1,0 +1,42 @@
+{
+    "admin_server": {
+        "listen_url": "127.0.0.1:{{ gophish_admin_port }}",
+        "use_tls": true,
+        "cert_path": "/etc/letsencrypt/live/{{ phishing_domain }}/fullchain.pem",
+        "key_path": "/etc/letsencrypt/live/{{ phishing_domain }}/privkey.pem",
+        "trusted_origins": []
+    },
+    "phish_server": {
+        "listen_url": "0.0.0.0:{{ gophish_phish_port | default(8081) }}",
+        "use_tls": false,
+        "cert_path": "",
+        "key_path": ""
+    },
+    "db_name": "sqlite3",
+    "db_path": "gophish.db",
+    "migrations_prefix": "db/db_",
+    "contact_address": "{{ smtp_from_address | default('noreply@' + domain) }}",
+    "logging": {
+        "filename": "{{ '/dev/null' if zero_logs | default(true) else 'gophish.log' }}",
+        "level": "{{ 'error' if zero_logs | default(true) else 'info' }}"
+    },
+    "webhook": {
+        "enabled": {{ enable_webhooks | default(false) | lower }},
+        "url": "{{ webhook_url | default('') }}",
+        "secret": "{{ webhook_secret | default('') }}"
+    },
+    "email": {
+        "smtp": {
+            "host": "{{ mta_front_ip | default('127.0.0.1') }}",
+            "port": 25,
+            "use_auth": true,
+            "username": "{{ smtp_auth_user }}",
+            "password": "{{ smtp_auth_pass }}",
+            "from_address": "{{ smtp_from_address | default('noreply@' + domain) }}",
+            "ignore_cert_errors": true
+        },
+        "imap": {
+            "enabled": false
+        }
+    }
+}

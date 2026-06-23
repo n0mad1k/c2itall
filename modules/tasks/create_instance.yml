@@ -1,0 +1,23 @@
+---
+# Generic instance creation task
+# This is a placeholder that simulates instance creation
+
+- name: Display instance creation info
+  debug:
+    msg: |
+      🚀 Creating {{ instance_name }} instance
+      Instance Type: {{ instance_type }}
+      Region: {{ region | default('us-east-1') }}
+      Security Group Rules: {{ security_group_rules | default([]) }}
+
+- name: Set mock instance IP
+  set_fact:
+    instance_ip: "192.168.1.{{ 100 + (ansible_date_time.epoch | int) % 50 }}"
+
+- name: Display instance creation result
+  debug:
+    msg: |
+      ✅ Mock instance created successfully
+      Instance Name: {{ instance_name }}
+      Instance IP: {{ instance_ip }}
+      SSH Command: ssh -i {{ ssh_key_path | default('~/.ssh/key') }} {{ ansible_user | default('ubuntu') }}@{{ instance_ip }}

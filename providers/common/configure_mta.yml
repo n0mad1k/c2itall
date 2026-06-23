@@ -1,0 +1,23 @@
+---
+# Common MTA front server configuration tasks
+
+- name: Configure MTA front servers
+  debug:
+    msg: |
+      Configuring MTA front servers for deployment {{ deployment_id }}
+      MTA hostname: {{ mta_hostname | default('mail.' + (phishing_domain | default(domain))) }}
+      SMTP auth user: {{ smtp_auth_user | default('admin') }}
+      
+- name: Install MTA software
+  debug:
+    msg: "Would install and configure MTA (Postfix/Exim) on target hosts"
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['phishing_mta_front'] | default([]) }}"
+  when: groups['phishing_mta_front'] is defined
+
+- name: Configure DKIM/SPF
+  debug:
+    msg: |
+      Would configure DKIM/SPF records for:
+      - Domain: {{ phishing_domain | default(domain) }}
+      - MTA hostname: {{ mta_hostname | default('mail.' + (phishing_domain | default(domain))) }}

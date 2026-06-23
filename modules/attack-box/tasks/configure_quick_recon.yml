@@ -1,0 +1,263 @@
+---
+# Quick Recon Box Configuration - OPSEC + Basic Tools
+# Includes Tor, VPN, and basic reconnaissance tools only
+
+- name: Record configuration start time
+  set_fact:
+    config_start_time: "{{ ansible_date_time.epoch }}"
+
+- name: Display quick recon box configuration info
+  debug:
+    msg: |
+      ================================================================
+                    CONFIGURING QUICK RECON BOX
+      ================================================================
+      Deployment ID: {{ deployment_id }}
+      Attack Box Name: {{ attack_box_name }}
+      Target: OPSEC-focused reconnaissance with basic tools
+      Features: Tor + VPN + Basic Tools (no complex installations)
+      ================================================================
+
+# Set up variables
+- name: Set common variables
+  set_fact:
+    target_user: "root"
+    work_dir: "{{ work_dir | default('/root/' + deployment_id) }}"
+    deployment_id: "{{ deployment_id }}"
+    attack_box_name: "{{ attack_box_name }}"
+
+# Core directories
+- name: Create core working directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ target_user }}"
+    group: "{{ target_user }}"
+    mode: '0755'
+  loop:
+    - "{{ work_dir }}"
+    - "{{ work_dir }}/scans"
+    - "{{ work_dir }}/loot"
+    - "{{ work_dir }}/notes"
+    - "/root/tools"
+
+# Update system and install essential packages
+- name: Update package cache
+  ansible.builtin.apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Install minimal essential tools + OPSEC packages
+  ansible.builtin.apt:
+    name:
+      # Core system tools
+      - curl
+      - wget
+      - git
+      - vim
+      - tmux
+      - htop
+      - unzip
+      - python3
+      - jq
+      # Basic network reconnaissance
+      - nmap
+      - dnsutils
+      - whois
+      - netcat-traditional
+      - traceroute
+      # OPSEC tools
+      - tor
+      - torsocks
+      - proxychains4
+      - openvpn
+      - easy-rsa
+    state: present
+    install_recommends: no
+
+- name: Configure Tor for anonymous reconnaissance
+  ansible.builtin.copy:
+    content: |
+      # Tor configuration for Quick Recon Box
+      DataDirectory /var/lib/tor
+      PidFile /var/run/tor/tor.pid
+      RunAsDaemon 1
+      User debian-tor
+      Log notice file /var/log/tor/notices.log
+      SocksPort 9050
+      SocksPolicy accept *
+      ControlPort 9051
+      CookieAuthentication 1
+      NewCircuitPeriod 30
+      MaxCircuitDirtiness 600
+      UseEntryGuards 1
+      ExitPolicy accept *:53
+      ExitPolicy accept *:80
+      ExitPolicy accept *:443
+      ExitPolicy accept *:993
+      ExitPolicy accept *:995
+      ExitPolicy reject *:*
+      CircuitBuildTimeout 10
+      LearnCircuitBuildTimeout 0
+    dest: /etc/tor/torrc
+    backup: yes
+
+- name: Configure proxychains for Tor routing
+  ansible.builtin.copy:
+    content: |
+      # Proxychains configuration for Tor
+      strict_chain
+      proxy_dns
+      remote_dns_subnet 224
+      tcp_read_time_out 15000
+      tcp_connect_time_out 8000
+      localnet 127.0.0.0/255.0.0.0
+      quiet_mode
+      
+      [ProxyList]
+      socks4 127.0.0.1 9050
+    dest: /etc/proxychains4.conf
+    backup: yes
+
+- name: Start and enable Tor service
+  ansible.builtin.systemd:
+    name: tor
+    state: started
+    enabled: yes
+
+# VPN Setup
+- name: Create OpenVPN directory structure
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /etc/openvpn/server
+    - /etc/openvpn/client
+    - "{{ work_dir }}/vpn"
+
+- name: Generate basic OpenVPN server config for quick recon
+  ansible.builtin.copy:
+    content: |
+      port 1194
+      proto udp
+      dev tun
+      server 10.8.0.0 255.255.255.0
+      ifconfig-pool-persist ipp.txt
+      keepalive 10 120
+      cipher AES-256-CBC
+      persist-key
+      persist-tun
+      status openvpn-status.log
+      log-append /var/log/openvpn.log
+      verb 3
+      explicit-exit-notify 1
+    dest: /etc/openvpn/server/quick-recon.conf
+    mode: '0644'
+  when: setup_vpn | default(false) | bool
+
+- name: Create VPN client template
+  ansible.builtin.copy:
+    content: |
+      # Quick Recon VPN Client Config
+      # Server: {{ ansible_default_ipv4.address }}
+      # Generated: {{ ansible_date_time.iso8601 }}
+      
+      client
+      dev tun
+      proto udp
+      remote {{ ansible_default_ipv4.address }} 1194
+      resolv-retry infinite
+      nobind
+      persist-key
+      persist-tun
+      cipher AES-256-CBC
+      verb 3
+      
+      # Add certificates here:
+      # <ca>
+      # </ca>
+      # <cert>
+      # </cert>
+      # <key>
+      # </key>
+    dest: "{{ work_dir }}/vpn/quick-recon-client.ovpn"
+    owner: "{{ target_user }}"
+    group: "{{ target_user }}"
+    mode: '0644'
+  when: setup_vpn | default(false) | bool
+
+# No domain/nginx setup for Quick Recon Box - keep it minimal
+
+- name: Create quick aliases for OPSEC operations
+  ansible.builtin.lineinfile:
+    path: "/root/.bashrc"
+    line: "{{ item }}"
+    create: yes
+  loop:
+    - "# Quick Recon Box Aliases"
+    - "alias qr='cd {{ work_dir }}'"
+    - "alias tor-nmap='torsocks nmap'"
+    - "alias tor-curl='torsocks curl'"
+    - "alias check-tor='curl --socks5 127.0.0.1:9050 https://check.torproject.org/api/ip'"
+    - "export TMUX_TMPDIR=/root/.local/share/tmux"
+
+- name: Create persistent tmux socket directory
+  ansible.builtin.file:
+    path: /root/.local/share/tmux
+    state: directory
+    mode: '0700'
+
+- name: Create simple quick reference
+  ansible.builtin.copy:
+    content: |
+      # Quick Recon Box
+      
+      ## Basic Tools Installed:
+      - nmap, netcat, curl, wget, dig, whois, traceroute, python3
+      - tor + torsocks (anonymous operations)
+      {% if setup_vpn | default(false) %}- openvpn (VPN server){% endif %}
+      
+      ## Quick Commands:
+      - tor-nmap target.com     # Anonymous nmap scan
+      - tor-curl target.com     # Anonymous web request
+      - check-tor               # Verify Tor connection
+      - qr                      # Go to working directory
+      
+      ## Working Directory: {{ work_dir }}
+      - Scans: {{ work_dir }}/scans/
+      - Notes: {{ work_dir }}/notes/
+      - Loot: {{ work_dir }}/loot/
+      
+      Add tools as needed: apt install <tool>
+    dest: /root/QUICK_RECON_GUIDE.txt
+    mode: '0644'
+
+- name: Final setup completion message
+  debug:
+    msg: |
+      ================================================================
+                    QUICK RECON BOX SETUP COMPLETE!
+      ================================================================
+      
+      Basic tools installed:
+        ✓ nmap, netcat, curl, wget, dig, whois, traceroute
+        ✓ python3, git, vim, tmux, jq
+      
+      OPSEC features enabled:
+        ✓ Tor proxy (localhost:9050)
+        ✓ Torsocks for anonymous operations  
+        ✓ Proxychains4 configured
+        {% if setup_vpn | default(false) %}✓ OpenVPN server ready{% endif %}
+        {% if setup_domain | default(false) %}✓ Domain {{ domain }} configured{% endif %}
+      
+      Quick commands:
+        ✓ tor-nmap, tor-curl, tor-dig for anonymous recon
+        ✓ check-tor to verify anonymity
+        ✓ qr to go to working directory
+      
+      Quick Reference: /root/QUICK_RECON_GUIDE.txt
+      Working Directory: {{ work_dir }}
+      
+      Ready for additional tool installation as needed!
+      ================================================================

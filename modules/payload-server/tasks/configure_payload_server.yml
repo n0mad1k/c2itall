@@ -1,0 +1,78 @@
+---
+# Configure payload server for creating and hosting malicious payloads
+
+- name: Install payload generation tools
+  apt:
+    name:
+      - mingw-w64
+      - golang
+      - python3-pip
+      - upx-ucl
+      - osslsigncode
+      - mono-complete
+      - wine64
+      - wine32
+    state: present
+    update_cache: yes
+
+- name: Create payload directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0700'
+    owner: root
+    group: root
+  loop:
+    - /root/Tools/payloads
+    - /root/Tools/payloads/templates
+    - /root/Tools/payloads/output
+    - /root/Tools/payloads/scripts
+
+- name: Install Python payload tools
+  pip:
+    name:
+      - pycryptodome
+      - pyinstaller
+      - py2exe
+    state: present
+
+- name: Clone payload generation tools
+  git:
+    repo: "{{ item.repo }}"
+    dest: "{{ item.dest }}"
+  loop:
+    - { repo: "https://github.com/Binject/go-donut", dest: "/root/Tools/go-donut" }
+    - { repo: "https://github.com/optiv/ScareCrow", dest: "/root/Tools/ScareCrow" }
+    - { repo: "https://github.com/TheWover/donut", dest: "/root/Tools/donut" }
+
+- name: Build Go tools
+  shell: |
+    cd {{ item }} && go build
+  args:
+    creates: "{{ item }}/{{ item | basename }}"
+  loop:
+    - /root/Tools/go-donut
+    - /root/Tools/ScareCrow
+
+- name: Deploy payload generation scripts
+  template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: '0700'
+  loop:
+    - { src: "../templates/phishing/generate_doc_payloads.sh.j2", dest: "/root/Tools/payloads/scripts/generate_docs.sh" }
+    - { src: "../templates/phishing/generate_exe_payloads.sh.j2", dest: "/root/Tools/payloads/scripts/generate_exes.sh" }
+    - { src: "../templates/phishing/payload_obfuscator.py.j2", dest: "/root/Tools/payloads/scripts/obfuscate.py" }
+
+- name: Create payload hosting service
+  template:
+    src: "../templates/phishing/payload-server.service.j2"
+    dest: /etc/systemd/system/payload-server.service
+    mode: '0644'
+
+- name: Start payload server
+  systemd:
+    name: payload-server
+    state: started
+    enabled: yes
+    daemon_reload: yes

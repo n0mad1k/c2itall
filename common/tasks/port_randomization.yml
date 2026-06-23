@@ -1,0 +1,92 @@
+---
+# tasks/port_randomization.yml
+# Task file to randomize ports for C2 infrastructure with improved host-based service management
+
+- name: Create port randomization script
+  copy:
+    src: "../files/randomize_ports.sh"
+    dest: "/root/Tools/randomize_ports.sh"
+    mode: '0700'
+    owner: root
+    group: root
+
+- name: Execute port randomization script
+  shell: |
+    cd /root/Tools && ./randomize_ports.sh
+  register: randomize_result
+  when: randomize_ports | default(true) | bool
+
+- name: Display port randomization results
+  debug:
+    msg: "{{ randomize_result.stdout_lines }}"
+  when: randomize_ports | default(true) | bool
+
+- name: Store randomized ports in variables
+  shell: |
+    PORT_CONFIG="/root/Tools/port_config.json"
+    if [ -f "$PORT_CONFIG" ]; then
+      cat "$PORT_CONFIG"
+    else
+      echo '{"error": "Port configuration not found"}'
+    fi
+  register: port_config_result
+  when: randomize_ports | default(true) | bool
+
+- name: Set port fact variables
+  set_fact:
+    randomized_http_port: "{{ (port_config_result.stdout | from_json).http_c2_port | default(8888) }}"
+    randomized_https_port: "{{ (port_config_result.stdout | from_json).https_c2_port | default(443) }}"
+    randomized_mtls_port: "{{ (port_config_result.stdout | from_json).mtls_c2_port | default(31337) }}"
+    randomized_shell_handler_port: "{{ (port_config_result.stdout | from_json).shell_handler_port | default(shell_handler_port) }}"
+  when: randomize_ports | default(true) | bool and port_config_result.rc == 0
+
+- name: Update shell handler configuration with randomized port
+  replace:
+    path: "/root/Tools/shell-handler/persistent-listener.sh"
+    regexp: "LISTEN_PORT=.*"
+    replace: "LISTEN_PORT={{ randomized_shell_handler_port | default(shell_handler_port) }}"
+  when: randomize_ports | default(true) | bool and port_config_result.rc == 0
+
+- name: Update shell handler service with randomized port
+  lineinfile:
+    path: "/etc/systemd/system/shell-handler.service"
+    regexp: 'Environment="LISTEN_PORT='
+    line: 'Environment="LISTEN_PORT={{ randomized_shell_handler_port | default(shell_handler_port) }}"'
+    insertafter: '^\\[Service\\]'
+  when: randomize_ports | default(true) | bool and port_config_result.rc == 0
+
+# Improved service management - checks for service existence before restarting
+- name: Determine services to restart based on host type
+  set_fact:
+    services_to_restart: []
+  when: randomize_ports | default(true) | bool and port_config_result.rc == 0
+
+- name: Check if Havoc service exists
+  stat:
+    path: "/etc/systemd/system/havoc.service"
+  register: havoc_service_stat
+  when: randomize_ports | default(true) | bool and port_config_result.rc == 0
+
+- name: Add Havoc to services list if it exists
+  set_fact:
+    services_to_restart: "{{ services_to_restart + ['havoc'] }}"
+  when: randomize_ports | default(true) | bool and port_config_result.rc == 0 and havoc_service_stat.stat.exists | default(false)
+
+- name: Check if shell-handler service exists
+  stat:
+    path: "/etc/systemd/system/shell-handler.service"
+  register: shell_handler_service_stat
+  when: randomize_ports | default(true) | bool and port_config_result.rc == 0
+
+- name: Add shell-handler to services list if it exists
+  set_fact:
+    services_to_restart: "{{ services_to_restart + ['shell-handler'] }}"
+  when: randomize_ports | default(true) | bool and port_config_result.rc == 0 and shell_handler_service_stat.stat.exists | default(false)
+
+- name: Reload and restart services
+  systemd:
+    daemon_reload: yes
+    name: "{{ item }}"
+    state: restarted
+  with_items: "{{ services_to_restart }}"
+  when: randomize_ports | default(true) | bool and port_config_result.rc == 0 and services_to_restart | length > 0

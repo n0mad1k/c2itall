@@ -1,0 +1,8 @@
+ansible
+linode-api4
+boto3
+botocore
+awscli
+passlib
+paramiko
+linode-cli

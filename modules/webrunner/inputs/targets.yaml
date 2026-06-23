@@ -1,0 +1,103 @@
+targets:
+  - name: "Palo Alto PAN-OS < 10.2.14"
+    tags: [panos, firewall, palo-alto, cve-2024-3400, network-device]
+    ports: [443, 4443, 8443]
+    probes:
+      - type: https
+        path: "/api/?type=version"
+        method: GET
+        match_in: body
+        patterns: ["sw-version"]
+        version_extract: "<sw-version>([0-9]+\\.[0-9]+\\.[0-9]+)"
+        version_compare:
+          operator: "<"
+          value: "10.2.14"
+        confidence: high
+
+      - type: https
+        path: "/php/login.php"
+        method: GET
+        match_in: [body, headers]
+        patterns:
+          - "Palo Alto Networks"
+          - "PAN-OS"
+        confidence: low
+
+      - type: https
+        path: "/global-protect/portal/gp-portal-esp.esp"
+        method: GET
+        match_in: body
+        patterns: ["globalprotect", "PAN-OS"]
+        confidence: low
+
+  - name: "Ubuntu 24.04 SSH"
+    tags: [linux, ubuntu, ssh]
+    ports: [22]
+    probes:
+      - type: tcp_banner
+        patterns:
+          - "Ubuntu-24"
+          - "OpenSSH.*Ubuntu"
+        version_extract: "SSH-2\\.0-OpenSSH_([0-9p.]+)"
+        confidence: high
+
+  - name: "D-Link DIR-823X fw 240126/240802"
+    tags: [router, d-link, cpe, iot]
+    ports: [80, 443, 8080]
+    probes:
+      - type: http
+        path: "/"
+        match_in: body
+        patterns: ["DIR-823X"]
+        confidence: medium
+      - type: http
+        path: "/"
+        match_in: body
+        all_patterns: ["DIR-823X"]
+        patterns: ["240126", "240802"]
+        confidence: high
+
+  - name: "Exposed IP Camera"
+    tags: [camera, iot, surveillance]
+    ports: [80, 554, 8080, 8443, 37777, 34567]
+    probes:
+      - type: http
+        path: "/"
+        match_in: [body, headers]
+        patterns:
+          - "(?i)hikvision"
+          - "(?i)dahua"
+          - "(?i)ip.?camera"
+          - "(?i)ipcam"
+          - "(?i)webcam"
+          - "(?i)reolink"
+          - "(?i)amcrest"
+          - "(?i)axis"
+        confidence: medium
+      - type: rtsp
+        patterns: ["RTSP/1.0 200"]
+        confidence: medium
+
+  - name: "Cisco SD-WAN vManage <= 20.17"
+    tags: [cisco, sdwan, network]
+    ports: [443, 8443]
+    probes:
+      - type: https
+        path: "/dataservice/client/server"
+        method: GET
+        match_in: body
+        patterns: ["platformVersion"]
+        version_extract: '"platformVersion":"([0-9.]+)"'
+        version_compare:
+          operator: "<="
+          value: "20.17"
+        confidence: high
+
+  - name: "Open Redis"
+    tags: [database, redis, exposed]
+    ports: [6379]
+    probes:
+      - type: tcp_banner
+        patterns: ["redis_version"]
+        version_extract: "redis_version:([0-9.]+)"
+        confidence: high

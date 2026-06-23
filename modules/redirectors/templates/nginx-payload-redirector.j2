@@ -1,0 +1,82 @@
+# Payload Redirector Configuration
+# Serves payloads with anti-analysis features
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ payload_subdomain }}.{{ domain }};
+    
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name {{ payload_subdomain }}.{{ domain }};
+    
+    # SSL Configuration
+    ssl_certificate /etc/letsencrypt/live/{{ payload_subdomain }}.{{ domain }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ payload_subdomain }}.{{ domain }}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    
+    root /var/www/payloads;
+    
+    # Anti-analysis headers
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Download-Options "noopen" always;
+    add_header X-Robots-Tag "noindex, nofollow" always;
+    
+    # Serve different content based on user agent
+    location ~ ^/download/(.+)$ {
+        # Check if request is from analysis environment
+        if ($http_user_agent ~* (sandbox|virus|malware|analysis)) {
+            # Serve benign file
+            rewrite ^/download/(.+)$ /benign/document.pdf last;
+        }
+        
+        # Check for valid download token
+        secure_link $arg_token,$arg_expires;
+        secure_link_md5 "$secure_link_expires$uri {{ payload_secret }}";
+        
+        if ($secure_link = "") {
+            return 403;
+        }
+        
+        if ($secure_link = "0") {
+            return 410;
+        }
+        
+        # Serve actual payload
+        try_files /payloads/$1 =404;
+    }
+    
+    # Direct file access with referrer check
+    location /files/ {
+        valid_referers none blocked server_names
+            *.{{ domain }}
+            {{ allowed_referrers | default([]) | join(' ') }};
+        
+        if ($invalid_referer) {
+            return 403;
+        }
+        
+        alias /var/www/payloads/;
+        autoindex off;
+    }
+    
+    # Benign files for analysis environments
+    location /benign/ {
+        alias /var/www/payloads/benign/;
+        autoindex off;
+    }
+    
+    # Block all other access
+    location / {
+        return 404;
+    }
+    
+    {% if zero_logs | default(true) %}
+    access_log off;
+    error_log /dev/null crit;
+    {% endif %}
+}

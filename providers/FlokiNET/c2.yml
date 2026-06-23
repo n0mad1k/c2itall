@@ -1,0 +1,101 @@
+---
+# FlokiNET C2-only Configuration Playbook
+# Note: FlokiNET requires pre-provisioned servers
+
+- name: Prepare FlokiNET C2 configuration
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars_files:
+    - vars.yaml
+  vars:
+    c2_subdomain: "{{ c2_subdomain | default('mail') }}"
+
+  tasks:
+    - name: Validate required FlokiNET configuration
+      assert:
+        that:
+          - c2_ip is defined and c2_ip != ""
+        fail_msg: "FlokiNET requires C2 IP address. Set c2_ip in vars.yaml or via --flokinet-c2-ip."
+    
+    - name: Add C2 to inventory
+      add_host:
+        name: "c2"
+        groups: "c2servers"
+        ansible_host: "{{ c2_ip }}"
+        ansible_user: "{{ ssh_user | default('root') }}"
+        ansible_ssh_private_key_file: "{{ ssh_key_path | replace('.pub', '') }}"
+        ansible_ssh_port: "{{ ssh_port | default(22) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+    - name: Verify SSH connection to C2
+      wait_for:
+        host: "{{ c2_ip }}"
+        port: "{{ ssh_port | default(22) }}"
+        delay: 10
+        timeout: 60
+        state: started
+      ignore_errors: true
+
+- name: Provision FlokiNET C2 server
+  hosts: c2servers
+  become: true
+  gather_facts: true
+  vars_files:
+    - vars.yaml
+  tasks:
+    - name: Wait for apt to be available
+      apt:
+        update_cache: yes
+      register: apt_result
+      until: apt_result is success
+      retries: 5
+      delay: 10
+
+    - name: Set hostname
+      hostname:
+        name: "c2"
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist
+
+    - name: Install base security packages
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - unattended-upgrades
+          - ufw
+          - fail2ban
+          - secure-delete
+        state: present
+
+    - name: Include common security hardening tasks
+      include_tasks: "../../common/tasks/security_hardening.yml"
+
+    - name: Include common tool installation tasks
+      include_tasks: "../../common/tasks/install_tools.yml"
+      
+    - name: Include common C2 configuration tasks
+      include_tasks: "../../modules/c2/tasks/configure_c2.yml"
+      
+    - name: Include common mail server configuration tasks
+      include_tasks: "../../common/tasks/configure_mail.yml"
+      
+    - name: Print deployment summary
+      debug:
+        msg:
+          - "C2 Server Configuration Complete!"
+          - "-------------------------------"
+          - "C2 Server IP: {{ ansible_host }}"
+          - "C2 Server Domain: {{ c2_subdomain }}.{{ domain }} (Update DNS A record)"
+          - "GoPhish Admin Port: {{ gophish_admin_port }}"
+      when: not disable_summary | default(false)

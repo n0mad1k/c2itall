@@ -1,0 +1,97 @@
+---
+# FlokiNET Redirector-only Configuration Playbook
+# Note: FlokiNET requires pre-provisioned servers
+
+- name: Prepare FlokiNET redirector configuration
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars_files:
+    - vars.yaml
+  vars:
+    # Generate random shell handler port if not provided
+    shell_handler_port: "{{ shell_handler_port | default(4000 + 60000 | random) }}"
+    redirector_subdomain: "{{ redirector_subdomain | default('cdn') }}"
+
+  tasks:
+    - name: Validate required FlokiNET configuration
+      assert:
+        that:
+          - redirector_ip is defined and redirector_ip != ""
+        fail_msg: "FlokiNET requires redirector IP address. Set redirector_ip in vars.yaml or via --flokinet-redirector-ip."
+    
+    - name: Add redirector to inventory
+      add_host:
+        name: "redirector"
+        groups: "redirectors"
+        ansible_host: "{{ redirector_ip }}"
+        ansible_user: "{{ ssh_user | default('root') }}"
+        ansible_ssh_private_key_file: "{{ ssh_key_path | replace('.pub', '') }}"
+        ansible_ssh_port: "{{ ssh_port | default(22) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+    - name: Verify SSH connection to redirector
+      wait_for:
+        host: "{{ redirector_ip }}"
+        port: "{{ ssh_port | default(22) }}"
+        delay: 10
+        timeout: 60
+        state: started
+      ignore_errors: true
+
+- name: Provision FlokiNET redirector
+  hosts: redirectors
+  become: true
+  gather_facts: true
+  vars_files:
+    - vars.yaml
+  tasks:
+    - name: Wait for apt to be available
+      apt:
+        update_cache: yes
+      register: apt_result
+      until: apt_result is success
+      retries: 5
+      delay: 10
+
+    - name: Set hostname
+      hostname:
+        name: "redirector"
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist
+
+    - name: Install base security packages
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - unattended-upgrades
+          - ufw
+          - fail2ban
+          - secure-delete
+        state: present
+
+    - name: Include common security hardening tasks
+      include_tasks: "../../common/tasks/security_hardening.yml"
+
+    - name: Include common redirector configuration tasks
+      include_tasks: "../../modules/redirectors/tasks/configure_redirector.yml"
+
+    - name: Print deployment summary
+      debug:
+        msg:
+          - "Redirector Configuration Complete!"
+          - "---------------------------------"
+          - "Redirector IP: {{ ansible_host }}"
+          - "Redirector Domain: {{ redirector_subdomain }}.{{ domain }} (Update DNS A record)"
+          - "Shell Handler Port: {{ shell_handler_port }}"
+      when: not disable_summary | default(false)

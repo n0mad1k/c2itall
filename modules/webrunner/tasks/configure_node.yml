@@ -1,0 +1,98 @@
+---
+# Configure a WEBRUNNER scan node — install deps, create workspace
+
+- name: Update apt cache
+  apt:
+    update_cache: true
+    cache_valid_time: 3600
+  retries: 3
+  delay: 10
+
+- name: Install scan tools
+  apt:
+    name:
+      - masscan
+      - nmap
+      - python3
+      - python3-pip
+      - curl
+    state: present
+  retries: 3
+  delay: 10
+
+- name: Install Tor and proxychains
+  apt:
+    name:
+      - tor
+      - proxychains4
+    state: present
+  retries: 3
+  delay: 10
+  when: use_tor | default(false) | bool
+
+- name: Start and enable Tor service
+  systemd:
+    name: tor
+    state: started
+    enabled: true
+  when: use_tor | default(false) | bool
+
+- name: Configure proxychains for Tor SOCKS5
+  copy:
+    content: |
+      strict_chain
+      proxy_dns
+      tcp_read_time_out 15000
+      tcp_connect_time_out 8000
+      [ProxyList]
+      socks5 127.0.0.1 9050
+    dest: /etc/proxychains4.conf
+    mode: '0644'
+  when: use_tor | default(false) | bool
+
+- name: Wait for Tor to establish circuit
+  wait_for:
+    port: 9050
+    host: 127.0.0.1
+    timeout: 60
+    delay: 5
+  when: use_tor | default(false) | bool
+
+- name: Create webrunner workspace
+  file:
+    path: /root/webrunner
+    state: directory
+    mode: '0700'
+
+- name: Copy node scanner script
+  copy:
+    src: "{{ playbook_dir }}/../modules/webrunner/tasks/node_scanner.py"
+    dest: /root/webrunner/node_scanner.py
+    mode: '0755'
+
+- name: Copy targets.yaml for geo-scout mode
+  copy:
+    src: "{{ targets_file }}"
+    dest: /root/webrunner/targets.yaml
+    mode: '0644'
+  when: scan_mode == 'geo-scout' and targets_file != ""
+  ignore_errors: true
+
+- name: Install nuclei vulnerability scanner
+  shell: |
+    if ! command -v nuclei &>/dev/null; then
+      curl -sL "https://github.com/projectdiscovery/nuclei/releases/download/v3.3.9/nuclei_3.3.9_linux_amd64.tar.gz" | tar -xz -C /usr/local/bin nuclei
+      chmod +x /usr/local/bin/nuclei
+    fi
+  args:
+    executable: /bin/bash
+  when: scan_mode == 'masscan+nuclei'
+  retries: 2
+  delay: 5
+
+- name: Upload nuclei template
+  copy:
+    src: "{{ nuclei_template_local }}"
+    dest: /root/webrunner/nuclei_template.yaml
+    mode: '0644'
+  when: scan_mode == 'masscan+nuclei' and nuclei_template_local | default('') != ''

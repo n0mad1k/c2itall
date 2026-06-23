@@ -1,0 +1,198 @@
+---
+# Advanced Gophish configuration with enhanced evasion and features
+
+- name: Create Gophish user
+  user:
+    name: gophish
+    system: yes
+    shell: /bin/bash
+    home: /opt/gophish
+    create_home: yes
+
+- name: Download latest Gophish release
+  get_url:
+    url: "https://github.com/gophish/gophish/releases/download/v0.12.1/gophish-v0.12.1-linux-64bit.zip"
+    dest: /tmp/gophish.zip
+    mode: '0644'
+
+- name: Extract Gophish
+  unarchive:
+    src: /tmp/gophish.zip
+    dest: /opt/gophish
+    owner: gophish
+    group: gophish
+    remote_src: yes
+
+- name: Install additional packages for advanced features
+  apt:
+    name:
+      - nginx
+      - certbot
+      - python3-certbot-nginx
+      - sqlite3
+      - jq
+      - curl
+      - wget
+      - php-fpm
+      - php-sqlite3
+      - nodejs
+      - npm
+    state: present
+
+- name: Configure advanced Gophish settings
+  template:
+    src: "../templates/phishing/gophish-advanced-config.j2"
+    dest: /opt/gophish/config.json
+    owner: gophish
+    group: gophish
+    mode: '0600'
+
+- name: Create enhanced email templates directory
+  file:
+    path: /opt/gophish/templates/{{ item }}
+    state: directory
+    owner: gophish
+    group: gophish
+    mode: '0755'
+  loop:
+    - email
+    - landing
+    - static
+
+- name: Deploy email templates
+  template:
+    src: "../templates/phishing/email-templates/{{ item }}.j2"
+    dest: "/opt/gophish/templates/email/{{ item }}.html"
+    owner: gophish
+    group: gophish
+    mode: '0644'
+  loop:
+    - office365_login
+    - password_expiry
+    - security_alert
+    - file_share
+  when: not fedramp_mode | default(false) | bool
+
+- name: Deploy FedRAMP compliant templates
+  template:
+    src: "../templates/phishing/fedramp-compliance.j2"
+    dest: "/opt/gophish/templates/email/fedramp_template.html"
+    owner: gophish
+    group: gophish
+    mode: '0644'
+  when: fedramp_mode | default(false) | bool
+
+- name: Create advanced landing pages
+  template:
+    src: "../templates/phishing/phishing-landing-page.j2"
+    dest: "/opt/gophish/templates/landing/{{ item }}_landing.html"
+    owner: gophish
+    group: gophish
+    mode: '0644'
+  loop:
+    - office365
+    - generic
+    - fedramp
+  vars:
+    template_type: "{{ item }}"
+
+- name: Install enhanced tracking pixel
+  copy:
+    src: "../../tracker/files/simple_email_tracker.py"
+    dest: /opt/gophish/tracker.py
+    owner: gophish
+    group: gophish
+    mode: '0755'
+
+- name: Create Gophish database backup script
+  template:
+    src: "../templates/phishing/gophish-backup.sh.j2"
+    dest: /opt/gophish/backup.sh
+    owner: gophish
+    group: gophish
+    mode: '0755'
+
+- name: Set up database backup cron
+  cron:
+    name: "Backup Gophish database"
+    minute: "0"
+    hour: "*/6"
+    job: "/opt/gophish/backup.sh"
+    user: gophish
+
+- name: Create Gophish systemd service
+  template:
+    src: "../templates/phishing/gophish.service.j2"
+    dest: /etc/systemd/system/gophish.service
+    mode: '0644'
+
+- name: Enable and start Gophish service
+  systemd:
+    name: gophish
+    state: started
+    enabled: yes
+    daemon_reload: yes
+
+- name: Create campaign automation script
+  template:
+    src: "../templates/phishing/campaign-automation.py.j2"
+    dest: /opt/gophish/campaign-automation.py
+    owner: gophish
+    group: gophish
+    mode: '0755'
+
+- name: Install Python dependencies for automation
+  pip:
+    name:
+      - requests
+      - python-dateutil
+      - jinja2
+    state: present
+
+- name: Configure SMTP relay to MTA front
+  blockinfile:
+    path: /opt/gophish/config.json
+    marker: "// {mark} ANSIBLE MANAGED SMTP CONFIG"
+    block: |
+      "smtp": {
+        "host": "{{ mta_front_ip }}:587",
+        "username": "{{ smtp_relay_user }}",
+        "password": "{{ smtp_relay_pass }}",
+        "from": "{{ sender_email }}",
+        "ignore_cert_errors": true
+      }
+
+- name: Create phishing metrics dashboard
+  template:
+    src: "../templates/phishing/metrics-dashboard.html.j2"
+    dest: /opt/gophish/static/metrics.html
+    owner: gophish
+    group: gophish
+    mode: '0644'
+
+- name: Set up log aggregation
+  lineinfile:
+    path: /etc/rsyslog.conf
+    line: "local0.*    /var/log/gophish.log"
+    state: present
+  notify: restart rsyslog
+
+- name: Configure log rotation for Gophish
+  copy:
+    dest: /etc/logrotate.d/gophish
+    content: |
+      /var/log/gophish.log {
+          daily
+          missingok
+          rotate 30
+          compress
+          delaycompress
+          notifempty
+          create 0644 gophish gophish
+      }
+
+handlers:
+  - name: restart rsyslog
+    service:
+      name: rsyslog
+      state: restarted

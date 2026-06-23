@@ -1,0 +1,28 @@
+[Unit]
+Description=Reverse Shell Handler Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/root/Tools/shell-handler/persistent-listener.sh
+Restart=always
+RestartSec=10
+
+# Hide process information
+PrivateTmp=true
+ProtectSystem=full
+NoNewPrivileges=true
+
+# Make shell handler hard to find
+StandardOutput=null
+StandardError=null
+
+# Environment variables (configured via Ansible)
+Environment="C2_HOST={{ c2_ip | default('127.0.0.1') }}"
+Environment="LISTEN_PORT={{ shell_handler_port | default('4444') }}"
+Environment="HAVOC_PORT={{ havoc_teamserver_port | default('40056') }}"
+
+[Install]
+WantedBy=multi-user.target
