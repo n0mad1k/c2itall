@@ -11,7 +11,7 @@ def load_word_list(filename):
     """Load words from a text file, one word per line"""
     try:
         # Check if we have FourEyes word lists
-        foureyes_path = "/home/n0mad1k/Tools/FourEyes"
+        foureyes_path = os.environ.get('FOUREYES_PATH', '')
         if os.path.exists(foureyes_path):
             file_path = os.path.join(foureyes_path, filename)
             if os.path.exists(file_path):

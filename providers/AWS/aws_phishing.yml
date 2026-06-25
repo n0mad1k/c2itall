@@ -55,9 +55,9 @@
 - name: Set deployment results
   set_fact:
     phishing_deployment_results:
-      gophish_ip: "{{ '10.0.0.10' if 'gophish' in deployment_components else '' }}"
-      mta_ip: "{{ '10.0.0.11' if 'mta_front' in deployment_components else '' }}"
-      redirector_ip: "{{ '10.0.0.12' if 'redirector' in deployment_components else '' }}"
-      webserver_ip: "{{ '10.0.0.13' if 'webserver' in deployment_components else '' }}"
+      gophish_ip: "{{ gophish_ip | default('') }}"
+      mta_ip: "{{ mta_ip | default('') }}"
+      redirector_ip: "{{ redirector_ip | default('') }}"
+      webserver_ip: "{{ webserver_ip | default('') }}"
       deployment_id: "{{ deployment_id }}"
       domain: "{{ phishing_domain | default(domain) }}"

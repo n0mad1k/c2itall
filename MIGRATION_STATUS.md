@@ -67,7 +67,7 @@ Some provider utility functions may need verification:
 
 1. **Test the core deployment flow**:
    ```bash
-   cd /home/n0mad1k/Tools/c2itall
+   cd /opt/c2itall
    python3 deploy.py
    # Try option 1 (Deploy C2 Infrastructure) with a test deployment
    ```
