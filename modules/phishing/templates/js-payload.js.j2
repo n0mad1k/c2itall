@@ -1,0 +1,11 @@
+(function() {
+    var u = new URLSearchParams(window.location.search);
+    var src = u.get('u') || '';
+    var dest = {{ redirect_url | tojson }};
+    if (src.indexOf('rid=') !== -1 || src.indexOf('RId=') !== -1) {
+        var params = new URLSearchParams(new URL(decodeURIComponent(src)).search);
+        var rid = params.get('rid') || params.get('RId');
+        if (rid) dest += (dest.indexOf('?') !== -1 ? '&' : '?') + 'rid=' + encodeURIComponent(rid);
+    }
+    window.location.replace(dest);
+})();
