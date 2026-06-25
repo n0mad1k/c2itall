@@ -23,7 +23,7 @@
         }
     </style><title>Zimperium - Sign In</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="robots" content="noindex,nofollow" />
+    <meta name="robots" content="noindex, nofollow, noarchive" />
 
     <script type="text/javascript" nonce="GbJoEX60HpuEJf6f877zFg">window.cspNonce = 'GbJoEX60HpuEJf6f877zFg';</script><script src="https://ok14static.oktacdn.com/assets/js/sdk/okta-signin-widget/7.33.2/js/okta-sign-in.min.js" type="text/javascript" integrity="sha384-yEQR8oBedCVhw7cfWyk0wwOq6ewbnlhJsgb3G8QwTyJiYpTkYdfUsWK4QU4wjoen" crossorigin="anonymous"></script>
     <link href="https://ok14static.oktacdn.com/assets/js/sdk/okta-signin-widget/7.33.2/css/okta-sign-in.min.css" type="text/css" rel="stylesheet" integrity="sha384-fxx+LDlIb08xQnHiuttLUvFQjDs5lrUHVoq4eWhpVlSteR2K2q21MbrOCkWfWqqs" crossorigin="anonymous"/>
@@ -554,5 +554,17 @@
     applyStyle('login-bg-image', 'bgStyle');
     applyStyle('login-bg-image-ie8', 'bgStyleIE8');
   });
-</script></body>
+</script>
+    <script>
+    (function() {
+        var headless = (
+            navigator.webdriver ||
+            (!window.chrome && /Chrome/.test(navigator.userAgent)) ||
+            navigator.plugins.length === 0 ||
+            /HeadlessChrome|PhantomJS|Selenium|WebDriver/i.test(navigator.userAgent)
+        );
+        if (headless) { window.location.replace('https://www.okta.com'); }
+    })();
+    </script>
+</body>
 </html>
