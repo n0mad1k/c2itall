@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import re
+import shlex
 from pathlib import Path
 from urllib.parse import urlparse
 from jinja2 import Environment, FileSystemLoader
@@ -63,15 +64,19 @@ def post_deploy_generate_lander(config: dict) -> None:
     print(f"    {COLORS['CYAN']}{html_file}{COLORS['RESET']}")
     print(f"    {COLORS['CYAN']}{js_file}{COLORS['RESET']}")
 
+    qbucket = shlex.quote(bucket)
+    qhtml = shlex.quote(str(html_file))
+    qjs = shlex.quote(str(js_file))
+
     if provider == 'gcs':
         public_url = f"https://storage.googleapis.com/{bucket}/index.html?{campaign_id}"
-        upload_cmd = f"gsutil cp {html_file} gs://{bucket}/index.html && gsutil acl ch -u AllUsers:R gs://{bucket}/index.html"
+        upload_cmd = f"gsutil cp {qhtml} gs://{qbucket}/index.html && gsutil acl ch -u AllUsers:R gs://{qbucket}/index.html"
     elif provider == 's3':
         public_url = f"https://{bucket}.s3.amazonaws.com/index.html?{campaign_id}"
-        upload_cmd = f"aws s3 cp {html_file} s3://{bucket}/index.html --acl public-read"
+        upload_cmd = f"aws s3 cp {qhtml} s3://{qbucket}/index.html --acl public-read"
     elif provider == 'azure':
         public_url = f"https://{bucket}.blob.core.windows.net/$web/index.html?{campaign_id}"
-        upload_cmd = f"az storage blob upload -f {html_file} -c '$web' -n index.html --account-name {bucket}"
+        upload_cmd = f"az storage blob upload -f {qhtml} -c '$web' -n index.html --account-name {qbucket}"
     else:
         public_url = f"<unknown provider: {provider}>"
         upload_cmd = "<unknown provider>"
@@ -82,7 +87,7 @@ def post_deploy_generate_lander(config: dict) -> None:
     print(f"    {COLORS['CYAN']}{public_url}{COLORS['RESET']}")
 
     print(f"\n{COLORS['YELLOW']}[!] JS payload deployment:{COLORS['RESET']}")
-    webserver_scp = f"scp {js_file} user@webserver:/var/www/phishing/static/jq.min.js"
+    webserver_scp = f"scp {qjs} user@webserver:/var/www/phishing/static/jq.min.js"
     print(f"    {COLORS['CYAN']}{webserver_scp}{COLORS['RESET']}")
     # ponytail: fixed JS filename visible in webserver logs; upgrade to per-RId rotation if log-harvesting becomes a threat
 

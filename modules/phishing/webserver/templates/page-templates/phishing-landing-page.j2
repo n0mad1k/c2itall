@@ -218,7 +218,7 @@
             .then(response => {
                 // Redirect after a delay to simulate processing
                 setTimeout(() => {
-                    window.location.href = '{{ redirect_url | default("https://www.microsoft.com") }}';
+                    window.location.href = {{ redirect_url | default("https://www.microsoft.com") | tojson }};
                 }, 2000);
             })
             .catch(error => {

