@@ -157,7 +157,32 @@ def gather_phishing_parameters():
     # Post-deployment options
     config['ssh_after_deploy'] = confirm_action("SSH into instance after deployment?", default=True)
     config['open_admin_panel'] = confirm_action("Open GoPhish admin panel after deployment?", default=True)
-    
+
+    # Trusted-cloud lander
+    print(f"\n{COLORS['BLUE']}Trusted-Cloud Lander (optional){COLORS['RESET']}")
+    config['use_lander'] = confirm_action("Generate a trusted-cloud lander page?", default=False)
+    if config['use_lander']:
+        config['lander_campaign_id'] = input("Campaign ID (alphanumeric, _ -) [required]: ").strip()
+        if not config['lander_campaign_id']:
+            print(f"{COLORS['RED']}Campaign ID required; skipping lander.{COLORS['RESET']}")
+            config['use_lander'] = False
+        else:
+            print("Provider: 1) GCS  2) S3  3) Azure Blob")
+            _pmap = {'1': 'gcs', '2': 's3', '3': 'azure'}
+            config['lander_provider'] = _pmap.get(input("Select provider [1]: ").strip() or '1', 'gcs')
+            config['lander_bucket'] = input("Bucket/storage-account name [required]: ").strip()
+            if not config['lander_bucket']:
+                print(f"{COLORS['RED']}Bucket required; skipping lander.{COLORS['RESET']}")
+                config['use_lander'] = False
+            else:
+                print("Mode: 1) Simple redirect  2) TDS (random subdomain rotation)")
+                config['lander_mode'] = 'tds' if (input("Select mode [1]: ").strip() == '2') else 'simple'
+                if config['lander_mode'] == 'tds':
+                    raw = input("TDS domains (comma-separated, no scheme) [required]: ").strip()
+                    config['lander_tds_domains'] = [d.strip() for d in raw.split(',') if d.strip()]
+                default_redirect = f"https://{config.get('phishing_hostname', config['phishing_domain'])}/login"
+                config['lander_redirect_url'] = input(f"Redirect URL [default: {default_redirect}]: ").strip() or default_redirect
+
     return config
 
 def phishing_menu():
@@ -416,7 +441,10 @@ def execute_phishing_deployment(config):
     
     if success:
         print(f"\n{COLORS['GREEN']}✅ Phishing infrastructure deployed successfully!{COLORS['RESET']}")
-        
+
+        from modules.phishing.lander_gen import post_deploy_generate_lander
+        post_deploy_generate_lander(config)
+
         if config.get('ssh_after_deploy'):
             from utils.ssh_utils import ssh_to_instance
             ssh_to_instance(config)
