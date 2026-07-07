@@ -106,7 +106,13 @@
         iptables -A INPUT -p tcp --dport 443 -s {{ redirector_ip }} -j ACCEPT
         iptables -A INPUT -p tcp --dport {{ havoc_http_port | default(8080) }} -s {{ redirector_ip }} -j ACCEPT
         iptables -A INPUT -p tcp --dport {{ havoc_https_port | default(9443) }} -s {{ redirector_ip }} -j ACCEPT
-        iptables -A INPUT -p tcp --dport {{ gophish_admin_port }} -s {{ redirector_ip }} -j ACCEPT
+        iptables -A INPUT -p tcp --dport {{ gophish_admin_port }} -s {{ operator_ip }} -j ACCEPT
+        ip6tables -F
+        ip6tables -P INPUT DROP
+        ip6tables -P FORWARD DROP
+        ip6tables -P OUTPUT ACCEPT
+        ip6tables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+        ip6tables -A INPUT -i lo -j ACCEPT
       when: redirector_ip is defined
   when: 
     - server_role == 'c2'
@@ -160,7 +166,16 @@
         iptables -A INPUT -p tcp --dport 443 -j ACCEPT
         # Allow shell handler port
         iptables -A INPUT -p tcp --dport {{ shell_handler_port | default('4444') }} -j ACCEPT
-  when: 
+        ip6tables -F
+        ip6tables -P INPUT DROP
+        ip6tables -P FORWARD DROP
+        ip6tables -P OUTPUT ACCEPT
+        ip6tables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+        ip6tables -A INPUT -i lo -j ACCEPT
+        ip6tables -A INPUT -p tcp --dport 80 -j ACCEPT
+        ip6tables -A INPUT -p tcp --dport 443 -j ACCEPT
+        ip6tables -A INPUT -p tcp --dport {{ shell_handler_port | default('4444') }} -j ACCEPT
+  when:
     - server_role == 'redirector'
     - not is_aws_provider
     - not (ufw_available | default(false) | bool)

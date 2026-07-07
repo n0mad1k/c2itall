@@ -38,6 +38,8 @@
   gather_facts: true
   vars_files:
     - vars.yaml
+  vars:
+    provider: "{{ provider | default('aws') }}"
   tasks:
     - name: Include phishing redirector configuration
       include_tasks: "../redirectors/templates/configure_phishing_redirector.yml"

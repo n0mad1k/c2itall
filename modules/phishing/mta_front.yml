@@ -39,12 +39,14 @@
   gather_facts: true
   vars_files:
     - vars.yaml
+  vars:
+    provider: "{{ provider | default('aws') }}"
   tasks:
     - name: Include MTA Front configuration
       include_tasks: "../tasks/configure_mta_front.yml"
 
     - name: Include security hardening
-      include_tasks: "../tasks/security_hardening.yml"
+      include_tasks: "../../common/tasks/security_hardening.yml"
 
     - name: Include tracker setup
       include_tasks: "../tasks/configure_integrated_tracker.yml"

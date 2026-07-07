@@ -20,8 +20,8 @@
         region: "{{ webserver_region }}"
         security_group_rules:
           - { proto: tcp, port: 22, cidr: "{{ operator_ip }}/32", desc: "SSH from operator" }
-          - { proto: tcp, port: 80, cidr: "{{ phishing_redirector_ip | default('10.0.0.0/8') }}/32", desc: "HTTP from redirector" }
-          - { proto: tcp, port: 443, cidr: "{{ phishing_redirector_ip | default('10.0.0.0/8') }}/32", desc: "HTTPS from redirector" }
+          - { proto: tcp, port: 80, cidr: "{{ phishing_redirector_ip | default('10.0.0.0') }}/32", desc: "HTTP from redirector" }
+          - { proto: tcp, port: 443, cidr: "{{ phishing_redirector_ip | default('10.0.0.0') }}/32", desc: "HTTPS from redirector" }
 
     - name: Add phishing web server to inventory
       add_host:
@@ -38,12 +38,14 @@
   gather_facts: true
   vars_files:
     - vars.yaml
+  vars:
+    provider: "{{ provider | default('aws') }}"
   tasks:
     - name: Include phishing web server configuration
       include_tasks: "../tasks/configure_phishing_webserver.yml"
 
     - name: Include security hardening
-      include_tasks: "../tasks/security_hardening.yml"
+      include_tasks: "../../common/tasks/security_hardening.yml"
 
     - name: Include tracker setup
       include_tasks: "../tasks/configure_integrated_tracker.yml"

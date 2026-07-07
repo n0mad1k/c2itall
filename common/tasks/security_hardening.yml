@@ -31,6 +31,14 @@
     is_c2_server: "{{ 'c2servers' in group_names }}"
     is_redirector: "{{ 'redirectors' in group_names }}"
 
+- name: Validate operator_ip and redirector_ip are single IPv4 addresses
+  assert:
+    that:
+      - operator_ip is defined and operator_ip | string | regex_search('^\d{1,3}(\.\d{1,3}){3}$')
+      - (redirector_ip is not defined) or (redirector_ip | string | regex_search('^\d{1,3}(\.\d{1,3}){3}$'))
+    fail_msg: "operator_ip and redirector_ip (if set) must each be a single valid IPv4 address (operator_ip={{ operator_ip | default('<undefined>') }}, redirector_ip={{ redirector_ip | default('<undefined>') }})"
+  when: not is_aws_provider
+
 # UFW Configuration Block - Non-AWS only
 - name: UFW detection and installation block
   block:
@@ -54,32 +62,39 @@
 
 - name: Configure UFW for non-AWS deployments
   block:
-    - name: Configure UFW default policies
+    - name: Enable UFW with default deny incoming
       community.general.ufw:
         state: enabled
         policy: deny
         direction: incoming
-      ignore_errors: yes
+
+    - name: Allow SSH only from operator IP (applies to every role)
+      community.general.ufw:
+        rule: allow
+        port: "22"
+        src: "{{ operator_ip }}"
+        proto: tcp
 
     - name: Configure UFW for C2 server
       block:
-        - name: Reset UFW to default deny
-          community.general.ufw:
-            state: enabled
-            policy: deny
-            direction: incoming
-
-        - name: Allow SSH only from operator IP
-          community.general.ufw:
-            rule: allow
-            port: "22"
-            src: "{{ operator_ip }}"
-            proto: tcp
-
         - name: Allow Havoc Teamserver only from operator IP
           community.general.ufw:
             rule: allow
             port: "{{ havoc_teamserver_port | default('40056') }}"
+            src: "{{ operator_ip }}"
+            proto: tcp
+
+        - name: Allow Gophish admin only from operator IP
+          community.general.ufw:
+            rule: allow
+            port: "{{ gophish_admin_port | default('2222') }}"
+            src: "{{ operator_ip }}"
+            proto: tcp
+
+        - name: Allow tracker only from operator IP
+          community.general.ufw:
+            rule: allow
+            port: "{{ tracker_port | default('5000') }}"
             src: "{{ operator_ip }}"
             proto: tcp
 
@@ -95,26 +110,11 @@
             - "{{ havoc_http_port | default('8080') }}"
             - "{{ havoc_https_port | default('9443') }}"
             - "{{ havoc_payload_port | default('8443') }}"
-            - "{{ gophish_admin_port }}"
             - "{{ gophish_phish_port | default('8081') }}"
-            - "{{ tracker_port | default('5000') }}"
       when: is_c2_server
 
     - name: Configure UFW for redirector
       block:
-        - name: Reset UFW to default deny
-          community.general.ufw:
-            state: enabled
-            policy: deny
-            direction: incoming
-
-        - name: Allow SSH only from operator IP
-          community.general.ufw:
-            rule: allow
-            port: "22"
-            src: "{{ operator_ip }}"
-            proto: tcp
-
         - name: Allow public services from anywhere
           community.general.ufw:
             rule: allow
@@ -123,7 +123,7 @@
           loop:
             - "80"
             - "443"
-            - "{{ shell_handler_port | default('4488') }}"
+            - "{{ shell_handler_port | default('4444') }}"
       when: is_redirector
   when: not is_aws_provider and (ufw_check.rc == 0 or ufw_install is success)
 
@@ -150,9 +150,16 @@
         iptables -A INPUT -p tcp --dport {{ havoc_http_port | default(8080) }} -s {{ redirector_ip }} -j ACCEPT
         iptables -A INPUT -p tcp --dport {{ havoc_https_port | default(9443) }} -s {{ redirector_ip }} -j ACCEPT
         iptables -A INPUT -p tcp --dport {{ havoc_payload_port | default(8443) }} -s {{ redirector_ip }} -j ACCEPT
-        iptables -A INPUT -p tcp --dport {{ gophish_admin_port }} -s {{ redirector_ip }} -j ACCEPT
+        iptables -A INPUT -p tcp --dport {{ gophish_admin_port }} -s {{ operator_ip }} -j ACCEPT
         iptables -A INPUT -p tcp --dport {{ gophish_phish_port | default(8081) }} -s {{ redirector_ip }} -j ACCEPT
-        iptables -A INPUT -p tcp --dport {{ tracker_port | default(5000) }} -s {{ redirector_ip }} -j ACCEPT
+        iptables -A INPUT -p tcp --dport {{ tracker_port | default(5000) }} -s {{ operator_ip }} -j ACCEPT
+        # IPv6: default deny inbound, mirror v4 (operator/redirector ports stay v6-closed; operator connects over v4)
+        ip6tables -F
+        ip6tables -P INPUT DROP
+        ip6tables -P FORWARD DROP
+        ip6tables -P OUTPUT ACCEPT
+        ip6tables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+        ip6tables -A INPUT -i lo -j ACCEPT
       when: is_c2_server
 
     - name: Set up basic iptables rules for redirector
@@ -170,12 +177,23 @@
         # Allow public services
         iptables -A INPUT -p tcp --dport 80 -j ACCEPT
         iptables -A INPUT -p tcp --dport 443 -j ACCEPT
-        iptables -A INPUT -p tcp --dport {{ shell_handler_port | default(4488) }} -j ACCEPT
+        iptables -A INPUT -p tcp --dport {{ shell_handler_port | default(4444) }} -j ACCEPT
+        # IPv6: default deny inbound, allow public services over v6
+        ip6tables -F
+        ip6tables -P INPUT DROP
+        ip6tables -P FORWARD DROP
+        ip6tables -P OUTPUT ACCEPT
+        ip6tables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+        ip6tables -A INPUT -i lo -j ACCEPT
+        ip6tables -A INPUT -p tcp --dport 80 -j ACCEPT
+        ip6tables -A INPUT -p tcp --dport 443 -j ACCEPT
+        ip6tables -A INPUT -p tcp --dport {{ shell_handler_port | default(4444) }} -j ACCEPT
       when: is_redirector
 
     - name: Save iptables rules
       shell: |
         iptables-save > /etc/iptables/rules.v4
+        ip6tables-save > /etc/iptables/rules.v6
       ignore_errors: yes
   when: not is_aws_provider and (ufw_check.rc != 0 and (ufw_install is undefined or ufw_install is failed))
 
@@ -198,6 +216,8 @@
     - { regexp: '^#?Protocol', line: 'Protocol 2' }
     - { regexp: '^#?MaxStartups', line: 'MaxStartups 10:30:100' }
     - { regexp: '^#?LoginGraceTime', line: 'LoginGraceTime 60' }
+    - { regexp: '^#?PermitEmptyPasswords', line: 'PermitEmptyPasswords no' }
+    - { regexp: '^#?PubkeyAuthentication', line: 'PubkeyAuthentication yes' }
   register: ssh_config_updated
 
 # System resource limits configuration
@@ -226,14 +246,6 @@
       maxretry = 5
       bantime = 3600
       findtime = 600
-      
-      [sshd-ddos]
-      enabled = true
-      port = ssh
-      filter = sshd-ddos
-      logpath = /var/log/auth.log
-      maxretry = 2
-      bantime = 7200
     mode: '0644'
   register: fail2ban_config_updated
 
@@ -353,11 +365,12 @@
       
     - name: Update redirector security group via raw AWS CLI
       delegate_to: localhost
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ hostvars['localhost']['aws_access_key'] }}"
+        AWS_SECRET_ACCESS_KEY: "{{ hostvars['localhost']['aws_secret_key'] }}"
+        AWS_DEFAULT_REGION: "{{ redirector_state.region | default(aws_region) }}"
+      no_log: true
       shell: |
-        export AWS_ACCESS_KEY_ID="{{ hostvars['localhost']['aws_access_key'] }}"
-        export AWS_SECRET_ACCESS_KEY="{{ hostvars['localhost']['aws_secret_key'] }}"
-        export AWS_DEFAULT_REGION="{{ redirector_state.region | default(aws_region) }}"
-        
         # Install AWS CLI if not present
         if ! command -v aws &> /dev/null; then
           curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
