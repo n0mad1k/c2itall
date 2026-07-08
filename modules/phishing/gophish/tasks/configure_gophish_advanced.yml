@@ -175,7 +175,6 @@
     path: /etc/rsyslog.conf
     line: "local0.*    /var/log/gophish.log"
     state: present
-  notify: restart rsyslog
 
 - name: Configure log rotation for Gophish
   copy:
@@ -191,8 +190,7 @@
           create 0644 gophish gophish
       }
 
-handlers:
-  - name: restart rsyslog
-    service:
-      name: rsyslog
-      state: restarted
+- name: restart rsyslog
+  service:
+    name: rsyslog
+    state: restarted

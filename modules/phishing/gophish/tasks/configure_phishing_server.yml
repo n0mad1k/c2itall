@@ -91,14 +91,12 @@
     src: "../templates/postfix-phishing.conf.j2"
     dest: "/etc/postfix/main.cf"
     backup: yes
-  notify: restart postfix
 
 - name: Configure OpenDKIM for email authentication
   template:
     src: "../templates/opendkim-phishing.conf.j2"
     dest: "/etc/opendkim.conf"
     backup: yes
-  notify: restart opendkim
 
 - name: Create DKIM keys directory
   file:
@@ -156,14 +154,12 @@
     src: "../templates/nginx-phishing.conf.j2"
     dest: "/etc/nginx/sites-available/phishing"
     mode: '0644'
-  notify: reload nginx
 
 - name: Enable phishing site
   file:
     src: /etc/nginx/sites-available/phishing
     dest: /etc/nginx/sites-enabled/phishing
     state: link
-  notify: reload nginx
 
 - name: Create phishing campaign management scripts
   template:
@@ -279,18 +275,17 @@
     - php7.4-fpm
     - gophish
 
-handlers:
-  - name: restart postfix
-    systemd:
-      name: postfix
-      state: restarted
+- name: restart postfix
+  systemd:
+    name: postfix
+    state: restarted
 
-  - name: restart opendkim
-    systemd:
-      name: opendkim
-      state: restarted
+- name: restart opendkim
+  systemd:
+    name: opendkim
+    state: restarted
 
-  - name: reload nginx
-    systemd:
-      name: nginx
-      state: reloaded
+- name: reload nginx
+  systemd:
+    name: nginx
+    state: reloaded

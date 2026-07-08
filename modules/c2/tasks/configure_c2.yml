@@ -245,7 +245,7 @@
     redirector_port: "{{ redirector_port | default('443') }}"
 
 - name: Run port randomization if enabled
-  include_tasks: port_randomization.yml
+  include_tasks: "../../../common/tasks/port_randomization.yml"
   when: randomize_ports | default(false) | bool
 
 - name: Generate Havoc payloads
@@ -292,7 +292,7 @@
     redirector_domain: "{{ redirector_subdomain }}.{{ domain }}"
 
 - name: Include traffic flow configuration
-  include_tasks: "../../common/tasks/traffic_flow_config.yml"
+  include_tasks: "../../../common/tasks/traffic_flow_config.yml"
 
 - name: Set up cron job for log cleaning if zero-logs enabled
   cron:

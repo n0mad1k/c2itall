@@ -293,6 +293,30 @@
         c2_ip: "{{ c2_instance.instances[0].public_ip_address }}"
         c2_instance_id: "{{ c2_instance.instances[0].instance_id }}"
 
+    # Persist c2_ip into infrastructure state for downstream playbooks
+    - name: Merge c2 IP into infrastructure state
+      block:
+        - name: Check if infrastructure state file exists for c2 IP merge
+          stat:
+            path: "infrastructure_state_{{ deployment_id }}.json"
+          register: c2_ip_state_file
+
+        - name: Load existing infrastructure state
+          include_vars:
+            file: "infrastructure_state_{{ deployment_id }}.json"
+            name: infra_state
+          when: c2_ip_state_file.stat.exists
+
+        - name: Default infra_state when no state file exists
+          set_fact:
+            infra_state: {}
+          when: not c2_ip_state_file.stat.exists
+
+        - name: Save merged infrastructure state with c2 IP
+          copy:
+            content: "{{ infra_state | default({}) | combine({'c2_ip': c2_ip}) | to_nice_json }}"
+            dest: "infrastructure_state_{{ deployment_id }}.json"
+
     - name: Display C2 instance details for debugging
       debug:
         msg:

@@ -1,0 +1,231 @@
+---
+# Linode Phishing Webserver-only Deployment Playbook
+
+- name: Deploy Linode phishing webserver
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars_files:
+    - vars.yaml
+  vars:
+    # Use constant values directly to avoid recursive template resolution
+    webserver_image_static: "linode/debian12"
+
+  tasks:
+    - name: Validate required Linode token
+      assert:
+        that:
+          - linode_token is defined and linode_token != ""
+        fail_msg: "Linode API token is required. Set linode_token in vars.yaml or via --linode-token."
+
+    - name: Validate operator IP
+      assert:
+        that:
+          - operator_ip is defined and operator_ip | string | regex_search('^\d{1,3}(\.\d{1,3}){3}$')
+        fail_msg: "operator_ip must be defined and a single IPv4 address."
+
+    # Load existing infrastructure state so downstream host firewall rules can be scoped correctly
+    - name: Check if infrastructure state file exists for webserver source IP lookup
+      stat:
+        path: "infrastructure_state_{{ deployment_id }}.json"
+      register: webserver_src_state_file
+
+    - name: Load existing infrastructure state for webserver source IPs
+      include_vars:
+        file: "infrastructure_state_{{ deployment_id }}.json"
+        name: infra_state
+      when: webserver_src_state_file.stat.exists
+
+    - name: Default infra_state when no state file exists for webserver source IPs
+      set_fact:
+        infra_state: {}
+      when: not webserver_src_state_file.stat.exists
+
+    - name: Set source IPs from infrastructure state
+      set_fact:
+        phishing_redirector_ip: "{{ infra_state.phishing_redirector_ip | default(infra_state.redirector_ip | default(operator_ip)) }}"
+        mta_ip_src: "{{ infra_state.mta_ip | default(operator_ip) }}"
+
+    # Update the region selection logic in Linode/webserver.yml
+    - name: Set region for phishing webserver
+      set_fact:
+        deployment_region: "{{ selected_region | default(linode_region, true) | default('us-east', true) }}"
+
+    - name: Display region selection for phishing webserver
+      debug:
+        msg: "Using region for phishing webserver: {{ deployment_region }}"
+      when: debug | default(false) | bool
+
+    # Only use random region as a last resort
+    - name: Set random region only if no region specified
+      set_fact:
+        deployment_region: "{{ region_choices | random }}"
+      when: region_choices is defined and region_choices|length > 0 and not selected_region is defined and not linode_region is defined and not deployment_region is defined
+
+    - name: Create phishing webserver Linode instance
+      block:
+        - name: Try creating instance in specified region
+          community.general.linode_v4:
+            access_token: "{{ linode_token }}"
+            label: "{{ webserver_name }}"
+            type: "{{ webserver_plan | default('g6-nanode-1') }}"
+            region: "{{ deployment_region }}"
+            image: "linode/debian12"
+            root_pass: "{{ lookup('password', '/dev/null length=16') }}"
+            authorized_keys:
+              - "{{ lookup('file', ssh_key_path) }}"
+            state: present
+          register: webserver_instance
+      rescue:
+        - name: Log region restriction error
+          debug:
+            msg: "Region {{ deployment_region }} is restricted. Trying fallback regions..."
+
+        - name: Set fallback regions (most reliable ones first)
+          set_fact:
+            fallback_regions:
+              - "us-east"
+              - "us-central"
+              - "eu-west"
+              - "us-west"
+
+        - name: Try fallback regions
+          community.general.linode_v4:
+            access_token: "{{ linode_token }}"
+            label: "{{ webserver_name }}"
+            type: "{{ webserver_plan | default('g6-nanode-1') }}"
+            region: "{{ item }}"
+            image: "linode/debian12"
+            root_pass: "{{ lookup('password', '/dev/null length=16') }}"
+            authorized_keys:
+              - "{{ lookup('file', ssh_key_path) }}"
+            state: present
+          register: webserver_instance
+          loop: "{{ fallback_regions }}"
+          when: webserver_instance is not defined or webserver_instance.failed
+          ignore_errors: yes
+
+        - name: Update deployment region with successful fallback
+          set_fact:
+            deployment_region: "{{ item }}"
+          loop: "{{ fallback_regions }}"
+          when: webserver_instance.results is defined and webserver_instance.results[ansible_loop.index0] is defined and not webserver_instance.results[ansible_loop.index0].failed
+
+        - name: Fail if all regions are restricted
+          fail:
+            msg: "All attempted regions are restricted. Please try again later or contact Linode support."
+          when: webserver_instance.failed | default(true)
+
+    - name: Set webserver_ip for later use
+      block:
+        - name: Extract instance info from direct creation
+          set_fact:
+            webserver_ip: "{{ webserver_instance.instance.ipv4[0] }}"
+            webserver_instance_id: "{{ webserver_instance.instance.id }}"
+          when: webserver_instance.instance is defined
+
+        - name: Extract instance info from fallback creation
+          set_fact:
+            webserver_ip: "{{ item.instance.ipv4[0] }}"
+            webserver_instance_id: "{{ item.instance.id }}"
+          loop: "{{ webserver_instance.results | default([]) }}"
+          when: webserver_instance.results is defined and item.instance is defined and not item.failed
+
+    # Persist webserver_ip into infrastructure state for downstream playbooks
+    - name: Merge webserver IP into infrastructure state
+      block:
+        - name: Check if infrastructure state file exists for webserver IP merge
+          stat:
+            path: "infrastructure_state_{{ deployment_id }}.json"
+          register: webserver_ip_state_file
+
+        - name: Load existing infrastructure state
+          include_vars:
+            file: "infrastructure_state_{{ deployment_id }}.json"
+            name: infra_state
+          when: webserver_ip_state_file.stat.exists
+
+        - name: Default infra_state when no state file exists
+          set_fact:
+            infra_state: {}
+          when: not webserver_ip_state_file.stat.exists
+
+        - name: Save merged infrastructure state with webserver IP
+          copy:
+            content: "{{ infra_state | default({}) | combine({'webserver_ip': webserver_ip}) | to_nice_json }}"
+            dest: "infrastructure_state_{{ deployment_id }}.json"
+
+    - name: Display final deployment region and IP
+      debug:
+        msg: "Phishing webserver deployed successfully in region {{ deployment_region }} with IP {{ webserver_ip }}"
+
+    # Enhanced SSH wait task with better retry mechanism
+    - name: Wait for phishing webserver SSH to be available
+      block:
+        - name: Initial wait for port to be open
+          wait_for:
+            host: "{{ webserver_instance.instance.ipv4[0] }}"
+            port: 22
+            delay: 60
+            timeout: 180
+            state: started
+
+        - name: Additional pause for SSH initialization
+          pause:
+            seconds: 60
+
+        - name: Test SSH connection
+          command: >
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10
+            -i {{ ssh_key_path | replace('.pub', '') }} root@{{ webserver_instance.instance.ipv4[0] }} echo "SSH Ready"
+          register: ssh_test
+          retries: 5
+          delay: 20
+          until: ssh_test.rc == 0
+          ignore_errors: yes
+
+        - name: Fail if SSH test unsuccessful
+          fail:
+            msg: "Could not connect to phishing webserver via SSH after multiple attempts"
+          when: ssh_test.rc != 0
+
+    - name: Add phishing webserver to inventory
+      add_host:
+        name: "phishing_webserver"
+        groups: "phishing_webservers"
+        ansible_host: "{{ webserver_ip }}"
+        ansible_user: "root"
+        ansible_ssh_private_key_file: "{{ ssh_key_path | replace('.pub', '') }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+        operator_ip: "{{ operator_ip }}"
+        phishing_redirector_ip: "{{ phishing_redirector_ip }}"
+        mta_ip_src: "{{ mta_ip_src }}"
+        redirector_ip: "{{ phishing_redirector_ip }}"
+        domain: "{{ domain }}"
+        deployment_id: "{{ deployment_id }}"
+        zero_logs: "{{ zero_logs | default(false) }}"
+
+- name: Configure phishing webserver
+  hosts: phishing_webservers
+  become: true
+  gather_facts: true
+  vars_files:
+    - vars.yaml
+  tasks:
+    - name: Include phishing webserver configuration tasks
+      include_tasks: "../../modules/phishing/webserver/tasks/configure_phishing_webserver.yml"
+
+    - name: Include common security hardening tasks
+      include_tasks: "../../common/tasks/security_hardening.yml"
+
+    - name: Configure integrated click tracker
+      include_tasks: "../../modules/c2/tasks/configure_integrated_tracker.yml"
+      when: deploy_tracker | default(true) | bool
+
+    - name: Print deployment summary
+      debug:
+        msg:
+          - "Phishing Webserver Deployment Complete!"
+          - "-------------------------------"
+          - "Phishing Webserver IP: {{ ansible_host }}"
+      when: not disable_summary | default(false)

@@ -17,7 +17,6 @@
     - { regexp: '^net.ipv4.conf.all.accept_source_route', line: 'net.ipv4.conf.all.accept_source_route = 0' }
     - { regexp: '^net.ipv6.conf.all.accept_source_route', line: 'net.ipv6.conf.all.accept_source_route = 0' }
     - { regexp: '^net.ipv4.conf.all.log_martians', line: 'net.ipv4.conf.all.log_martians = 1' }
-  notify: Apply sysctl settings
 
 - name: Install Tor for anonymous outbound connections
   apt:
@@ -44,7 +43,6 @@
     owner: root
     group: root
     mode: '0644'
-  notify: Restart Tor service
   when: use_tor_proxy | default(true) and tor_installed is succeeded
 
 - name: Configure ProxyChains for routing through Tor
@@ -69,7 +67,6 @@
     owner: root
     group: root
     mode: '0644'
-  notify: Apply iptables rules
 
 - name: Create SSH security hardening script
   template:
@@ -118,7 +115,6 @@
     owner: root
     group: root
     mode: '0644'
-  notify: Restart systemd-resolved
   when: enable_dns_encryption | default(true)
 
 # Configure memory security if enabled
@@ -131,7 +127,6 @@
     - "vm.swappiness=0"
     - "kernel.randomize_va_space=2"
   when: secure_memory | default(true)
-  notify: Apply sysctl settings
 
 # Configure history settings if disabled
 - name: Disable system history
@@ -145,23 +140,22 @@
     - [{ line: 'export HISTFILESIZE=0' }, { line: 'export HISTSIZE=0' }, { line: 'unset HISTFILE' }]
   when: disable_history | default(true)
 
-handlers:
-  - name: Apply sysctl settings
-    command: sysctl -p
-    
-  - name: Restart Tor service
-    service:
-      name: tor
-      state: restarted
-      enabled: yes
-    when: use_tor_proxy | default(true)
-    
-  - name: Apply iptables rules
-    command: iptables-restore < /etc/iptables/rules.v4
-    
-  - name: Restart systemd-resolved
-    service:
-      name: systemd-resolved
-      state: restarted
-      enabled: yes
-    when: enable_dns_encryption | default(true)
+- name: Apply sysctl settings
+  command: sysctl -p
+
+- name: Restart Tor service
+  service:
+    name: tor
+    state: restarted
+    enabled: yes
+  when: use_tor_proxy | default(true)
+
+- name: Apply iptables rules
+  command: iptables-restore < /etc/iptables/rules.v4
+
+- name: Restart systemd-resolved
+  service:
+    name: systemd-resolved
+    state: restarted
+    enabled: yes
+  when: enable_dns_encryption | default(true)

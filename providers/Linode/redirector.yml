@@ -103,6 +103,30 @@
           loop: "{{ redirector_instance.results | default([]) }}"
           when: redirector_instance.results is defined and item.instance is defined and not item.failed
 
+    # Persist redirector_ip / phishing_redirector_ip into infrastructure state for downstream playbooks
+    - name: Merge redirector IP into infrastructure state
+      block:
+        - name: Check if infrastructure state file exists for redirector IP merge
+          stat:
+            path: "infrastructure_state_{{ deployment_id }}.json"
+          register: redirector_ip_state_file
+
+        - name: Load existing infrastructure state
+          include_vars:
+            file: "infrastructure_state_{{ deployment_id }}.json"
+            name: infra_state
+          when: redirector_ip_state_file.stat.exists
+
+        - name: Default infra_state when no state file exists
+          set_fact:
+            infra_state: {}
+          when: not redirector_ip_state_file.stat.exists
+
+        - name: Save merged infrastructure state with redirector IP
+          copy:
+            content: "{{ infra_state | default({}) | combine({'redirector_ip': redirector_ip, 'phishing_redirector_ip': redirector_ip}) | to_nice_json }}"
+            dest: "infrastructure_state_{{ deployment_id }}.json"
+
     - name: Display final deployment region and IP
       debug:
         msg: "Redirector deployed successfully in region {{ deployment_region }} with IP {{ redirector_ip }}"

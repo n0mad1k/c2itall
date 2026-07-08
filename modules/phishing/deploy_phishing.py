@@ -467,12 +467,14 @@ def execute_component_deployment(config):
         "flokinet": "FlokiNET"
     }
     
-    # Component playbook mapping
+    # Component playbook mapping (dict insertion order = execution order).
+    # redirector and mta must deploy first: webserver needs the redirector IP,
+    # and gophish needs the redirector + MTA IPs from infrastructure_state.
     component_playbooks = {
-        'deploy_mta_front': os.path.join(os.path.dirname(__file__), 'mta_front.yml'),
-        'deploy_gophish': os.path.join(os.path.dirname(__file__), '..', '..', 'providers', provider_dirs[config['provider']], 'c2.yml'),
+        'deploy_mta_front': os.path.join(os.path.dirname(__file__), '..', '..', 'providers', provider_dirs[config['provider']], 'mta.yml'),
         'deploy_phishing_redirector': os.path.join(os.path.dirname(__file__), '..', '..', 'providers', provider_dirs[config['provider']], 'redirector.yml'),
-        'deploy_phishing_webserver': os.path.join(os.path.dirname(__file__), 'phishing_webserver.yml'),
+        'deploy_phishing_webserver': os.path.join(os.path.dirname(__file__), '..', '..', 'providers', provider_dirs[config['provider']], 'webserver.yml'),
+        'deploy_gophish': os.path.join(os.path.dirname(__file__), '..', '..', 'providers', provider_dirs[config['provider']], 'gophish.yml'),
     }
     
     # Build extra vars for ansible as JSON (safe for special chars)

@@ -84,6 +84,6 @@
         daemon_reload: yes
 
 - name: Configure firewall rules
-  include_tasks: security_hardening.yml
+  include_tasks: "../../../common/tasks/security_hardening.yml"
   vars:
     server_role: "payload_redirector"

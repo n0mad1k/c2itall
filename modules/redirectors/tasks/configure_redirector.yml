@@ -349,11 +349,11 @@
     group: www-data
 
 - name: Include traffic flow configuration
-  include_tasks: "../../common/tasks/traffic_flow_config.yml"
+  include_tasks: "../../../common/tasks/traffic_flow_config.yml"
 
 # Run port randomization if enabled
 - name: Run port randomization if enabled
-  include_tasks: "../../common/tasks/port_randomization.yml"
+  include_tasks: "../../../common/tasks/port_randomization.yml"
   when: randomize_ports | default(true) | bool
 
 # Add just before configuring NGINX

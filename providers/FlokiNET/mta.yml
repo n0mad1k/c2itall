@@ -1,0 +1,125 @@
+---
+# FlokiNET MTA Front-only Configuration Playbook
+# Note: FlokiNET requires pre-provisioned servers
+
+- name: Prepare FlokiNET MTA front configuration
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars_files:
+    - vars.yaml
+
+  tasks:
+    - name: Validate required FlokiNET configuration
+      assert:
+        that:
+          - mta_ip is defined and mta_ip != "" and mta_ip | string | regex_search('^\d{1,3}(\.\d{1,3}){3}$')
+        fail_msg: "FlokiNET requires mta_ip. Set mta_ip in vars.yaml or via --flokinet-mta-ip."
+
+    - name: Validate operator IP
+      assert:
+        that:
+          - operator_ip is defined and operator_ip | string | regex_search('^\d{1,3}(\.\d{1,3}){3}$')
+        fail_msg: "operator_ip must be defined and a single IPv4 address."
+
+    # Load existing infrastructure state so downstream host firewall rules can be scoped correctly
+    - name: Check if infrastructure state file exists for MTA source IP lookup
+      stat:
+        path: "infrastructure_state_{{ deployment_id }}.json"
+      register: mta_src_state_file
+
+    - name: Load existing infrastructure state for MTA source IPs
+      include_vars:
+        file: "infrastructure_state_{{ deployment_id }}.json"
+        name: infra_state
+      when: mta_src_state_file.stat.exists
+
+    - name: Default infra_state when no state file exists for MTA source IPs
+      set_fact:
+        infra_state: {}
+      when: not mta_src_state_file.stat.exists
+
+    - name: Set source IPs from infrastructure state
+      set_fact:
+        phishing_redirector_ip: "{{ infra_state.phishing_redirector_ip | default(infra_state.redirector_ip | default(operator_ip)) }}"
+        mta_ip_src: "{{ infra_state.mta_ip | default(operator_ip) }}"
+
+    # Persist mta_ip into infrastructure state for downstream playbooks
+    - name: Merge MTA IP into infrastructure state
+      when: deployment_id is defined and deployment_id != ''
+      block:
+        - name: Check if infrastructure state file exists for MTA IP merge
+          stat:
+            path: "infrastructure_state_{{ deployment_id }}.json"
+          register: mta_ip_state_file
+
+        - name: Load existing infrastructure state
+          include_vars:
+            file: "infrastructure_state_{{ deployment_id }}.json"
+            name: infra_state
+          when: mta_ip_state_file.stat.exists
+
+        - name: Default infra_state when no state file exists
+          set_fact:
+            infra_state: {}
+          when: not mta_ip_state_file.stat.exists
+
+        - name: Save merged infrastructure state with MTA IP
+          copy:
+            content: "{{ infra_state | default({}) | combine({'mta_ip': mta_ip}) | to_nice_json }}"
+            dest: "infrastructure_state_{{ deployment_id }}.json"
+
+    - name: Add MTA front to inventory
+      add_host:
+        name: "mta_front"
+        groups: "mta_fronts"
+        ansible_host: "{{ mta_ip }}"
+        ansible_user: "{{ ssh_user | default('root') }}"
+        ansible_ssh_private_key_file: "{{ ssh_key_path | replace('.pub', '') }}"
+        ansible_ssh_port: "{{ ssh_port | default(22) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+        operator_ip: "{{ operator_ip }}"
+        phishing_redirector_ip: "{{ phishing_redirector_ip }}"
+        mta_ip_src: "{{ mta_ip_src }}"
+        redirector_ip: "{{ phishing_redirector_ip }}"
+        domain: "{{ domain }}"
+        deployment_id: "{{ deployment_id }}"
+        zero_logs: "{{ zero_logs | default(false) }}"
+
+    - name: Verify SSH connection to MTA front
+      wait_for:
+        host: "{{ mta_ip }}"
+        port: "{{ ssh_port | default(22) }}"
+        delay: 10
+        timeout: 60
+        state: started
+      ignore_errors: true
+
+- name: Provision FlokiNET MTA front
+  hosts: mta_fronts
+  become: true
+  gather_facts: true
+  vars_files:
+    - vars.yaml
+  tasks:
+    - name: Wait for apt to be available
+      apt:
+        update_cache: yes
+      register: apt_result
+      until: apt_result is success
+      retries: 5
+      delay: 10
+
+    - name: Include MTA front configuration tasks
+      include_tasks: "../../modules/phishing/mta-front/tasks/configure_mta_front.yml"
+
+    - name: Include common security hardening tasks
+      include_tasks: "../../common/tasks/security_hardening.yml"
+
+    - name: Print deployment summary
+      debug:
+        msg:
+          - "MTA Front Configuration Complete!"
+          - "---------------------------------"
+          - "MTA Front IP: {{ ansible_host }}"
+      when: not disable_summary | default(false)

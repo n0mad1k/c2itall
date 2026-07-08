@@ -30,7 +30,6 @@
     src: "../templates/phishing/postfix-mta-front.j2"
     dest: /etc/postfix/main.cf
     backup: yes
-  notify: restart postfix
 
 - name: Configure Postfix master.cf for advanced relaying
   blockinfile:
@@ -59,9 +58,6 @@
       /^Content-Transfer-Encoding:\s*7bit/i REPLACE Content-Transfer-Encoding: 8bit
       /^Content-Type:\s*text\/plain/i REPLACE Content-Type: text/html
     mode: '0644'
-  notify: 
-    - reload postfix
-    - postmap header_checks
 
 - name: Create nested header checks for advanced smuggling
   copy:
@@ -71,12 +67,9 @@
       /^\s*<script/i IGNORE
       /^\s*<iframe/i IGNORE
     mode: '0644'
-  notify:
-    - reload postfix
-    - postmap nested_header_checks
 
 - name: Configure DKIM for domain reputation
-  include_tasks: ../tasks/configure_mail.yml
+  include_tasks: ../../../../common/tasks/configure_mail.yml
 
 - name: Create relay authentication
   copy:
@@ -86,9 +79,6 @@
     mode: '0600'
     owner: root
     group: root
-  notify:
-    - postmap sasl_passwd
-    - restart postfix
 
 - name: Configure transport maps for backend routing
   copy:
@@ -97,9 +87,6 @@
       {{ phishing_domain }}    smtp:[{{ gophish_ip }}]:25
       .{{ phishing_domain }}   smtp:[{{ gophish_ip }}]:25
     mode: '0644'
-  notify:
-    - postmap transport
-    - restart postfix
 
 - name: Install Python SMTP testing tools
   pip:
@@ -127,25 +114,24 @@
     minute: "*/15"
     job: "/root/Tools/reputation-monitor.sh >> /var/log/reputation.log 2>&1"
 
-handlers:
-  - name: restart postfix
-    service:
-      name: postfix
-      state: restarted
+- name: restart postfix
+  service:
+    name: postfix
+    state: restarted
 
-  - name: reload postfix
-    service:
-      name: postfix
-      state: reloaded
+- name: reload postfix
+  service:
+    name: postfix
+    state: reloaded
 
-  - name: postmap header_checks
-    command: postmap /etc/postfix/header_checks
+- name: postmap header_checks
+  command: postmap /etc/postfix/header_checks
 
-  - name: postmap nested_header_checks
-    command: postmap /etc/postfix/nested_header_checks
+- name: postmap nested_header_checks
+  command: postmap /etc/postfix/nested_header_checks
 
-  - name: postmap sasl_passwd
-    command: postmap /etc/postfix/sasl_passwd
+- name: postmap sasl_passwd
+  command: postmap /etc/postfix/sasl_passwd
 
-  - name: postmap transport
-    command: postmap /etc/postfix/transport
+- name: postmap transport
+  command: postmap /etc/postfix/transport

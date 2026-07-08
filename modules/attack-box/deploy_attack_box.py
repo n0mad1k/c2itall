@@ -353,19 +353,6 @@ def gather_quick_recon_parameters():
     
     return config
 
-def deploy_windows_attack_box():
-    """Deploy Windows attack box"""
-    print(f"\n{COLORS['YELLOW']}Windows attack box deployment coming soon...{COLORS['RESET']}")
-    print(f"{COLORS['YELLOW']}This will include Cobalt Strike, Metasploit, and Windows-specific tools{COLORS['RESET']}")
-    wait_for_input()
-
-def deploy_multiple_attack_boxes():
-    """Deploy multiple attack boxes for large engagements"""
-    print(f"\n{COLORS['BLUE']}Multiple Attack Box Deployment{COLORS['RESET']}")
-    print(f"{COLORS['YELLOW']}This will deploy multiple attack boxes for distributed operations{COLORS['RESET']}")
-    print(f"{COLORS['YELLOW']}Coming soon...{COLORS['RESET']}")
-    wait_for_input()
-
 def execute_attack_box_deployment(config):
     """Execute attack box infrastructure deployment"""
     clear_screen()

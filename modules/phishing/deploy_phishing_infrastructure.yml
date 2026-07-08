@@ -41,11 +41,11 @@
     # - providers/AWS/c2.yml for GoPhish/C2 servers
     # - providers/AWS/redirector.yml for redirectors  
     # - providers/Linode/c2.yml, providers/Linode/redirector.yml for Linode
-    # - modules/phishing/mta_front.yml for MTA front servers
+    # - providers/{{ provider }}/mta.yml for MTA front servers
     
     - name: Deploy MTA Front server
       debug:
-        msg: "🚀 Executing MTA Front deployment: mta_front.yml with server_name=mta-{{ deployment_id }}"
+        msg: "🚀 Executing MTA Front deployment: ../../providers/{{ provider }}/mta.yml with server_name=mta-{{ deployment_id }}"
       when: deploy_mta_front | default(false) | bool
 
     - name: Deploy Gophish server
@@ -60,7 +60,7 @@
 
     - name: Deploy phishing web server
       debug:
-        msg: "🚀 Executing web server deployment: phishing_webserver.yml with server_name=web-{{ deployment_id }}"
+        msg: "🚀 Executing web server deployment: ../../providers/{{ provider }}/webserver.yml with server_name=web-{{ deployment_id }}"
       when: deploy_phishing_webserver | default(false) | bool
 
     # Optional payload infrastructure - commented out for basic phishing deployments
@@ -99,7 +99,7 @@
 
     # Phase 3: Configure security groups and firewall rules
     - name: Configure phishing security
-      include_tasks: "tasks/setup_phishing_security.yml"
+      include_tasks: "webserver/tasks/setup_phishing_security.yml"
       vars:
         deployment_components:
           mta_front: "{{ deploy_mta_front | default(false) }}"
