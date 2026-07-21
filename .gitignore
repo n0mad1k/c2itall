@@ -108,3 +108,11 @@ test-output/
 # Ignore personal scripts
 scripts/dev/*
 .claude/
+
+# AI workflow artifacts - transient, never commit
+audits/
+.claude/audits/
+AUDIT_*.md
+FIXES_*.md
+FIXES.md
+GATE_*.md
