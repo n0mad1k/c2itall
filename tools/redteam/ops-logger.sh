@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 # OpsLogger - Complete logging solution for red team operations
-# Version 2.5.3 - Merged config and prompt fixes
+# Version 2.6.0 - Public release; hardened temp-file handling
 
 # Configuration variables
 CONFIG_FILE="${HOME}/.ops-logger.conf"
 DEFAULT_TARGET="target-$(hostname | tr '.' '-')"
 DEFAULT_LOG_DIR="${HOME}/OperationLogs"
 PROMPT_NEW_SHELLS=true
-RECORD_INTERVAL=0.5
 DEBUG=false
 
+# Runtime directory (per-user, mode 700 - defeats pre-created symlink attacks in shared /tmp)
+OPS_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}/ops-logger-$(id -u)"
+
 # File markers
-LOG_MARKER="/tmp/ops-logger-active"
-RECORDING_MARKER="/tmp/ops-logger-recording"
-CONFIG_IN_PROGRESS="/tmp/ops-logger-configuring"
-VERBOSE_CMD_MARKER="/tmp/ops-logger-cmd"
+LOG_MARKER="${OPS_RUNTIME_DIR}/ops-logger-active"
+RECORDING_MARKER="${OPS_RUNTIME_DIR}/ops-logger-recording"
+CONFIG_IN_PROGRESS="${OPS_RUNTIME_DIR}/ops-logger-configuring"
+VERBOSE_CMD_MARKER="${OPS_RUNTIME_DIR}/ops-logger-cmd"
 
 # Helper functions
 log_debug() {
@@ -26,8 +28,35 @@ log_debug() {
 }
 
 ensure_dir() {
-    mkdir -p "$1" 2>/dev/null || return 1
+    mkdir -p "$1" 2>/dev/null || { echo "Error: failed to create directory '$1' (check that the parent path exists and is writable)" >&2; return 1; }
+    if [[ -n "$2" ]]; then
+        chmod "$2" "$1" 2>/dev/null
+        local owner mode
+        read -r owner mode < <(stat -c '%u %a' "$1" 2>/dev/null)
+        if [[ "$owner" != "$(id -u)" || "$mode" != "$2" ]]; then
+            echo "Error: '$1' is not owned by uid $(id -u) with mode $2 (possibly pre-created by another user)" >&2
+            return 1
+        fi
+    fi
     return 0
+}
+
+ensure_dir "$OPS_RUNTIME_DIR" 700 || exit 1
+
+# Shared create_config validation - used by both the tmux and manual prompt
+# branches (exported so the tmux branch's separate config_script process can
+# call it too) so the two branches can never drift out of sync.
+validate_target_name() {
+    local name="${1:-$DEFAULT_TARGET}"
+    name="$(tr -cd 'A-Za-z0-9._-' <<<"$name")"
+    printf '%s' "${name:-$DEFAULT_TARGET}"
+}
+
+validate_log_dir() {
+    case "$1" in
+        *"'"*|*'"'*|*'`'*|*'$'*|*';'*|*'|'*|*'&'*|*$'\n'*) return 1 ;;
+        *) return 0 ;;
+    esac
 }
 
 load_config() {
@@ -49,7 +78,6 @@ save_config() {
 TARGET_NAME="$TARGET_NAME"
 LOG_DIR="$LOG_DIR"
 PROMPT_NEW_SHELLS=$PROMPT_NEW_SHELLS
-RECORD_INTERVAL=$RECORD_INTERVAL
 DEBUG=$DEBUG
 EOF
 }
@@ -229,179 +257,12 @@ setup_csv_log() {
     local log_dir="$2"
     local csv_file="${log_dir}/${target}_commands.csv"
     
-    ensure_dir "$log_dir"
+    ensure_dir "$log_dir" 700
     if [[ ! -f "$csv_file" ]]; then
         echo '"StartTime","EndTime","SourceIP","User","Path","Command"' > "$csv_file"
     fi
     
     echo "$csv_file"
-}
-
-# Create command hook with better timing and error handling
-create_command_hook() {
-    local hook_script="$1"
-    local csv_log="$2"
-    local pane_id="$3"
-    local verbose_log="$4"
-    
-    cat > "$hook_script" << 'EOF'
-#!/usr/bin/env bash
-# Command hook - FIXED version with proper function timing
-
-# IMMEDIATELY set all variables and disable errexit
-set +e
-
-# Set variables first before anything else
-CSV_LOG="__CSV_LOG__"
-VERBOSE_LOG="__VERBOSE_LOG__"
-PANE_ID="__PANE_ID__"
-PUBLIC_IP=$(timeout 5 curl -s ifconfig.me 2>/dev/null || echo "unknown")
-RTL_INTERNAL_LOGGING=true
-RTL_CMD_START_TIME=""
-VERBOSE_CMD_MARKER="__VERBOSE_CMD_MARKER__"
-
-# Function to check if command should be logged
-should_log_command() {
-    local cmd="$1"
-    case "$cmd" in
-        *"RTL_"*|*"log_command"*|*"CSV_LOG"*|*"should_log_command"*) return 1 ;;
-        "history "*|*"PROMPT_COMMAND"*|*"source /tmp/ops"*) return 1 ;;
-        "") return 1 ;;
-        *) return 0 ;;
-    esac
-}
-
-# Function to write verbose command header
-write_verbose_header() {
-    local cmd="$1"
-    local start_time="$2"
-    local user=$(whoami)
-    local path=$(pwd)
-    
-    # Create a marker file with command info for the verbose processor
-    echo "$cmd|$start_time|$user|$path|$PUBLIC_IP|$PANE_ID" > "${VERBOSE_CMD_MARKER}-${PANE_ID}"
-}
-
-# Function to log command to CSV
-RTL_log_command() {
-    local cmd="$1"
-    local start_time="$2"
-    local end_time="$3"
-    local user=$(whoami)
-    local path=$(pwd)
-    
-    should_log_command "$cmd" || return 0
-    
-    local old_flag="$RTL_INTERNAL_LOGGING"
-    RTL_INTERNAL_LOGGING=false
-    
-    local escaped_cmd=${cmd//\"/\"\"}
-    
-    printf '"%s","%s","%s","%s","%s","%s"\n' \
-        "$start_time" "$end_time" "$PUBLIC_IP" "$user" "$path" "$escaped_cmd" >> "$CSV_LOG" 2>/dev/null
-    
-    RTL_INTERNAL_LOGGING="$old_flag"
-}
-
-# BASH-specific setup
-if [[ -n "$BASH_VERSION" ]]; then
-    # Save original PROMPT_COMMAND
-    [[ -z "$RTL_ORIG_PROMPT_COMMAND" ]] && RTL_ORIG_PROMPT_COMMAND="$PROMPT_COMMAND"
-    
-    RTL_LAST_COMMAND=""
-    RTL_LAST_HISTNUM=""
-    
-    # FIXED: Define preexec function BEFORE setting trap
-    RTL_preexec() {
-        local cmd="$BASH_COMMAND"
-        if should_log_command "$cmd" 2>/dev/null; then
-            RTL_CMD_START_TIME="$(date '+%Y-%m-%d %H:%M:%S')"
-            write_verbose_header "$cmd" "$RTL_CMD_START_TIME"
-        fi
-    }
-    
-    # FIXED: Define PROMPT_COMMAND function BEFORE using it
-    RTL_PROMPT_COMMAND() {
-        if [[ "$RTL_INTERNAL_LOGGING" == "false" ]]; then
-            return 0
-        fi
-        
-        local current_histnum=$(history 1 2>/dev/null | awk '{print $1}')
-        local current_cmd=$(history 1 2>/dev/null | sed 's/^[ ]*[0-9]*[ ]*//')
-        
-        if [[ "$current_cmd" != "$RTL_LAST_COMMAND" && "$current_histnum" != "$RTL_LAST_HISTNUM" ]]; then
-            if should_log_command "$current_cmd" 2>/dev/null; then
-                local end_time="$(date '+%Y-%m-%d %H:%M:%S')"
-                local start_time="${RTL_CMD_START_TIME:-$end_time}"
-                
-                RTL_log_command "$current_cmd" "$start_time" "$end_time"
-                
-                RTL_LAST_COMMAND="$current_cmd"
-                RTL_LAST_HISTNUM="$current_histnum"
-            fi
-        fi
-        
-        RTL_CMD_START_TIME=""
-    }
-    
-    # NOW set the trap (function is already defined)
-    trap 'RTL_preexec 2>/dev/null || true' DEBUG 2>/dev/null
-    
-    # Set PROMPT_COMMAND (function is already defined)
-    if [[ -n "$RTL_ORIG_PROMPT_COMMAND" ]]; then
-        PROMPT_COMMAND="RTL_PROMPT_COMMAND; $RTL_ORIG_PROMPT_COMMAND"
-    else
-        PROMPT_COMMAND="RTL_PROMPT_COMMAND"
-    fi
-    
-# ZSH-specific setup
-elif [[ -n "$ZSH_VERSION" ]]; then
-    # Define functions first
-    RTL_zsh_preexec() {
-        local cmd="$1"
-        if should_log_command "$cmd" 2>/dev/null; then
-            RTL_CMD_START_TIME="$(date '+%Y-%m-%d %H:%M:%S')"
-            write_verbose_header "$cmd" "$RTL_CMD_START_TIME"
-        fi
-    }
-    
-    RTL_zsh_precmd() {
-        if [[ "$RTL_INTERNAL_LOGGING" == "false" ]]; then
-            return 0
-        fi
-        
-        local cmd=$(fc -ln -1 2>/dev/null)
-        
-        if should_log_command "$cmd" 2>/dev/null; then
-            local end_time="$(date '+%Y-%m-%d %H:%M:%S')"
-            local start_time="${RTL_CMD_START_TIME:-$end_time}"
-            
-            RTL_log_command "$cmd" "$start_time" "$end_time"
-        fi
-        
-        RTL_CMD_START_TIME=""
-    }
-    
-    # NOW set the hooks (functions are already defined)
-    if autoload -Uz add-zsh-hook 2>/dev/null; then
-        add-zsh-hook preexec RTL_zsh_preexec 2>/dev/null || true
-        add-zsh-hook precmd RTL_zsh_precmd 2>/dev/null || true
-    fi
-fi
-
-# Mark as active
-echo "$$" > "__LOG_MARKER__-${PANE_ID}"
-echo "Ops Logger command hook installed for pane $PANE_ID" >&2
-EOF
-
-    # Replace placeholders with actual values
-    sed -i "s|__CSV_LOG__|$csv_log|g" "$hook_script"
-    sed -i "s|__VERBOSE_LOG__|$verbose_log|g" "$hook_script"
-    sed -i "s|__PANE_ID__|$pane_id|g" "$hook_script"
-    sed -i "s|__LOG_MARKER__|$LOG_MARKER|g" "$hook_script"
-    sed -i "s|__VERBOSE_CMD_MARKER__|$VERBOSE_CMD_MARKER|g" "$hook_script"
-    
-    chmod +x "$hook_script"
 }
 
 # ================================================================
@@ -414,7 +275,7 @@ create_master_verbose_log() {
     local log_dir="$2"
     # Remove date from filename for continuous logging
     local verbose_dir="${log_dir}/verbose"
-    ensure_dir "$verbose_dir"
+    ensure_dir "$verbose_dir" 700
     # Single log file for entire target
     local log_file="${verbose_dir}/${target}_master.log"
     # Create the file with header if it doesn't exist
@@ -439,8 +300,9 @@ EOF
 
 # Create debug filter that captures EVERYTHING (no filtering)
 create_debug_filter_script() {
-    local filter_script="/tmp/ops-debug-filter-$$.sh"
-    
+    local filter_script
+    filter_script=$(mktemp "${OPS_RUNTIME_DIR}/ops-debug-filter-XXXXXX.sh") || { echo "ERROR: failed to create debug filter script" >&2; return 1; }
+
     cat > "$filter_script" << 'EODEBUG'
 #!/usr/bin/env bash
 # DEBUG: Raw pipe-pane output capture
@@ -495,7 +357,7 @@ start_debug_verbose_logging() {
         echo "Raw output file: ${debug_log}.debug-raw"
         echo "Filtered output file: $debug_log"
         
-        echo "$filter_script" > "/tmp/ops-debug-filter-script-${id}"
+        echo "$filter_script" > "${OPS_RUNTIME_DIR}/ops-debug-filter-script-${id}"
         return 0
     else
         echo "ERROR: DEBUG logging failed to start"
@@ -504,14 +366,14 @@ start_debug_verbose_logging() {
     fi
 }
 
-# Create the MINIMAL FIX verbose filter script
-# Create the FIXED verbose filter script
+# Create the verbose filter script
 create_verbose_filter_script() {
-    local filter_script="/tmp/ops-verbose-filter-$$.sh"
-    
+    local filter_script
+    filter_script=$(mktemp "${OPS_RUNTIME_DIR}/ops-verbose-filter-XXXXXX.sh") || { echo "ERROR: failed to create verbose filter script" >&2; return 1; }
+
     cat > "$filter_script" << 'EOFILTER'
 #!/usr/bin/env bash
-# FIXED: Proper command boundary detection
+# Proper command boundary detection
 
 LOGFILE="$1"
 PANE_ID="$2"
@@ -549,7 +411,7 @@ check_command_marker() {
         if [[ "$marker_content" != "$LAST_MARKER_CHECK" ]]; then
             LAST_MARKER_CHECK="$marker_content"
             
-            # FIXED: Always close previous command first
+            # Always close previous command first
             close_current_command
             
             # Read command info
@@ -673,7 +535,7 @@ should_log_command() {
     local cmd="$1"
     case "$cmd" in
         *"RTL_"*|*"log_command"*|*"CSV_LOG"*|*"should_log_command"*) return 1 ;;
-        "history "*|*"PROMPT_COMMAND"*|*"source /tmp/ops"*) return 1 ;;
+        "history "*|*"PROMPT_COMMAND"*|*"source "*"ops-hook-"*) return 1 ;;
         "") return 1 ;;
         *) return 0 ;;
     esac
@@ -704,7 +566,10 @@ RTL_log_command() {
     RTL_INTERNAL_LOGGING=false
     
     local escaped_cmd=${cmd//\"/\"\"}
-    
+    case "$escaped_cmd" in
+        [-+=@]*) escaped_cmd="'${escaped_cmd}" ;;
+    esac
+
     printf '"%s","%s","%s","%s","%s","%s"\n' \
         "$start_time" "$end_time" "$PUBLIC_IP" "$user" "$path" "$escaped_cmd" >> "$CSV_LOG" 2>/dev/null
     
@@ -805,7 +670,6 @@ EOF
     chmod +x "$hook_script"
 }
 
-# Start unified verbose logging
 # Start unified verbose logging (add delay for stability)
 start_unified_verbose_logging() {
     local id="$1"
@@ -832,7 +696,7 @@ start_unified_verbose_logging() {
         log_debug "Unified verbose logging started successfully"
         
         # Store filter script path for cleanup
-        echo "$filter_script" > "/tmp/ops-filter-script-${id}"
+        echo "$filter_script" > "${OPS_RUNTIME_DIR}/ops-filter-script-${id}"
         
         return 0
     else
@@ -851,15 +715,15 @@ stop_unified_verbose_logging() {
     tmux pipe-pane -t "$tmux_pane_ref" 2>/dev/null || true
     
     # Clean up filter script
-    if [[ -f "/tmp/ops-filter-script-${id}" ]]; then
-        local filter_script=$(cat "/tmp/ops-filter-script-${id}")
+    if [[ -f "${OPS_RUNTIME_DIR}/ops-filter-script-${id}" ]]; then
+        local filter_script=$(cat "${OPS_RUNTIME_DIR}/ops-filter-script-${id}")
         rm -f "$filter_script" 2>/dev/null
-        rm -f "/tmp/ops-filter-script-${id}"
+        rm -f "${OPS_RUNTIME_DIR}/ops-filter-script-${id}"
     fi
     
     # Clean up markers
     rm -f "${VERBOSE_CMD_MARKER}-${id}" 2>/dev/null
-    rm -f "/tmp/ops-cmd-active-${id}" 2>/dev/null
+    rm -f "${OPS_RUNTIME_DIR}/ops-cmd-active-${id}" 2>/dev/null
     
     log_debug "Stopped unified verbose logging for pane: $tmux_pane_ref"
 }
@@ -952,7 +816,7 @@ install_logging() {
         fi
         
         # Create enhanced command hook
-        local hook_script="/tmp/ops-hook-${id}.sh"
+        local hook_script="${OPS_RUNTIME_DIR}/ops-hook-${id}.sh"
         create_enhanced_command_hook "$hook_script" "$csv_log" "$id" "$master_log"
         
         # Install the hook
@@ -969,7 +833,7 @@ install_logging() {
         
     else
         # Direct shell logging (CSV only)
-        local hook_script="/tmp/ops-hook-${id}.sh"
+        local hook_script="${OPS_RUNTIME_DIR}/ops-hook-${id}.sh"
         create_enhanced_command_hook "$hook_script" "$csv_log" "$id" ""
         source "$hook_script"
         echo "Direct shell logging started (CSV only)"
@@ -981,78 +845,93 @@ install_logging() {
     log_debug "Enhanced logging installation completed"
 }
 
+# Shared PROMPT_COMMAND/unset -f cleanup logic used by both remove_logging
+# branches below - dumped via declare -f into the tmux cleanup script so the two
+# call sites can never drift out of sync.
+# NOTE: trap - DEBUG deliberately does NOT live here. Bash saves/restores the
+# DEBUG trap around function calls, so clearing it from inside a function is
+# silently reverted the moment the function returns. Each call site clears
+# its own DEBUG trap inline, immediately before calling this helper.
+_ops_logger_reset_hooks() {
+    if [[ -n "$BASH_VERSION" ]]; then
+        if [[ -n "$RTL_ORIG_PROMPT_COMMAND" ]]; then
+            PROMPT_COMMAND="$RTL_ORIG_PROMPT_COMMAND"
+            unset RTL_ORIG_PROMPT_COMMAND
+        else
+            unset PROMPT_COMMAND
+        fi
+        unset -f RTL_PROMPT_COMMAND RTL_log_command should_log_command RTL_preexec write_verbose_header 2>/dev/null
+    elif [[ -n "$ZSH_VERSION" ]]; then
+        add-zsh-hook -d preexec RTL_zsh_preexec 2>/dev/null
+        add-zsh-hook -d precmd RTL_zsh_precmd 2>/dev/null
+        unset -f RTL_zsh_preexec RTL_zsh_precmd RTL_log_command should_log_command write_verbose_header 2>/dev/null
+    fi
+}
+
 # Enhanced removal function
 remove_logging() {
     local id="$1"
-    
+
     log_debug "Removing enhanced logging for pane $id"
-    
+
     if is_tmux; then
         local tmux_pane_ref=$(get_tmux_pane_ref)
-        
+
         # Stop unified verbose logging
         stop_unified_verbose_logging "$tmux_pane_ref" "$id"
-        
+
         # Clean up command hooks (same as before)
-        local cleanup_script="/tmp/ops-cleanup-${id}.sh"
-        cat > "$cleanup_script" << 'EOF'
+        local cleanup_script
+        cleanup_script=$(mktemp "${OPS_RUNTIME_DIR}/ops-cleanup-${id}-XXXXXX.sh")
+        if [[ -z "$cleanup_script" ]]; then
+            log_debug "ERROR: failed to create cleanup script for pane $id"
+        else
+        cat > "$cleanup_script" << EOF
 #!/usr/bin/env bash
 set +e
 
-if [[ -n "$BASH_VERSION" ]]; then
-    trap - DEBUG 2>/dev/null
-    if [[ -n "$RTL_ORIG_PROMPT_COMMAND" ]]; then
-        PROMPT_COMMAND="$RTL_ORIG_PROMPT_COMMAND"
-        unset RTL_ORIG_PROMPT_COMMAND
-    else
-        unset PROMPT_COMMAND
-    fi
-    unset -f RTL_PROMPT_COMMAND RTL_log_command should_log_command RTL_preexec write_verbose_header 2>/dev/null
-elif [[ -n "$ZSH_VERSION" ]]; then
-    add-zsh-hook -d preexec RTL_zsh_preexec 2>/dev/null
-    add-zsh-hook -d precmd RTL_zsh_precmd 2>/dev/null
-    unset -f RTL_zsh_preexec RTL_zsh_precmd RTL_log_command should_log_command write_verbose_header 2>/dev/null
-fi
+$(declare -f _ops_logger_reset_hooks)
+_ops_logger_reset_hooks
 
 unset RTL_CMD_START_TIME RTL_LAST_COMMAND RTL_LAST_HISTNUM RTL_INTERNAL_LOGGING 2>/dev/null
 unset CSV_LOG VERBOSE_LOG PANE_ID PUBLIC_IP VERBOSE_CMD_MARKER 2>/dev/null
 
+# The DEBUG trap fires once more for the "trap - DEBUG" statement that
+# preceded this source (it was still active going into it), recreating one
+# marker after remove_logging's own cleanup already ran. Remove it here,
+# strictly after the trap is actually gone, to close that race.
+rm -f '${VERBOSE_CMD_MARKER}-${id}' 2>/dev/null
+
 echo "Enhanced Ops Logger hooks removed"
 EOF
         chmod +x "$cleanup_script"
-        
-        tmux send-keys -t "$tmux_pane_ref" "source '$cleanup_script' 2>/dev/null; rm -f '$cleanup_script'" ENTER
-        
+
+        # trap - DEBUG must run as a top-level command typed directly into the
+        # pane, NOT from inside the sourced cleanup_script: bash saves/restores
+        # the DEBUG trap around the entire duration of a `source` call, so a
+        # clear issued from inside the sourced file is always reverted the
+        # moment that source finishes, no matter where in the file it lives.
+        tmux send-keys -t "$tmux_pane_ref" "[[ -n \"\$BASH_VERSION\" ]] && trap - DEBUG 2>/dev/null; source '$cleanup_script' 2>/dev/null; rm -f '$cleanup_script'" ENTER
+        fi
+
         # Clear window indicators
         clear_window_indicators "$tmux_pane_ref"
-        
+
         # Clean up temp files
-        rm -f "/tmp/ops-hook-${id}.sh"
-        
+        rm -f "${OPS_RUNTIME_DIR}/ops-hook-${id}.sh"
+
     else
         # Direct shell cleanup (same as before)
-        if [[ -n "$BASH_VERSION" ]]; then
-            trap - DEBUG 2>/dev/null
-            if [[ -n "$RTL_ORIG_PROMPT_COMMAND" ]]; then
-                PROMPT_COMMAND="$RTL_ORIG_PROMPT_COMMAND"
-                unset RTL_ORIG_PROMPT_COMMAND
-            else
-                unset PROMPT_COMMAND
-            fi
-            unset -f RTL_PROMPT_COMMAND RTL_log_command should_log_command RTL_preexec write_verbose_header 2>/dev/null
-        elif [[ -n "$ZSH_VERSION" ]]; then
-            add-zsh-hook -d preexec RTL_zsh_preexec 2>/dev/null
-            add-zsh-hook -d precmd RTL_zsh_precmd 2>/dev/null
-            unset -f RTL_zsh_preexec RTL_zsh_precmd RTL_log_command should_log_command write_verbose_header 2>/dev/null
-        fi
-        
+        [[ -n "$BASH_VERSION" ]] && trap - DEBUG 2>/dev/null
+        _ops_logger_reset_hooks
         echo "Direct shell logging stopped"
     fi
-    
+
     # Remove markers
     rm -f "${LOG_MARKER}-${id}" "${LOG_MARKER}-${id}.success"
-    rm -f "/tmp/ops-hook-${id}.sh"
-    
+    rm -f "${OPS_RUNTIME_DIR}/ops-hook-${id}.sh"
+    rm -f "${VERBOSE_CMD_MARKER}-${id}"
+
     log_debug "Enhanced logging removal completed"
 }
 
@@ -1066,8 +945,8 @@ start_recording() {
     local log_dir="$3"
     local recordings_dir="${log_dir}/recordings"
     local timestamp=$(date +%Y%m%d_%H%M%S)
-    
-    ensure_dir "$recordings_dir"
+
+    ensure_dir "$recordings_dir" 700
     
     # Check for asciinema
     if ! command -v asciinema >/dev/null 2>&1; then
@@ -1162,7 +1041,8 @@ create_config() {
         touch "$CONFIG_IN_PROGRESS"
         
         # Create a temporary script that will handle the config creation
-        local config_script="/tmp/ops-config-$$.sh"
+        local config_script
+        config_script=$(mktemp "${OPS_RUNTIME_DIR}/ops-config-XXXXXX.sh") || { echo "Error: failed to create config script."; return 1; }
         cat > "$config_script" << 'EOSCRIPT'
 #!/usr/bin/env bash
 CONFIG_FILE="${HOME}/.ops-logger.conf"
@@ -1174,10 +1054,15 @@ echo "==========================================="
 echo ""
 
 read -p "Enter target name [$DEFAULT_TARGET]: " TARGET_NAME
-TARGET_NAME="${TARGET_NAME:-$DEFAULT_TARGET}"
+TARGET_NAME="$(validate_target_name "$TARGET_NAME")"
 
 read -p "Enter log directory [$DEFAULT_LOG_DIR]: " LOG_DIR
 LOG_DIR="${LOG_DIR:-$DEFAULT_LOG_DIR}"
+while ! validate_log_dir "$LOG_DIR"; do
+    echo "Log directory contains a disallowed character (quote, backtick, dollar sign, semicolon, pipe, or ampersand). Please try again."
+    read -p "Enter log directory [$DEFAULT_LOG_DIR]: " LOG_DIR
+    LOG_DIR="${LOG_DIR:-$DEFAULT_LOG_DIR}"
+done
 
 read -p "Prompt for logging in new shells? [Y/n]: " PROMPT_NEW_SHELLS
 [[ "${PROMPT_NEW_SHELLS,,}" == "n" ]] && PROMPT_NEW_SHELLS=false || PROMPT_NEW_SHELLS=true
@@ -1192,7 +1077,6 @@ cat > "$CONFIG_FILE" << EOF
 TARGET_NAME="$TARGET_NAME"
 LOG_DIR="$LOG_DIR"
 PROMPT_NEW_SHELLS=$PROMPT_NEW_SHELLS
-RECORD_INTERVAL=0.5
 DEBUG=$DEBUG
 EOF
 
@@ -1200,7 +1084,7 @@ EOF
 mkdir -p "$LOG_DIR" "$LOG_DIR/verbose" "$LOG_DIR/recordings"
 
 # Remove the in-progress marker
-rm -f "/tmp/ops-logger-configuring"
+rm -f "__CONFIG_IN_PROGRESS__"
 
 echo ""
 echo "Configuration saved!"
@@ -1213,9 +1097,12 @@ echo "Now run: prefix+L to start logging (or ops-logger --start)"
 echo "Press ENTER to close this window..."
 read
 EOSCRIPT
+        sed -i "s|__CONFIG_IN_PROGRESS__|$CONFIG_IN_PROGRESS|g" "$config_script"
         chmod +x "$config_script"
-        
-        # Open new window for config
+
+        # Open new window for config (export shared validators so the
+        # separate config_script process can call the same functions)
+        export -f validate_target_name validate_log_dir
         bash "$config_script"; rm -f "$config_script"
         return 0
     fi
@@ -1236,10 +1123,15 @@ EOSCRIPT
     fi
 
     read -p "Enter target name [$DEFAULT_TARGET]: " TARGET_NAME
-    TARGET_NAME="${TARGET_NAME:-$DEFAULT_TARGET}"
+    TARGET_NAME="$(validate_target_name "$TARGET_NAME")"
 
     read -p "Enter log directory [$DEFAULT_LOG_DIR]: " LOG_DIR
     LOG_DIR="${LOG_DIR:-$DEFAULT_LOG_DIR}"
+    while ! validate_log_dir "$LOG_DIR"; do
+        echo "Log directory contains a disallowed character (quote, backtick, dollar sign, semicolon, pipe, or ampersand). Please try again."
+        read -p "Enter log directory [$DEFAULT_LOG_DIR]: " LOG_DIR
+        LOG_DIR="${LOG_DIR:-$DEFAULT_LOG_DIR}"
+    done
 
     read -p "Prompt for logging in new shells? [Y/n]: " PROMPT_NEW_SHELLS
     [[ "${PROMPT_NEW_SHELLS,,}" == "n" ]] && PROMPT_NEW_SHELLS=false || PROMPT_NEW_SHELLS=true
@@ -1254,7 +1146,6 @@ EOSCRIPT
 TARGET_NAME="$TARGET_NAME"
 LOG_DIR="$LOG_DIR"
 PROMPT_NEW_SHELLS=$PROMPT_NEW_SHELLS
-RECORD_INTERVAL=0.5
 DEBUG=$DEBUG
 EOF
 
@@ -1353,52 +1244,58 @@ prompt_for_logging() {
     local id
     id=$(get_pane_id)
 
-    # ✅ Debug logging to see what's happening
-    echo "[$(date)] prompt_for_logging called for pane: $id" >> /tmp/ops-logger-prompt-debug.log
-    echo "[$(date)] TMUX_PANE: ${TMUX_PANE:-'not set'}" >> /tmp/ops-logger-prompt-debug.log
+    # Debug logging to see what's happening
+    log_debug "prompt_for_logging called for pane: $id"
+    log_debug "TMUX_PANE: ${TMUX_PANE:-'not set'}"
 
-    # ✅ Avoid recursion with a pane-specific lock - BUT with timeout
-    local lock_file="/tmp/ops-logger-prompted-${id}"
+    # Avoid recursion with a pane-specific lock - BUT with timeout
+    local lock_file="${OPS_RUNTIME_DIR}/ops-logger-prompted-${id}"
     if [[ -f "$lock_file" ]]; then
         # Check if lock file is stale (older than 30 seconds)
         if [[ $(find "$lock_file" -mmin +0.5 2>/dev/null) ]]; then
-            echo "[$(date)] Removing stale lock file" >> /tmp/ops-logger-prompt-debug.log
+            log_debug "Removing stale lock file"
             rm -f "$lock_file"
         else
-            echo "[$(date)] Recent lock file exists, returning" >> /tmp/ops-logger-prompt-debug.log
+            log_debug "Recent lock file exists, returning"
             return 0
         fi
     fi
     touch "$lock_file"
 
-    # ✅ Cleanup function to ensure lock file is always removed
+    # Cleanup function to ensure lock file is always removed
     cleanup_lock() {
         rm -f "$lock_file"
-        echo "[$(date)] Lock file cleaned up" >> /tmp/ops-logger-prompt-debug.log
+        log_debug "Lock file cleaned up"
     }
     trap cleanup_lock EXIT
 
     is_logging_active "$id" && {
-        echo "[$(date)] Already logging, returning" >> /tmp/ops-logger-prompt-debug.log
+        log_debug "Already logging, returning"
         cleanup_lock
         return 0
     }
 
     load_config
-    echo "[$(date)] Config loaded - PROMPT_NEW_SHELLS: $PROMPT_NEW_SHELLS" >> /tmp/ops-logger-prompt-debug.log
-    
+    log_debug "Config loaded - PROMPT_NEW_SHELLS: $PROMPT_NEW_SHELLS"
+
     [[ "$PROMPT_NEW_SHELLS" != "true" ]] && {
-        echo "[$(date)] Prompting disabled, returning" >> /tmp/ops-logger-prompt-debug.log
+        log_debug "Prompting disabled, returning"
         cleanup_lock
         return 0
     }
 
-    # ✅ FIXED: Use tmux display-popup for proper interaction in tmux
+    # Use tmux display-popup for proper interaction in tmux
     if is_tmux; then
-        echo "[$(date)] In tmux, creating popup" >> /tmp/ops-logger-prompt-debug.log
-        
+        log_debug "In tmux, creating popup"
+
         # Create a temporary script for the popup
-        local popup_script="/tmp/ops-prompt-${id}.sh"
+        local popup_script
+        popup_script=$(mktemp "${OPS_RUNTIME_DIR}/ops-prompt-${id}-XXXXXX.sh")
+        if [[ -z "$popup_script" ]]; then
+            log_debug "ERROR: failed to create popup script"
+            cleanup_lock
+            return 1
+        fi
         local script_path=$(readlink -f "$0")
         
         cat > "$popup_script" << 'EOPOPUP'
@@ -1426,16 +1323,16 @@ EOPOPUP
         sed -i "s|__SCRIPT_PATH__|$script_path|g" "$popup_script"
         chmod +x "$popup_script"
         
-        echo "[$(date)] Popup script created, calling display-popup" >> /tmp/ops-logger-prompt-debug.log
-        
+        log_debug "Popup script created, calling display-popup"
+
         # Use tmux display-popup for proper interaction
         tmux display-popup -E -w 50 -h 10 -T "Ops Logger" "bash '$popup_script'; rm -f '$popup_script'"
-        
-        echo "[$(date)] display-popup completed" >> /tmp/ops-logger-prompt-debug.log
-        
+
+        log_debug "display-popup completed"
+
     else
-        echo "[$(date)] Not in tmux, using direct prompt" >> /tmp/ops-logger-prompt-debug.log
-        
+        log_debug "Not in tmux, using direct prompt"
+
         # Direct shell - standard approach
         echo "Start logging this shell?"
         echo ""
@@ -1458,7 +1355,7 @@ EOPOPUP
     fi
     
     # Clean up will be handled by trap
-    echo "[$(date)] prompt_for_logging completed" >> /tmp/ops-logger-prompt-debug.log
+    log_debug "prompt_for_logging completed"
 }
 
 # ================================================================
@@ -1472,13 +1369,25 @@ install_tmux_keys() {
         local script_path
         script_path=$(readlink -f "$0")
 
+        # Warn (but still bind) if L/R are already bound to something that
+        # isn't this tool's own binding, so a pre-existing config (e.g.
+        # oh-my-tmux's L -> resize-pane) isn't clobbered without notice.
+        local key_check existing_binding
+        for key_check in L R; do
+            existing_binding=$(tmux list-keys "$key_check" 2>/dev/null | grep -E "[[:space:]]-T[[:space:]]+prefix([[:space:]]|$)")
+            if [[ -n "$existing_binding" && "$existing_binding" != *"$script_path"* ]]; then
+                echo "Warning: prefix+$key_check is already bound to something else, overwriting:" >&2
+                echo "  $existing_binding" >&2
+            fi
+        done
+
         # Bind keys
         tmux bind-key L run-shell "bash -c '[ -f ~/.ops-logger.conf ] && tmux run-shell \"$script_path --toggle\" || tmux display-popup -E -w 80% -h 60% -T \"Ops Logger Config\" \"bash $script_path --toggle\"'"
         tmux bind-key R run-shell "'$script_path' --toggle-recording"
 
-        # ✅ FIXED: Create a wrapper script that exports the pane context
+        # Create a wrapper script that exports the pane context
         if [[ "$PROMPT_NEW_SHELLS" == "true" ]]; then
-            local hook_wrapper="/tmp/ops-logger-pane-wrapper.sh"
+            local hook_wrapper="${OPS_RUNTIME_DIR}/ops-logger-pane-wrapper.sh"
             cat > "$hook_wrapper" << EOWRAPPER
 #!/bin/bash
 # Wrapper that sets pane context and calls the prompt
@@ -1494,7 +1403,7 @@ if [ -f ~/.ops-logger.conf ]; then
         PANE_ID=\$(tmux display-message -p "#{session_name}-#{window_index}-#{pane_index}")
         
         # Check if already logging
-        if [ ! -f "/tmp/ops-logger-active-\$PANE_ID" ]; then
+        if [ ! -f "${LOG_MARKER}-\$PANE_ID" ]; then
             # Export the tmux pane reference for the script to use
             export TMUX_PANE=\$(tmux display-message -p "#{pane_id}")
             
@@ -1528,9 +1437,9 @@ uninstall_tmux_keys() {
         log_debug "Tmux key bindings removed"
         
         # Remove our hook scripts
-        rm -f /tmp/ops-logger-hook-wrapper.sh 2>/dev/null
-        rm -f /tmp/ops-logger-tmux-hook.sh 2>/dev/null
-        rm -f /tmp/ops-logger-pane-wrapper.sh 2>/dev/null
+        rm -f "${OPS_RUNTIME_DIR}/ops-logger-hook-wrapper.sh" 2>/dev/null
+        rm -f "${OPS_RUNTIME_DIR}/ops-logger-tmux-hook.sh" 2>/dev/null
+        rm -f "${OPS_RUNTIME_DIR}/ops-logger-pane-wrapper.sh" 2>/dev/null
     fi
     
     # Also remove config file as user expected
@@ -1559,7 +1468,7 @@ uninstall_all() {
     is_tmux && uninstall_tmux_keys
     
     # Clean up temp files
-    rm -f /tmp/ops-* 2>/dev/null
+    rm -rf "$OPS_RUNTIME_DIR" 2>/dev/null
     
     echo "OpsLogger uninstalled completely"
 }
@@ -1591,9 +1500,19 @@ show_status() {
         echo "Normalized Pane ID: $id"
         
         # Check plugin installation status
-        echo "TPM: $(check_tpm_installed && echo "INSTALLED" || echo "NOT INSTALLED")"
-        echo "tmux-logging plugin: $(check_tmux_logging_installed && echo "INSTALLED" || echo "NOT INSTALLED")"
-        
+        if check_tpm_installed; then
+            echo "TPM: INSTALLED"
+        else
+            echo "TPM: NOT INSTALLED"
+            print_tpm_install_instructions
+        fi
+        if check_tmux_logging_installed; then
+            echo "tmux-logging plugin: INSTALLED"
+        else
+            echo "tmux-logging plugin: NOT INSTALLED"
+            print_tmux_logging_install_instructions
+        fi
+
         # Check if there's active pipe-pane logging
         echo "Active logging pipe: $(tmux list-panes -F "#{pane_id} #{pane_pipe}" | grep -q "$(get_tmux_pane_ref).*1" && echo "YES" || echo "NO")"
     else
@@ -1601,7 +1520,7 @@ show_status() {
     fi
     
     # Show current log files
-    local csv_log="${LOG_DIR}/${TARGET_NAME}_commands_$(date +%Y-%m-%d).csv"
+    local csv_log="${LOG_DIR}/${TARGET_NAME}_commands.csv"
     
     [[ -f "$csv_log" ]] && {
         echo "Current CSV log: $csv_log"
@@ -1621,7 +1540,7 @@ show_status() {
 }
 
 show_help() {
-    echo "Red Team Terminal Logger - Professional Solution v2.5.2"
+    echo "Red Team Terminal Logger - Professional Solution v2.6.0"
     echo "========================================================"
     echo "USAGE: $0 [OPTIONS]"
     echo ""
@@ -1638,8 +1557,8 @@ show_help() {
     echo "SETUP & CONFIGURATION:"
     echo "  --prompt              Show logging prompt (for new shells)"
     echo "  --install             Install tmux keybindings"
-    echo "  --uninstall           Remove tmux keybindings and config"
-    echo "  --uninstall-all       Complete removal (same as --uninstall)"
+    echo "  --uninstall           Remove keybindings/hooks and delete config"
+    echo "  --uninstall-all       Also stop active logging/recording; wipe runtime state"
     echo "  --config              Configure settings"
     echo "  --save-config         Save config (internal use)"
     echo ""
@@ -1650,17 +1569,19 @@ show_help() {
     echo "DEBUG:"
     echo "  --debug-on            Enable debug logging"
     echo "  --debug-off           Disable debug logging"
+    echo "  --debug-pipe          Raw pipe-pane capture (dev/debug)"
     echo ""
     echo "TMUX INTEGRATION:"
     echo "  Keys: prefix+L (toggle logging), prefix+R (recording)"
     echo "  Compatible with ohmytmux themes and window naming"
     echo "  Auto-prompts for new windows/panes (configurable)"
     echo ""
-    echo "VERSION 2.5.2 FIXES:"
-    echo "  - FIXED: Verbose logs now include formatted command headers"
-    echo "  - FIXED: Configuration uses interactive tmux windows"
-    echo "  - FIXED: Command metadata properly captured and formatted"
-    echo "  - IMPROVED: Better separation of capture and formatting"
+    echo "v2.6.0 CHANGELOG:"
+    echo "  - Runtime/log directories hardened to mode 700 with ownership verification"
+    echo "  - TARGET_NAME/LOG_DIR input validation to close shell-injection sinks"
+    echo "  - Temp files created via mktemp instead of predictable paths"
+    echo "  - Removed 165 lines of dead/duplicate hook-generation code"
+    echo "  - Fixed --save-config dispatching to a nonexistent function"
 }
 
 # Main command handler with output handling
@@ -1683,7 +1604,7 @@ main() {
         --uninstall)         uninstall_tmux_keys ;;
         --uninstall-all)     uninstall_all ;;
         --config)            create_config ;;
-        --save-config)       save_config_from_tmux ;;
+        --save-config)       save_config ;;
         --status)            show_status ;;
         --debug-pipe)        
             load_config || { TARGET_NAME="$DEFAULT_TARGET"; LOG_DIR="$DEFAULT_LOG_DIR"; }
