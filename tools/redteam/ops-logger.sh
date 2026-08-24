@@ -1178,12 +1178,6 @@ ensure_config() {
 # ================================================================
 
 start_logging() {
-    # Ensure we output to terminal if run from tmux keybinding
-    if is_tmux && [[ -t 1 ]]; then
-        local tty=$(tty 2>/dev/null || echo "/dev/tty")
-        exec 1>$tty 2>$tty
-    fi
-    
     # Auto-setup config with prompts on first logging start
     ensure_config || return 1
     load_config
@@ -1200,12 +1194,6 @@ start_logging() {
 }
 
 stop_logging() {
-    # Ensure we output to terminal if run from tmux keybinding
-    if is_tmux && [[ -t 1 ]]; then
-        local tty=$(tty 2>/dev/null || echo "/dev/tty")
-        exec 1>$tty 2>$tty
-    fi
-    
     local id=$(get_pane_id)
     is_logging_active "$id" || {
         echo "Not logging"
@@ -1216,23 +1204,11 @@ stop_logging() {
 }
 
 toggle_logging() {
-    # Ensure we output to terminal if run from tmux keybinding
-    if is_tmux && [[ -t 1 ]]; then
-        local tty=$(tty 2>/dev/null || echo "/dev/tty")
-        exec 1>$tty 2>$tty
-    fi
-    
     local id=$(get_pane_id)
     is_logging_active "$id" && stop_logging || start_logging
 }
 
 toggle_recording() {
-    # Ensure we output to terminal if run from tmux keybinding
-    if is_tmux && [[ -t 1 ]]; then
-        local tty=$(tty 2>/dev/null || echo "/dev/tty")
-        exec 1>$tty 2>$tty
-    fi
-    
     local id=$(get_pane_id)
     # Load existing config or use defaults
     [[ -f "$CONFIG_FILE" ]] && load_config || { TARGET_NAME="$DEFAULT_TARGET"; LOG_DIR="$DEFAULT_LOG_DIR"; }
@@ -1474,12 +1450,6 @@ uninstall_all() {
 }
 
 show_status() {
-    # Ensure we output to terminal if run from tmux keybinding
-    if is_tmux && [[ -t 1 ]]; then
-        local tty=$(tty 2>/dev/null || echo "/dev/tty")
-        exec 1>$tty 2>$tty
-    fi
-    
     load_config
     local id=$(get_pane_id)
     
@@ -1584,14 +1554,21 @@ show_help() {
     echo "  - Fixed --save-config dispatching to a nonexistent function"
 }
 
-# Main command handler with output handling
-main() {
-    # Always ensure direct terminal output for tmux operations
+# Redirect stdout/stderr to the real tty when invoked from a tmux
+# keybinding/run-shell context, whose fds otherwise point at tmux's
+# control pipe rather than a terminal a user can see.
+ensure_direct_tty() {
     if is_tmux && [[ -t 1 ]]; then
         local tty=$(tty 2>/dev/null || echo "/dev/tty")
         exec 1>$tty 2>$tty
     fi
-    
+}
+
+# Main command handler with output handling
+main() {
+    # Always ensure direct terminal output for tmux operations
+    ensure_direct_tty
+
     case "$1" in
         --start)             start_logging ;;
         --stop)              stop_logging ;;
