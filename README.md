@@ -68,7 +68,7 @@ ansible --version
 
 The Azure flow and its smoke-test script require Python 3.12 or newer.
 
-Choose **Tools & Utilities → Infrastructure-only VM (Azure)**, or run
+Choose **Tools & Utilities → Infrastructure-only VM**, then **Azure**, or run
 `python3 modules/infrastructure/deploy_infrastructure.py`. Azure is offered only
 for this flow. It creates a dedicated resource group, network, firewall, static
 Standard IPv4, NIC and Ubuntu 24.04 VM with a 32-GiB StandardSSD managed disk.
@@ -108,6 +108,46 @@ explicit `accept-new` trust on first use; changed keys are rejected. Provisionin
 and validation have a 30-minute deadline, with a separate 10-minute cleanup budget.
 SIGINT/SIGTERM stop controller children and trigger cleanup; SIGKILL or workstation
 loss can leave resources that require the persisted-state recovery command.
+
+The smoke test captures the subscription resource and resource-group inventory
+before provisioning and requires that inventory to be restored before reporting
+success. In an initially empty test subscription, it also removes the default
+East US Network Watcher and its empty group if they are the only additions and
+have no running operations, connection monitors, captures or flow logs. Existing
+monitoring resources are preserved. Unexpected changes or shared-subscription
+additions stop automatic cleanup and are reported for review. This assumes an
+exclusive test subscription during automatic monitoring cleanup; Azure does not
+provide an atomic inventory-and-delete operation across independent controllers.
+
+Tools & Utilities now performs a real read-only Azure connectivity check using
+the CLI's selected subscription. Configuration validation checks Azure inputs and
+the public key when `providers/Azure/vars.yaml` exists; interactive configuration
+does not require that file. Local key cleanup preserves keys referenced by active
+infrastructure state and refuses deletion if that state cannot be read.
+
+### Provider routing and incremental migration
+
+All four providers enter the dispatcher in `utils/provider_registry.py`.
+The registry is the source of provider names, directories, SSH defaults,
+configuration loaders and new workload routes. Configuration loaders for AWS,
+Linode and FlokiNET delegate to the existing functions.
+
+For deployment, playbook selection and cleanup, the dispatcher looks for a
+registered **provider + workload** handler first. If no handler exists, providers
+with legacy support retain their existing route. A handler's failure or invalid
+registration never falls back to legacy execution. Existing selectors and menu
+defaults are preserved; registering one workload does not replace the provider's
+other workloads or advertise unsupported capabilities.
+
+The neutral infrastructure module uses the adapter contract rather than Azure
+imports. An adapter supplies configuration, validation, key preparation, playbook
+selection, deployment, cleanup and durable-state discovery. New handlers are
+registered in `ProviderSpec.routes`; adding a provider or workload does not
+require adding another provider switch to that module. Azure implements the
+infrastructure handler today. AWS, Linode and FlokiNET retain their existing
+workload implementations through the compatibility fallback; they have not been
+silently rewritten or live-tested by this change. Separate module-specific
+dispatchers, including Phantom and WEBRUNNER, remain on their existing paths.
 Provider registrations remain enabled after the test.
 
 ### Main Menu (Easiest Method)

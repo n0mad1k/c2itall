@@ -15,21 +15,18 @@ import re
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from utils.common import COLORS, PROVIDER_DIRS, confirm_action
+from utils.provider_registry import infrastructure_adapter, workload_route, uses_legacy_routes, list_infrastructure_states, load_infrastructure_state
 
 def teardown_by_deployment_id(deployment_id):
     """Teardown infrastructure by deployment ID"""
     print(f"\n{COLORS['BLUE']}Teardown Infrastructure by ID: {deployment_id}{COLORS['RESET']}")
-    from utils.azure_utils import load_state
-    if re.fullmatch(r'[a-z0-9][a-z0-9-]{0,39}', deployment_id):
-        try:
-            state = load_state(deployment_id)
-        except FileNotFoundError:
-            pass
-        except (ValueError, KeyError, OSError) as exc:
-            logging.error('Invalid Azure recovery state: %s', exc)
-            return False
-        else:
-            return execute_teardown(state)
+    try:
+        state = load_infrastructure_state(deployment_id)
+    except (ValueError, KeyError, OSError) as exc:
+        logging.error('Invalid infrastructure recovery state: %s', exc)
+        return False
+    if state is not None:
+        return execute_teardown(state)
     
     # Look for deployment logs to determine provider and configuration
     log_files = glob.glob(f"logs/deployment_{deployment_id}*.log")
@@ -60,13 +57,12 @@ def teardown_all_infrastructure():
     # Find all deployment info files
     info_files = glob.glob("logs/deployment_info_*.txt")
     
-    from utils.azure_utils import list_states
     try:
-        azure_states = list_states()
+        states = list_infrastructure_states()
     except (ValueError, KeyError, OSError) as exc:
-        logging.error('Invalid Azure recovery state: %s', exc)
+        logging.error('Invalid infrastructure recovery state: %s', exc)
         return False
-    configs = {(state['provider'], state['deployment_id']): state for state in azure_states}
+    configs = {(state['provider'], state['deployment_id']): state for state in states}
     for info_file in info_files:
         config = parse_deployment_info(info_file)
         if config:
@@ -128,9 +124,11 @@ def parse_deployment_info(info_file):
 def execute_teardown(config):
     """Execute teardown based on configuration"""
     provider = config.get('provider')
-    if provider == 'azure':
-        from utils.azure_utils import cleanup_azure
-        return cleanup_azure(config)
+    adapter = workload_route(config)
+    if adapter is None and not uses_legacy_routes(provider):
+        adapter = infrastructure_adapter(provider)
+    if adapter is not None:
+        return adapter.cleanup(config)
     deployment_id = config.get('deployment_id')
     
     if not provider or not deployment_id:

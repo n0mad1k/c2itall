@@ -159,6 +159,23 @@ def run_az(args, subscription_id, deadline=None):
     return json.loads(result.stdout) if result.stdout.strip() else None
 
 
+def check_connection(subscription_id=None):
+    """Verify CLI authentication and a real, read-only ARM request."""
+    command = ['az', 'account', 'show', '--only-show-errors', '--output', 'json']
+    if subscription_id is not None:
+        command.extend(['--subscription', str(uuid.UUID(subscription_id))])
+    account = json.loads(run_command(command).stdout)
+    selected = str(uuid.UUID(account['id']))
+    if account.get('state') != 'Enabled':
+        raise ValueError('Azure subscription is not enabled')
+    if subscription_id is not None and selected != str(uuid.UUID(subscription_id)):
+        raise ValueError('Azure CLI returned a different subscription')
+    count = run_az(['group', 'list', '--query', 'length(@)'], selected)
+    if type(count) is not int or count < 0:
+        raise ValueError('Azure returned an invalid resource-group response')
+    return {'subscription_id': selected, 'resource_group_count': count}
+
+
 def validate_config(config, require_key=True):
     if not supports_infrastructure(config):
         raise ValueError('Azure supports only the infrastructure workload')

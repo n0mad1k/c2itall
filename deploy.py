@@ -245,7 +245,7 @@ def tools_menu():
         print(f"8) Claude Bot {COLORS['CYAN']}(Matrix-Claude Code Bridge){COLORS['RESET']}")
         print(f"9) Chaos C2 {COLORS['CYAN']}(Deploy / Manage Chaos teamserver){COLORS['RESET']}")
         print(f"10) WEBRUNNER {COLORS['CYAN']}(Distributed Geo-Targeted Recon){COLORS['RESET']}")
-        print("11) Infrastructure-only VM (Azure)")
+        print("11) Infrastructure-only VM")
         print(f"99) Return to Main Menu")
         
         choice = input(f"\nSelect an option: ")
@@ -363,24 +363,50 @@ def generate_ssh_keys():
     wait_for_input()
 
 def test_provider_connectivity():
-    """Test connectivity to cloud providers"""
+    """Check the authenticated Azure subscription without creating resources."""
     print(f"\n{COLORS['BLUE']}Provider Connectivity Test{COLORS['RESET']}")
-    print(f"{COLORS['YELLOW']}This would test connectivity to AWS, Linode, and FlokiNET{COLORS['RESET']}")
-    print(f"{COLORS['YELLOW']}Feature coming soon...{COLORS['RESET']}")
+    from utils.azure_utils import check_connection
+    try:
+        result = check_connection()
+        print(f"{COLORS['GREEN']}Azure connected: {result['subscription_id']} "
+              f"({result['resource_group_count']} resource groups){COLORS['RESET']}")
+    except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
+        print(f"{COLORS['RED']}Azure connectivity failed: {error}{COLORS['RESET']}")
+    print('Connectivity checks for AWS, Linode and FlokiNET are not implemented here.')
     wait_for_input()
 
 def validate_configurations():
     """Validate configuration files"""
     print(f"\n{COLORS['BLUE']}Configuration Validation{COLORS['RESET']}")
     
+    root = os.path.dirname(os.path.abspath(__file__))
     config_dirs = ['providers/AWS', 'providers/Linode', 'providers/FlokiNET']
     
     for config_dir in config_dirs:
-        vars_file = os.path.join(config_dir, 'vars.yaml')
+        vars_file = os.path.join(root, config_dir, 'vars.yaml')
         if os.path.exists(vars_file):
             print(f"{COLORS['GREEN']}✓{COLORS['RESET']} Found: {vars_file}")
         else:
             print(f"{COLORS['RED']}✗{COLORS['RESET']} Missing: {vars_file}")
+
+    azure_file = os.path.join(root, 'providers', 'Azure', 'vars.yaml')
+    if os.path.isfile(azure_file):
+        import yaml
+        from utils.azure_utils import validate_config
+        try:
+            with open(azure_file) as stream:
+                config = yaml.safe_load(stream)
+            if not isinstance(config, dict):
+                raise ValueError('Azure configuration must be a mapping')
+            validate_config(config)
+            print(f"{COLORS['GREEN']}Valid Azure configuration and public key: {azure_file}{COLORS['RESET']}")
+        except yaml.YAMLError:
+            print(f"{COLORS['RED']}Invalid Azure YAML: {azure_file}{COLORS['RESET']}")
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            print(f"{COLORS['RED']}Invalid Azure configuration: {error}{COLORS['RESET']}")
+    else:
+        print('Azure uses interactive configuration; no saved vars.yaml found. '
+              'See providers/Azure/vars.example.yaml for required inputs.')
     
     wait_for_input()
 
@@ -399,19 +425,19 @@ def interactive_teardown():
         print(f"{COLORS['CYAN']}Select Deployment to Teardown...{COLORS['RESET']}\n")
         
         # Run the teardown script directly with --select to bypass the menu
-        from utils.azure_utils import list_states
+        from utils.provider_registry import list_infrastructure_states
         from utils.cleanup_engine import execute_teardown
-        azure_states = list_states()
-        if azure_states:
-            for index, state in enumerate(azure_states, 1):
-                print(f"{index}) Azure {state['deployment_id']} ({state['status']})")
-            selection = input('Select Azure number, L for legacy deployments, or 99 to cancel: ').strip()
+        states = list_infrastructure_states()
+        if states:
+            for index, state in enumerate(states, 1):
+                print(f"{index}) {state['provider']} {state['deployment_id']} ({state['status']})")
+            selection = input('Select infrastructure number, L for legacy deployments, or 99 to cancel: ').strip()
             if selection == '99':
                 return
             if selection.lower() != 'l':
-                if selection.isdigit() and 1 <= int(selection) <= len(azure_states):
-                    state = azure_states[int(selection) - 1]
-                    if confirm_action(f"Delete Azure deployment {state['deployment_id']}?", default=False):
+                if selection.isdigit() and 1 <= int(selection) <= len(states):
+                    state = states[int(selection) - 1]
+                    if confirm_action(f"Delete {state['provider']} deployment {state['deployment_id']}?", default=False):
                         execute_teardown(state)
                 else:
                     print('Invalid deployment selection')
@@ -463,11 +489,25 @@ def clean_ssh_keys():
     
     ssh_dir = os.path.expanduser("~/.ssh")
     c2deploy_keys = []
+    # Retain recovery keys until the ownership-checked cloud teardown confirms
+    # deletion. Fail closed when even one active state cannot be read.
+    from utils.provider_registry import list_infrastructure_states
+    try:
+        protected = {os.path.abspath(state[key]) for state in list_infrastructure_states()
+                     for key in ('ssh_key_path', 'ssh_private_key_path')}
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        print(f"{COLORS['RED']}Cannot verify infrastructure recovery keys; no keys removed: {error}{COLORS['RESET']}")
+        wait_for_input()
+        return
     
     if os.path.exists(ssh_dir):
         for file in os.listdir(ssh_dir):
             if file.startswith("c2deploy_"):
-                c2deploy_keys.append(os.path.join(ssh_dir, file))
+                path = os.path.join(ssh_dir, file)
+                if os.path.abspath(path) in protected:
+                    print(f"Keeping active infrastructure recovery key: {path}")
+                else:
+                    c2deploy_keys.append(path)
     
     if not c2deploy_keys:
         print(f"{COLORS['GREEN']}No C2ingRed SSH keys found{COLORS['RESET']}")
@@ -477,7 +517,17 @@ def clean_ssh_keys():
             print(f"  {key}")
         
         if input(f"\n{COLORS['YELLOW']}Delete these keys? (y/n): {COLORS['RESET']}").lower() == 'y':
+            try:
+                protected.update(os.path.abspath(state[key]) for state in list_infrastructure_states()
+                                 for key in ('ssh_key_path', 'ssh_private_key_path'))
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                print(f"Cannot recheck infrastructure recovery keys; no keys removed: {error}")
+                wait_for_input()
+                return
             for key in c2deploy_keys:
+                if os.path.abspath(key) in protected:
+                    print(f"Keeping active infrastructure recovery key: {key}")
+                    continue
                 try:
                     os.remove(key)
                     print(f"{COLORS['GREEN']}Removed: {key}{COLORS['RESET']}")

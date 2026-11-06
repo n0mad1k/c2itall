@@ -23,6 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from utils import azure_utils as azure
 from utils import cleanup_engine, deployment_engine, provider_utils
+from utils import provider_registry as registry
+from dataclasses import replace
 
 spec = importlib.util.spec_from_file_location("azure_smoke", ROOT / "scripts/deploy_azure_smoke.py")
 smoke = importlib.util.module_from_spec(spec)
@@ -368,6 +370,121 @@ class RoutingAndTemplateTests(AzureFixture):
             self.assertEqual(os.environ["AWS_SECRET_ACCESS_KEY"], "aws-secret")
 
 
+class ProviderContractTests(AzureFixture):
+    def test_every_provider_uses_dispatcher_and_original_configuration_loader(self):
+        from utils import aws_utils, linode_utils, flokinet_utils
+        for name, module, function in (
+            ('aws', aws_utils, 'gather_aws_config'),
+            ('linode', linode_utils, 'gather_linode_config'),
+            ('flokinet', flokinet_utils, 'gather_flokinet_config'),
+            ('azure', azure, 'gather_azure_config'),
+        ):
+            with self.subTest(provider=name), mock.patch.object(module, function, return_value={'provider': name}) as gather:
+                self.assertEqual(registry.provider_dispatcher(name).provider, name)
+                self.assertEqual(provider_utils.gather_provider_config(name), {'provider': name})
+                gather.assert_called_once_with()
+
+    def test_registered_workload_precedes_legacy_and_failure_never_falls_back(self):
+        spec = replace(registry.PROVIDER_SPECS['aws'], routes={'infrastructure': 'synthetic:Adapter'})
+        adapter = mock.Mock()
+        config = {**self.config, 'provider': 'aws'}
+        with mock.patch.dict(registry.PROVIDER_SPECS, {'aws': spec}), mock.patch.object(registry, '_load', return_value=lambda: adapter), mock.patch.object(deployment_engine, 'execute_playbook') as legacy:
+            adapter.deploy.return_value = False
+            self.assertFalse(deployment_engine.deploy_infrastructure(config))
+            legacy.assert_not_called()
+            adapter.deploy.side_effect = RuntimeError('new route failed')
+            with self.assertRaisesRegex(RuntimeError, 'new route failed'):
+                deployment_engine.deploy_infrastructure(config)
+            legacy.assert_not_called()
+            adapter.cleanup.return_value = False
+            with mock.patch.object(cleanup_engine, 'run_teardown_playbook') as old_cleanup:
+                self.assertFalse(cleanup_engine.execute_teardown(config))
+                old_cleanup.assert_not_called()
+
+    def test_legacy_routes_do_not_import_unrelated_new_adapter(self):
+        spec = replace(registry.PROVIDER_SPECS['aws'], routes={'infrastructure': 'unavailable:Adapter'})
+        with mock.patch.dict(registry.PROVIDER_SPECS, {'aws': spec}), mock.patch.object(registry, '_load', side_effect=AssertionError('unexpected adapter import')):
+            cases = [({}, 'c2'), ({'attack_box_deployment': True}, 'attack_box'),
+                     ({'redirector_only': True}, 'redirector'), ({'tracker_deployment': True}, 'tracker'),
+                     ({'chat_deployment': True}, 'chat_server'), ({'c2_only': True}, 'c2')]
+            for flags, playbook in cases:
+                self.assertEqual(deployment_engine.determine_playbook({'provider': 'aws', **flags}),
+                                 f'providers/AWS/{playbook}.yml')
+            config = {'provider': 'aws', 'deployment_id': 'legacy', 'chat_deployment': True}
+            with mock.patch('utils.common.setup_logging'), mock.patch.object(cleanup_engine, 'set_provider_environment_for_teardown'), mock.patch.object(cleanup_engine, 'run_teardown_playbook', return_value=False) as legacy:
+                self.assertFalse(cleanup_engine.execute_teardown(config))
+                legacy.assert_called_once_with('providers/AWS/cleanup.yml', config)
+
+    def test_missing_new_route_preserves_existing_deployment_path_for_each_provider(self):
+        for provider, directory in (('aws', 'AWS'), ('linode', 'Linode'), ('flokinet', 'FlokiNET')):
+            config = {'provider': provider, 'deployment_id': 'legacy', 'deployment_type': 'unmigrated'}
+            with self.subTest(provider=provider), mock.patch.object(deployment_engine, 'set_provider_environment') as env, mock.patch.object(deployment_engine, 'execute_playbook', return_value=True) as legacy:
+                self.assertTrue(deployment_engine.deploy_infrastructure(config))
+                env.assert_called_once_with(config)
+                legacy.assert_called_once_with(f'providers/{directory}/c2.yml', config)
+
+    def test_generic_module_runs_a_registered_adapter_without_azure_imports(self):
+        spec = importlib.util.spec_from_file_location('generic_infrastructure', ROOT / 'modules/infrastructure/deploy_infrastructure.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        adapter = mock.Mock()
+        adapter.validate_config.side_effect = lambda config, **kwargs: dict(config)
+        adapter.prepare_key.return_value = True
+        with mock.patch.object(module, 'select_provider', return_value='example'), mock.patch.object(module, 'infrastructure_adapter', return_value=adapter), mock.patch.object(module, 'gather_provider_config', return_value={}), mock.patch.object(module, 'generate_deployment_id', return_value='generic-test'), mock.patch.object(module, 'setup_logging'), mock.patch('builtins.input', return_value=str(self.key) + '.pub'), mock.patch.object(module, 'deploy_infrastructure', return_value=True) as deploy, contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(module.main([]))
+            config = deploy.call_args.args[0]
+            self.assertEqual(config['provider'], 'example')
+            self.assertFalse(any(key.startswith('azure_') for key in config))
+            adapter.prepare_key.assert_called_once()
+
+    def test_missing_capability_menu_exits_without_prompting(self):
+        with mock.patch('builtins.input') as prompt, contextlib.redirect_stdout(io.StringIO()):
+            self.assertIsNone(provider_utils.select_provider('missing-workload'))
+            prompt.assert_not_called()
+
+    def test_recovery_refuses_ambiguous_cross_provider_id(self):
+        adapter_a = mock.Mock()
+        adapter_b = mock.Mock()
+        adapter_a.load_state.return_value = {'provider': 'azure'}
+        adapter_b.load_state.return_value = {'provider': 'second'}
+        with mock.patch.object(registry, 'providers_for', return_value=['azure', 'second']), mock.patch.object(registry, 'infrastructure_adapter', side_effect=[adapter_a, adapter_b]):
+            with self.assertRaisesRegex(ValueError, 'multiple providers'):
+                registry.load_infrastructure_state('same-id')
+
+    def test_connectivity_requires_real_arm_response_and_matching_subscription(self):
+        account = subprocess.CompletedProcess([], 0, json.dumps({'id': smoke.SUBSCRIPTION, 'state': 'Enabled'}), '')
+        with mock.patch.object(azure, 'run_command', return_value=account), mock.patch.object(azure, 'run_az', return_value=0) as arm:
+            result = azure.check_connection(smoke.SUBSCRIPTION)
+            self.assertEqual(result['resource_group_count'], 0)
+            arm.assert_called_once_with(['group', 'list', '--query', 'length(@)'], smoke.SUBSCRIPTION)
+        with mock.patch.object(azure, 'run_command', return_value=account), mock.patch.object(azure, 'run_az') as arm:
+            with self.assertRaisesRegex(ValueError, 'different subscription'):
+                azure.check_connection('00000000-0000-0000-0000-000000000000')
+            arm.assert_not_called()
+
+    def test_key_cleanup_preserves_active_keys_and_removes_only_unused_candidates(self):
+        import deploy as app
+        self.prepare()
+        unused = self.key.parent / 'c2deploy_unused'
+        unused.write_text('unused')
+        with mock.patch('builtins.input', return_value='y'), mock.patch.object(app, 'wait_for_input'), contextlib.redirect_stdout(io.StringIO()):
+            app.clean_ssh_keys()
+        self.assertTrue(self.key.exists())
+        self.assertTrue(Path(str(self.key) + '.pub').exists())
+        self.assertFalse(unused.exists())
+
+    def test_key_cleanup_fails_closed_on_invalid_state_or_state_change_during_prompt(self):
+        import deploy as app
+        with mock.patch.object(registry, 'list_infrastructure_states', side_effect=ValueError('corrupt')), mock.patch('builtins.input') as prompt, mock.patch.object(app, 'wait_for_input'), contextlib.redirect_stdout(io.StringIO()):
+            app.clean_ssh_keys()
+            prompt.assert_not_called()
+        self.assertTrue(self.key.exists())
+        state = {'ssh_key_path': str(self.key) + '.pub', 'ssh_private_key_path': str(self.key)}
+        with mock.patch.object(registry, 'list_infrastructure_states', side_effect=[[], [state]]), mock.patch('builtins.input', return_value='y'), mock.patch.object(app, 'wait_for_input'), contextlib.redirect_stdout(io.StringIO()):
+            app.clean_ssh_keys()
+        self.assertTrue(self.key.exists())
+
+
 class ProcessTests(unittest.TestCase):
     def test_hung_command_is_bounded(self):
         started = time.monotonic()
@@ -404,6 +521,93 @@ else:
 
 
 class SmokeTests(unittest.TestCase):
+    def monitoring_fixture(self):
+        runner = smoke.Runner()
+        runner.deadline = time.monotonic() + 60
+        runner.subscription_baseline = {'resource': [], 'group': []}
+        group = f'/subscriptions/{smoke.SUBSCRIPTION}/resourceGroups/NetworkWatcherRG'
+        watcher = group + '/providers/Microsoft.Network/networkWatchers/NetworkWatcher_eastus'
+        inventory = {'resource': [watcher.lower()], 'group': [group.lower()]}
+        details = {'id': watcher, 'location': 'eastus', 'properties': {'runningOperationIds': []}}
+        children = {'value': []}
+        calls = []
+        def cloud(*args):
+            calls.append(args)
+            if args[:2] == ('resource', 'show'):
+                return details
+            if args[:1] == ('rest',):
+                return children
+            if args[:2] == ('resource', 'delete'):
+                inventory['resource'] = []
+                return None
+            if args[:2] == ('group', 'delete'):
+                inventory['group'] = []
+                return None
+            if args[:2] == ('group', 'exists'):
+                return bool(inventory['group'])
+            raise AssertionError(f'Unexpected cleanup command {args}')
+        return runner, inventory, details, children, calls, cloud
+
+    def test_subscription_cleanup_removes_only_idle_monitoring_from_empty_lab(self):
+        runner, inventory, details, children, calls, cloud = self.monitoring_fixture()
+        with mock.patch.object(runner, 'inventory', side_effect=lambda: copy.deepcopy(inventory)), mock.patch.object(runner, 'az', side_effect=cloud), mock.patch.object(runner, 'record') as record:
+            runner.cleanup_subscription()
+        self.assertEqual(inventory, runner.subscription_baseline)
+        self.assertEqual(sum(call[:2] == ('resource', 'delete') for call in calls), 1)
+        self.assertEqual(sum(call[:2] == ('group', 'delete') for call in calls), 1)
+        self.assertTrue(record.call_args.args[1]['restored'])
+
+    def test_subscription_cleanup_preserves_preexisting_resources_and_monitoring(self):
+        runner, inventory, details, children, calls, cloud = self.monitoring_fixture()
+        runner.subscription_baseline = copy.deepcopy(inventory)
+        with mock.patch.object(runner, 'inventory', return_value=inventory), mock.patch.object(runner, 'az') as az, mock.patch.object(runner, 'record'):
+            runner.cleanup_subscription()
+            az.assert_not_called()
+
+    def test_subscription_cleanup_refuses_foreign_resources_and_missing_baseline(self):
+        for baseline in (None, {'resource': ['/existing'], 'group': ['/existing-group']}):
+            runner, inventory, details, children, calls, cloud = self.monitoring_fixture()
+            runner.subscription_baseline = baseline
+            with mock.patch.object(runner, 'inventory', return_value=inventory), mock.patch.object(runner, 'az') as az, mock.patch.object(runner, 'record'), self.assertRaises(smoke.SmokeError):
+                runner.cleanup_subscription()
+            az.assert_not_called()
+        runner, inventory, details, children, calls, cloud = self.monitoring_fixture()
+        inventory['resource'].append('/unexpected-vm')
+        with mock.patch.object(runner, 'inventory', return_value=inventory), mock.patch.object(runner, 'az') as az, mock.patch.object(runner, 'record'), self.assertRaises(smoke.SmokeError):
+            runner.cleanup_subscription()
+        az.assert_not_called()
+
+    def test_subscription_cleanup_preserves_monitoring_with_data_or_uncertain_response(self):
+        for page in ({'value': [{'id': 'existing-monitor'}]}, {}, {'value': [], 'nextLink': 'next'}):
+            runner, inventory, details, children, calls, cloud = self.monitoring_fixture()
+            children.clear()
+            children.update(page)
+            with mock.patch.object(runner, 'inventory', return_value=inventory), mock.patch.object(runner, 'az', side_effect=cloud), mock.patch.object(runner, 'record'), self.assertRaises(smoke.SmokeError):
+                runner.cleanup_subscription()
+            self.assertFalse(any(call[1:2] == ('delete',) for call in calls))
+
+    def test_subscription_cleanup_preserves_busy_or_wrong_identity_watcher(self):
+        for field, value in (('id', '/foreign'), ('location', 'westus'), ('properties', {'runningOperationIds': ['busy']})):
+            runner, inventory, details, children, calls, cloud = self.monitoring_fixture()
+            details[field] = value
+            with mock.patch.object(runner, 'inventory', return_value=inventory), mock.patch.object(runner, 'az', side_effect=cloud), mock.patch.object(runner, 'record'), self.assertRaises(smoke.SmokeError):
+                runner.cleanup_subscription()
+            self.assertFalse(any(call[1:2] == ('delete',) for call in calls))
+
+    def test_subscription_cleanup_rechecks_before_deleting_monitoring(self):
+        runner, inventory, details, children, calls, cloud = self.monitoring_fixture()
+        changed = copy.deepcopy(inventory)
+        changed['resource'].append('/concurrent-vm')
+        with mock.patch.object(runner, 'inventory', side_effect=[inventory, changed]), mock.patch.object(runner, 'az', side_effect=cloud), mock.patch.object(runner, 'record'), self.assertRaises(smoke.SmokeError):
+            runner.cleanup_subscription()
+        self.assertFalse(any(call[1:2] == ('delete',) for call in calls))
+
+    def test_cleanup_cannot_report_success_when_subscription_cleanup_fails(self):
+        runner = smoke.Runner()
+        config = {'azure_resource_group': 'test', 'deployment_id': 'test'}
+        with mock.patch.object(runner, 'worker'), mock.patch.object(runner, 'az', return_value=False), mock.patch.object(runner, 'cleanup_subscription', side_effect=smoke.SmokeError('residual')), mock.patch.object(runner, 'record'), contextlib.redirect_stderr(io.StringIO()):
+            self.assertFalse(runner.cleanup(ROOT, config))
+
     def verification_fixture(self, disk_field="diskSizeGB", disk_size=32):
         """CLI response structure with synthetic identifiers, never live evidence."""
         base = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test-smoke/providers/"

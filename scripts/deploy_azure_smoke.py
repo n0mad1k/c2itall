@@ -39,6 +39,7 @@ APPROVED_PATHS = (
     "providers/Azure/templates/infrastructure.json.j2",
     "modules/infrastructure/deploy_infrastructure.py", "tests/test_azure_provider.py",
     "scripts/deploy_azure_smoke.py",
+    "utils/provider_registry.py", "utils/azure_adapter.py",
 )
 PHASES = (
     "Validate public branch, tools, account and pinned Azure parameters.",
@@ -112,6 +113,7 @@ class Runner:
         self.counter = 0
         self.cleaning = False
         self.interrupted = False
+        self.subscription_baseline = None
 
     def handle_signal(self, signum, _frame):
         self.interrupted = True
@@ -212,7 +214,74 @@ class Runner:
     def baseline(self, group):
         if self.az("group", "exists", "--name", group) is not False:
             raise SmokeError("Smoke requires a resource group that does not exist")
-        self.record("baseline.json", {"subscription": SUBSCRIPTION, "resource_group": group, "exists": False})
+        self.subscription_baseline = self.inventory()
+        self.record("baseline.json", {"subscription": SUBSCRIPTION, "resource_group": group,
+                                      "exists": False, "inventory": self.subscription_baseline})
+
+    def inventory(self):
+        """Include resources outside the test group, such as automatic monitoring."""
+        prefix = f"/subscriptions/{SUBSCRIPTION}/resourcegroups/"
+        result = {}
+        for kind in ("resource", "group"):
+            items = self.az(kind, "list")
+            if not isinstance(items, list) or any(
+                not isinstance(item, dict) or not isinstance(item.get("id"), str)
+                or not item["id"].lower().startswith(prefix) for item in items
+            ):
+                raise SmokeError(f"Invalid subscription {kind} inventory")
+            result[kind] = sorted({item["id"].lower() for item in items})
+        return result
+
+    def cleanup_subscription(self):
+        """Preserve prior resources; remove only an idle watcher in an empty lab."""
+        before = self.subscription_baseline
+        if before is None:
+            raise SmokeError("Subscription cleanup baseline is missing")
+        current = self.inventory()
+        if current == before:
+            self.record("subscription-cleanup.json", {"restored": True, "inventory": current})
+            return
+        group = f"/subscriptions/{SUBSCRIPTION}/resourceGroups/NetworkWatcherRG"
+        watcher = group + f"/providers/Microsoft.Network/networkWatchers/NetworkWatcher_{LOCATION}"
+        # This deliberately refuses shared subscriptions and unexpected additions.
+        # No baseline resource or monitoring session may be deleted by a smoke run.
+        expected = {"resource": [watcher.lower()], "group": [group.lower()]}
+        empty_group = {"resource": [], "group": [group.lower()]}
+        if before != {"resource": [], "group": []} or current not in (expected, empty_group):
+            self.record("subscription-residuals.json", {"baseline": before, "current": current})
+            raise SmokeError("Subscription inventory changed; refusing cleanup of unrelated resources")
+        if current == expected:
+            details = self.az("resource", "show", "--ids", watcher, "--api-version", "2024-05-01")
+            if (details.get("id", "").lower() != watcher.lower()
+                    or details.get("location", "").lower() != LOCATION
+                    or details.get("properties", {}).get("runningOperationIds") != []):
+                raise SmokeError("Network Watcher identity or idle state could not be verified")
+            for child in ("connectionMonitors", "packetCaptures", "flowLogs"):
+                url = f"https://management.azure.com{watcher}/{child}?api-version=2024-05-01"
+                page = self.az("rest", "--method", "get", "--url", url)
+                if not isinstance(page, dict) or page.get("value") != [] or page.get("nextLink"):
+                    raise SmokeError("Network Watcher has monitoring data; preserving it")
+            if self.inventory() != expected:
+                raise SmokeError("Subscription changed during cleanup; preserving Network Watcher")
+            self.az("resource", "delete", "--ids", watcher, "--api-version", "2024-05-01")
+        # Never delete a group unless its entire subscription inventory is as expected.
+        while True:
+            current = self.inventory()
+            if current == empty_group:
+                break
+            if current == before:
+                self.record("subscription-cleanup.json", {"restored": True, "inventory": current})
+                return
+            if current != expected:
+                raise SmokeError("Unexpected resources appeared during cleanup")
+            time.sleep(min(5, remaining(self.deadline)))
+        self.az("group", "delete", "--name", "NetworkWatcherRG", "--yes", "--no-wait")
+        while self.az("group", "exists", "--name", "NetworkWatcherRG") is not False:
+            time.sleep(min(5, remaining(self.deadline)))
+        current = self.inventory()
+        if current != before:
+            raise SmokeError("Subscription inventory was not restored after cleanup")
+        self.record("subscription-cleanup.json", {"restored": True, "inventory": current})
 
     def worker(self, source, operation, config, timeout=60):
         config_path = self.record("config.json", config)
@@ -368,6 +437,7 @@ class Runner:
             self.worker(source, "cleanup", config, timeout=remaining(self.deadline, 600))
             if self.az("group", "exists", "--name", config["azure_resource_group"]) is not False:
                 raise SmokeError("Cleanup returned without confirmed group deletion")
+            self.cleanup_subscription()
             self.record("cleanup.json", {"confirmed_absent": True, "resource_group": config["azure_resource_group"]})
             return True
         except BaseException as error:
@@ -378,7 +448,7 @@ class Runner:
             except Exception:
                 pass
             self.record("cleanup-failure.json", {"error": str(error), "residual_resources": residual})
-            print(f"Cleanup failed; retained state and residual IDs: {json.dumps(residual)}", file=sys.stderr)
+            print(f"Cleanup failed; inspect recovery state and evidence. Test-group residual IDs: {json.dumps(residual)}", file=sys.stderr)
             return False
 
 
@@ -468,7 +538,7 @@ def activate(operator_ip=None, prepare_only=False):
     if result and prepare_only:
         print("Azure preparation passed (prepared=true); no resource group or VM created. Local test key removed; provider registrations remain enabled.")
     elif result:
-        print("Azure smoke passed; temporary group and generated key removed. Provider registrations remain enabled.")
+        print("Azure smoke passed; temporary group and generated key removed; subscription inventory restored. Provider registrations remain enabled.")
     return 0 if result else 1
 
 
@@ -491,7 +561,7 @@ def main(argv=None):
         print(f"DRY RUN: no commands or mutations. Target: {SUBSCRIPTION} / {LOCATION} / {SIZE}")
         for index, phase in enumerate(PHASES, 1):
             print(f"{index}. {phase}")
-        print("Activation includes two existing local public commits. SIGKILL/workstation loss requires fresh-process teardown.")
+        print("Activation pushes the current public branch. SIGKILL/workstation loss requires fresh-process teardown.")
         return 0
     return activate(args.operator_ip, prepare_only=args.prepare)
 

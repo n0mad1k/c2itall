@@ -1,0 +1,142 @@
+"""Provider metadata and opt-in infrastructure adapters.
+
+Legacy providers keep their existing dispatch until a neutral infrastructure
+adapter is implemented. Registration never implies support for every workload.
+"""
+
+from dataclasses import dataclass, field
+from importlib import import_module
+from typing import Mapping
+from typing import Protocol
+
+
+class InfrastructureAdapter(Protocol):
+    def gather_config(self): ...
+    def validate_config(self, config, require_key=True): ...
+    def prepare_key(self, config): ...
+    def playbook(self, config): ...
+    def deploy(self, config): ...
+    def cleanup(self, config): ...
+    def load_state(self, deployment_id): ...
+    def list_states(self): ...
+
+
+@dataclass(frozen=True)
+class ProviderSpec:
+    directory: str
+    ssh_user: str
+    legacy_menu: bool = True
+    config_loader: str | None = None
+    routes: Mapping[str, str] = field(default_factory=dict)
+
+    @property
+    def capabilities(self):
+        return frozenset(self.routes)
+
+
+PROVIDER_SPECS = {
+    'aws': ProviderSpec('AWS', 'kali', config_loader='utils.aws_utils:gather_aws_config'),
+    'linode': ProviderSpec('Linode', 'root', config_loader='utils.linode_utils:gather_linode_config'),
+    'flokinet': ProviderSpec('FlokiNET', 'root', config_loader='utils.flokinet_utils:gather_flokinet_config'),
+    'azure': ProviderSpec('Azure', 'azureuser', False,
+                          config_loader='utils.azure_utils:gather_azure_config',
+                          routes={'infrastructure': 'utils.azure_adapter:AzureInfrastructureAdapter'}),
+}
+
+
+def _load(reference):
+    module, name = reference.split(':', 1)
+    return getattr(import_module(module), name)
+
+
+class ProviderDispatcher:
+    """The common entry point for every provider; legacy is a missing-route fallback."""
+
+    def __init__(self, provider):
+        self.provider = provider
+        self.spec = PROVIDER_SPECS[provider]
+
+    def route(self, workload):
+        if workload not in self.spec.routes:
+            return None
+        reference = self.spec.routes[workload]
+        if not reference:
+            raise ValueError(f'Registered route is missing for {self.provider}/{workload}')
+        return _load(reference)()
+
+    def gather_config(self, capability=None):
+        if capability is not None:
+            route = self.route(capability)
+            if route is None:
+                raise ValueError(f'No configuration route for {self.provider}/{capability}')
+            return route.gather_config()
+        if not self.spec.config_loader:
+            raise ValueError(f'Configuration loader is missing for {self.provider}')
+        return _load(self.spec.config_loader)()
+
+
+def provider_dispatcher(provider):
+    return ProviderDispatcher(provider) if provider in PROVIDER_SPECS else None
+
+
+def providers_for(capability=None):
+    return [key for key, spec in PROVIDER_SPECS.items()
+            if (spec.legacy_menu if capability is None else capability in spec.capabilities)]
+
+
+def infrastructure_adapter(provider) -> InfrastructureAdapter | None:
+    dispatcher = provider_dispatcher(provider)
+    return dispatcher.route('infrastructure') if dispatcher is not None else None
+
+
+def workload_route(config):
+    """Select a new route by workload, not merely by provider registration."""
+    dispatcher = provider_dispatcher(config.get('provider'))
+    if dispatcher is not None:
+        return dispatcher.route(requested_workload(config))
+    return None
+
+
+def requested_workload(config):
+    """Recognize the existing selectors without changing legacy precedence."""
+    if isinstance(config.get('deployment_type'), str) and config['deployment_type']:
+        return config['deployment_type']
+    for flag, workload in (
+        ('attack_box_deployment', 'attack_box'), ('redirector_only', 'redirector'),
+        ('tracker_deployment', 'tracker'), ('phishing_deployment', 'phishing'),
+        ('chat_deployment', 'chat'),
+    ):
+        if config.get(flag):
+            return workload
+    # The original shared engine's final/default route is c2. Keeping that
+    # name here does not implement a new handler or alter its legacy execution.
+    return 'c2'
+
+
+def uses_legacy_routes(provider):
+    spec = PROVIDER_SPECS.get(provider)
+    # Preserve legacy handling of previously accepted, unregistered providers.
+    return spec is None or spec.legacy_menu
+
+
+def list_infrastructure_states():
+    states = []
+    for provider in providers_for('infrastructure'):
+        for state in infrastructure_adapter(provider).list_states():
+            if state.get('provider') != provider:
+                raise ValueError('Recovery state does not match its provider adapter')
+            states.append(state)
+    return states
+
+
+def load_infrastructure_state(deployment_id):
+    matches = []
+    for provider in providers_for('infrastructure'):
+        state = infrastructure_adapter(provider).load_state(deployment_id)
+        if state is not None:
+            if state.get('provider') != provider:
+                raise ValueError('Recovery state does not match its provider adapter')
+            matches.append(state)
+    if len(matches) > 1:
+        raise ValueError('Deployment ID exists in multiple providers; select a specific deployment')
+    return matches[0] if matches else None

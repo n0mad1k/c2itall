@@ -12,7 +12,7 @@ if str(ROOT) not in sys.path:
 from utils.common import generate_deployment_id, setup_logging
 from utils.provider_utils import select_provider, gather_provider_config
 from utils.deployment_engine import deploy_infrastructure
-from utils.azure_utils import prepare_ssh_key, validate_config
+from utils.provider_registry import infrastructure_adapter
 
 
 def main(argv=None):
@@ -30,11 +30,13 @@ def main(argv=None):
     provider = select_provider('infrastructure')
     if provider is None:
         return False
+    adapter = infrastructure_adapter(provider)
+    if adapter is None:
+        raise ValueError('Selected provider has no infrastructure adapter')
     deployment_id = generate_deployment_id()
-    config = gather_provider_config(provider)
+    config = gather_provider_config(provider, capability='infrastructure')
     config.update(provider=provider, deployment_id=deployment_id,
-                  infrastructure_deployment=True, deployment_type='infrastructure',
-                  azure_resource_group=f'c2itall-{deployment_id}')
+                  infrastructure_deployment=True, deployment_type='infrastructure')
     public_key = input('SSH public key path (blank to generate deployment key): ').strip()
     if public_key:
         config.update(ssh_key_path=public_key, ssh_key_generated=False)
@@ -44,9 +46,9 @@ def main(argv=None):
             raise ValueError('Deployment key already exists; supply its public path explicitly')
         config.update(ssh_key_path=str(private) + '.pub', ssh_private_key_path=str(private),
                       ssh_key_generated=True)
-    validate_config(config, require_key=False)
+    config.update(adapter.validate_config(config, require_key=False))
     setup_logging(deployment_id)
-    if not prepare_ssh_key(config):
+    if not adapter.prepare_key(config):
         return False
     print(f'Deployment ID: {deployment_id}; recover with modules/infrastructure/deploy_infrastructure.py --teardown-id {deployment_id}')
     return deploy_infrastructure(config)

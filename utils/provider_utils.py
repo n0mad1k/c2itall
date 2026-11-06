@@ -7,17 +7,19 @@ from .common import COLORS, PROVIDERS
 from .aws_utils import gather_aws_config
 from .linode_utils import gather_linode_config
 from .flokinet_utils import gather_flokinet_config
+from .provider_registry import providers_for, provider_dispatcher
 
 def available_providers(capability=None):
-    """Existing menus retain their providers; Azure has one explicit capability."""
-    if capability == 'infrastructure':
-        return ['azure']
-    return [provider for provider in PROVIDERS if provider != 'azure']
+    """Only advertise capabilities backed by a registered implementation."""
+    return providers_for(capability)
 
 
 def select_provider(capability=None):
     """Let the user select a cloud provider"""
     providers = available_providers(capability)
+    if not providers:
+        print('No provider implements this capability.')
+        return None
     print(f"\n{COLORS['BLUE']}Available cloud providers:{COLORS['RESET']}")
     for i, provider in enumerate(providers, 1):
         print(f"  {i}. {provider.capitalize()}")
@@ -36,17 +38,10 @@ def select_provider(capability=None):
         except ValueError:
             print(f"{COLORS['RED']}Please enter a valid number{COLORS['RESET']}")
 
-def gather_provider_config(provider):
+def gather_provider_config(provider, capability=None):
     """Gather configuration for the specified provider"""
-    if provider == "azure":
-        from .azure_utils import gather_azure_config
-        return gather_azure_config()
-    elif provider == "aws":
-        return gather_aws_config()
-    elif provider == "linode":
-        return gather_linode_config()
-    elif provider == "flokinet":
-        return gather_flokinet_config()
-    else:
-        print(f"{COLORS['RED']}Unknown provider: {provider}{COLORS['RESET']}")
-        return None
+    dispatcher = provider_dispatcher(provider)
+    if dispatcher is not None:
+        return dispatcher.gather_config(capability)
+    print(f"{COLORS['RED']}Unknown provider: {provider}{COLORS['RESET']}")
+    return None

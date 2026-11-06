@@ -13,6 +13,7 @@ import json
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from utils.common import COLORS, PROVIDER_DIRS
+from utils.provider_registry import workload_route, uses_legacy_routes
 
 _SECRET_KEYS = frozenset({
     'linode_token', 'aws_access_key', 'aws_secret_key', 'flokinet_api_key',
@@ -38,9 +39,12 @@ def deploy_infrastructure(config):
         logging.error("Missing provider or deployment ID in configuration")
         return False
 
-    if provider == 'azure':
-        from utils.azure_utils import deploy_azure
-        return deploy_azure(config)
+    adapter = workload_route(config)
+    if adapter is not None:
+        return adapter.deploy(config)
+    if not uses_legacy_routes(provider):
+        logging.error('Provider has no route for this workload')
+        return False
 
     # Determine which playbook to use
     playbook = determine_playbook(config)
@@ -74,10 +78,10 @@ def determine_playbook(config):
         str: Path to the playbook file
     """
     provider = config.get('provider')
-    if provider == 'azure':
-        from utils.azure_utils import supports_infrastructure
-        if supports_infrastructure(config):
-            return os.path.join(os.path.dirname(os.path.dirname(__file__)), 'providers', 'Azure', 'infrastructure.yml')
+    adapter = workload_route(config)
+    if adapter is not None:
+        return adapter.playbook(config)
+    if not uses_legacy_routes(provider):
         return None
     provider_dir = PROVIDER_DIRS.get(provider, provider.capitalize())
     base_path = f"providers/{provider_dir}"
