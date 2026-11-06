@@ -38,6 +38,10 @@ def deploy_infrastructure(config):
         logging.error("Missing provider or deployment ID in configuration")
         return False
 
+    if provider == 'azure':
+        from utils.azure_utils import deploy_azure
+        return deploy_azure(config)
+
     # Determine which playbook to use
     playbook = determine_playbook(config)
 
@@ -70,6 +74,11 @@ def determine_playbook(config):
         str: Path to the playbook file
     """
     provider = config.get('provider')
+    if provider == 'azure':
+        from utils.azure_utils import supports_infrastructure
+        if supports_infrastructure(config):
+            return os.path.join(os.path.dirname(os.path.dirname(__file__)), 'providers', 'Azure', 'infrastructure.yml')
+        return None
     provider_dir = PROVIDER_DIRS.get(provider, provider.capitalize())
     base_path = f"providers/{provider_dir}"
 
@@ -154,6 +163,9 @@ def execute_playbook(playbook, config):
     Returns:
         bool: True if playbook executed successfully, False otherwise
     """
+    if config.get('provider') == 'azure':
+        return execute_azure_playbook(playbook, config)
+
     import tempfile
     secret_vars_file = None
     try:
@@ -252,6 +264,51 @@ def execute_playbook(playbook, config):
             os.unlink(secret_vars_file)
 
 
+def execute_azure_playbook(playbook, config):
+    """Isolated controller execution shared by Azure provisioning and cleanup."""
+    import tempfile
+    import time
+    from pathlib import Path
+    from utils.azure_utils import ROOT, render_template, run_command, secure_directory, _regular_file
+
+    expected = {str(ROOT / 'providers/Azure/infrastructure.yml'),
+                str(ROOT / 'providers/Azure/cleanup.yml')}
+    if str(Path(playbook).resolve()) not in expected:
+        raise ValueError('Azure may execute only its infrastructure and cleanup playbooks')
+    deadline = config.get('azure_deadline', time.monotonic() + 1800)
+    logs = Path(config.get('azure_state_dir') or ROOT / 'deployments/azure') / 'logs'
+    try:
+        with secure_directory(logs, create=True):
+            pass
+        with tempfile.TemporaryDirectory(prefix='c2itall-azure-') as temporary:
+            runtime = dict(config)
+            if Path(playbook).name == 'infrastructure.yml':
+                template = Path(temporary) / 'infrastructure.json'
+                template.write_text(json.dumps(render_template(config)))
+                template.chmod(0o600)
+                runtime['azure_template_file'] = str(template)
+            variables = Path(temporary) / 'variables.json'
+            variables.write_text(create_extra_vars(runtime))
+            variables.chmod(0o600)
+            result = run_command(['ansible-playbook', str(Path(playbook).resolve()),
+                                  '-i', 'localhost,', '--extra-vars', '@' + str(variables)],
+                                 timeout=180, deadline=deadline)
+            log_path = logs / (config['deployment_id'] + '.log')
+            with secure_directory(logs) as directory:
+                fd = os.open(log_path.name, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW,
+                             0o600, dir_fd=directory)
+                with os.fdopen(fd, 'a') as stream:
+                    _regular_file(stream.fileno())
+                    stream.write(result.stdout + result.stderr)
+            for line in result.stdout.splitlines():
+                if should_print_line(line):
+                    print(line)
+        return True
+    except Exception as exc:
+        logging.error('Azure playbook execution failed: %s', exc)
+        return False
+
+
 def should_print_line(line):
     """
     Determine if a line should be printed to console.
@@ -298,6 +355,10 @@ def create_extra_vars(config):
     """
     # Credentials are passed via environment variables (set_provider_environment).
     # Strip them here so they never appear in --extra-vars or process listings.
+    if config.get('provider') == 'azure':
+        from utils.azure_utils import CONFIG_KEYS
+        allowed = CONFIG_KEYS | {'ownership_marker', 'azure_template_file'}
+        return json.dumps({k: v for k, v in config.items() if k in allowed and v is not None})
     extra_vars = {}
 
     for key, value in config.items():

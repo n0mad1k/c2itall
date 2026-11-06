@@ -1,0 +1,531 @@
+"""Focused offline Azure lifecycle and reviewed-smoke regression tests.
+
+All cloud calls are mocked. Process timeout/signal tests use local sleeping
+Python children; no Azure account, generated cloud resources or real SSH keys.
+"""
+
+import contextlib
+import copy
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from utils import azure_utils as azure
+from utils import cleanup_engine, deployment_engine, provider_utils
+
+spec = importlib.util.spec_from_file_location("azure_smoke", ROOT / "scripts/deploy_azure_smoke.py")
+smoke = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(smoke)
+
+
+class AzureFixture(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.home = Path(self.temporary.name)
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.dict(os.environ, {"HOME": str(self.home)}).start()
+        self.state_dir = self.home / "states"
+        mock.patch.object(azure, "STATE_DIR", self.state_dir).start()
+        self.key = self.home / ".ssh" / "c2deploy_test-azure"
+        self.key.parent.mkdir()
+        self.key.write_text("unit-test-private-key")
+        Path(str(self.key) + ".pub").write_text("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest test")
+        self.config = {
+            "provider": "azure", "deployment_id": "test-azure",
+            "deployment_type": "infrastructure", "infrastructure_deployment": True,
+            "azure_subscription_id": smoke.SUBSCRIPTION, "azure_location": "eastus",
+            "azure_vm_size": smoke.SIZE, "azure_resource_group": "c2itall-test-azure",
+            "operator_ip": "8.8.8.8", "ssh_key_path": str(self.key) + ".pub",
+            "ssh_private_key_path": str(self.key), "ssh_key_generated": False,
+            "azure_state_dir": str(self.state_dir),
+        }
+
+    def prepare(self):
+        return azure.prepare_state(self.config)
+
+    def owned_state(self):
+        self.config["ssh_key_generated"] = True
+        public = Path(str(self.key) + ".pub")
+        key_text, public_text = self.key.read_text(), public.read_text()
+        self.key.unlink()
+        public.unlink()
+        state = self.prepare()
+        self.key.write_text(key_text)
+        public.write_text(public_text)
+        return state
+
+    def group(self, state):
+        return {"id": f"/subscriptions/{smoke.SUBSCRIPTION}/resourceGroups/{state['azure_resource_group']}",
+                "tags": azure.ownership_tags(state)}
+
+    def resources(self, state):
+        return [{"id": rid, "tags": azure.ownership_tags(state)}
+                for rid in state["planned_resource_ids"].values()]
+
+
+class ConfigurationTests(AzureFixture):
+    def test_normalization_and_no_other_provider_secrets(self):
+        result = azure.validate_config({**self.config, "aws_secret_key": "secret", "linode_token": "secret"})
+        self.assertEqual(result["operator_ip"], "8.8.8.8/32")
+        self.assertNotIn("aws_secret_key", result)
+        self.assertNotIn("linode_token", result)
+
+    def test_invalid_configuration(self):
+        for key, value in (("deployment_id", "../escape"), ("azure_subscription_id", "not-a-uuid"),
+                           ("azure_resource_group", "group;command"), ("azure_location", "eastus --bad"),
+                           ("azure_vm_size", "B1s"), ("operator_ip", "0.0.0.0/0"),
+                           ("operator_ip", "8.8.8.0/24"), ("operator_ip", "127.0.0.1"),
+                           ("operator_ip", "2001:4860:4860::8888"), ("ssh_key_generated", "true"),
+                           ("deployment_type", "c2"), ("infrastructure_deployment", False)):
+            with self.subTest(key=key, value=value), self.assertRaises((ValueError, KeyError)):
+                azure.validate_config({**self.config, key: value})
+
+    def test_generated_key_paths_must_be_exact_and_not_symlinks(self):
+        self.config["ssh_key_generated"] = True
+        with self.assertRaises(ValueError):
+            azure.validate_config({**self.config, "ssh_private_key_path": str(self.key) + "-other"})
+        self.key.unlink()
+        self.key.symlink_to(self.home / "foreign-key")
+        with self.assertRaises(ValueError):
+            azure.validate_config(self.config)
+
+    def test_public_key_validation(self):
+        Path(self.config["ssh_key_path"]).write_text("not a public key\n")
+        with self.assertRaises(ValueError):
+            azure.validate_config(self.config)
+
+    def test_cli_always_scopes_subscription_and_raises_on_bad_json(self):
+        with mock.patch.object(azure, "run_command", return_value=subprocess.CompletedProcess([], 0, '{"ok":true}', "")) as command:
+            self.assertEqual(azure.run_az(["group", "exists", "--name", "group"], smoke.SUBSCRIPTION), {"ok": True})
+            self.assertIn(smoke.SUBSCRIPTION, command.call_args.args[0])
+            self.assertIn("--subscription", command.call_args.args[0])
+        with mock.patch.object(azure, "run_command", return_value=subprocess.CompletedProcess([], 0, "not JSON", "")):
+            with self.assertRaises(json.JSONDecodeError):
+                azure.run_az(["account", "show"], smoke.SUBSCRIPTION)
+
+
+class StateAndCleanupTests(AzureFixture):
+    def test_state_roundtrip_atomic_permissions_and_identity(self):
+        state = self.prepare()
+        path = self.state_dir / "test-azure.json"
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(azure.load_state("test-azure"), state)
+        self.assertEqual(azure.list_states(), [state])
+        self.assertEqual(list(self.state_dir.glob("*.json")), [path])
+        self.assertFalse(list(self.state_dir.glob(".test-azure.json*")))
+        self.assertEqual(state["version"], 1)
+        self.assertEqual(state["status"], "planned")
+        self.assertEqual(len(state["planned_resource_ids"]), 6)
+        self.assertEqual(self.prepare()["ownership_marker"], state["ownership_marker"])
+        with self.assertRaises(ValueError):
+            azure.prepare_state({**self.config, "azure_location": "westus"})
+
+    def test_state_persists_before_key_creation(self):
+        self.config["ssh_key_generated"] = True
+        self.key.unlink()
+        Path(str(self.key) + ".pub").unlink()
+        state = self.prepare()
+        self.assertEqual(azure.load_state(state["deployment_id"])["status"], "planned")
+
+    def test_new_intent_cannot_claim_preexisting_keys(self):
+        with self.assertRaises(ValueError):
+            azure.prepare_state({**self.config, "ssh_key_generated": True})
+        self.assertTrue(self.key.exists())
+
+    def test_corrupt_state_cannot_change_resource_identity(self):
+        state = self.prepare()
+        state["planned_resource_ids"]["vm"] += "-foreign"
+        azure.save_state(state)
+        with self.assertRaises(ValueError):
+            azure.load_state("test-azure")
+
+    def test_fresh_process_recovers_before_legacy_logs_exist(self):
+        self.prepare()
+        script = (
+            "import sys; from pathlib import Path; from unittest.mock import patch; "
+            f"sys.path.insert(0, {str(ROOT)!r}); "
+            "from utils import azure_utils as a, cleanup_engine as c; "
+            f"a.STATE_DIR=Path({str(self.state_dir)!r}); "
+            "p=patch.object(c,'execute_teardown',return_value=True); m=p.start(); "
+            "assert c.teardown_by_deployment_id('test-azure'); "
+            "assert m.call_count==1; assert m.call_args.args[0]['provider']=='azure'; "
+            "assert m.call_args.args[0]['deployment_id']=='test-azure'"
+        )
+        result = subprocess.run([sys.executable, "-B", "-c", script], cwd=self.home,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertFalse((self.home / "logs").exists())
+
+    def test_fresh_process_supported_recovery_cli(self):
+        self.prepare()
+        code = f'''import sys,runpy
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0,{str(ROOT)!r})
+from utils import azure_utils as a, cleanup_engine as c
+a.STATE_DIR=Path({str(self.state_dir)!r})
+sys.argv=['deploy_infrastructure.py','--teardown-id','test-azure']
+with patch.object(c,'execute_teardown',return_value=True) as teardown:
+    try:
+        runpy.run_path({str(ROOT / 'modules/infrastructure/deploy_infrastructure.py')!r},run_name='__main__')
+    except SystemExit as result:
+        assert result.code==0, result.code
+    teardown.assert_called_once()
+    assert teardown.call_args.args[0]['deployment_id']=='test-azure'
+'''
+        result = subprocess.run([sys.executable, "-B", "-c", code], cwd=self.home,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_legacy_mixed_case_underscore_id_keeps_fallback(self):
+        config = {"provider": "linode", "deployment_id": "Old_ID"}
+        with mock.patch.object(cleanup_engine.glob, "glob", side_effect=[["legacy.log"], ["legacy.txt"]]), mock.patch.object(cleanup_engine, "parse_deployment_info", return_value=config), mock.patch.object(cleanup_engine, "execute_teardown", return_value=True) as cleanup, contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(cleanup_engine.teardown_by_deployment_id("Old_ID"))
+            cleanup.assert_called_once_with(config)
+
+    def test_teardown_all_discovers_state_and_deduplicates_legacy_info(self):
+        state = self.prepare()
+        with mock.patch.object(cleanup_engine, "confirm_action", return_value=True), mock.patch.object(cleanup_engine.glob, "glob", return_value=["legacy.txt"]), mock.patch.object(cleanup_engine, "parse_deployment_info", return_value=state), mock.patch.object(cleanup_engine, "execute_teardown", return_value=True) as cleanup, contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(cleanup_engine.teardown_all_infrastructure())
+            cleanup.assert_called_once_with(state)
+
+    def test_lifecycle_lock_blocks_fresh_cleanup_and_same_group_deployment(self):
+        self.prepare()
+        code = f'''import sys,json
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0,{str(ROOT)!r})
+from utils import azure_utils as a
+config=json.loads({json.dumps(self.config)!r})
+a.STATE_DIR=Path(config['azure_state_dir'])
+with patch.object(a,'_group') as cloud:
+    assert not a.cleanup_azure(config)
+    cloud.assert_not_called()
+    other=dict(config,deployment_id='other-deployment')
+    assert not a.deploy_azure(other)
+    cloud.assert_not_called()
+'''
+        with azure.lifecycle_lock(self.config):
+            result = subprocess.run([sys.executable, "-B", "-c", code], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.state_dir / "test-azure.json").exists())
+
+    def test_partial_deployment_failure_keeps_intent_and_key(self):
+        with mock.patch.object(azure, "_group", return_value=None), mock.patch.object(deployment_engine, "execute_playbook", return_value=False):
+            self.assertFalse(azure.deploy_azure(self.config))
+        state = azure.load_state("test-azure")
+        self.assertEqual(state["status"], "failed")
+        self.assertTrue(state["planned_resource_ids"])
+        self.assertTrue(self.key.exists())
+
+    def test_wrong_subscription_is_refused_before_cloud_calls(self):
+        self.prepare()
+        with mock.patch.object(azure, "run_az") as cloud, mock.patch.object(deployment_engine, "execute_playbook") as mutate:
+            self.assertFalse(azure.cleanup_azure({**self.config, "azure_subscription_id": "00000000-0000-0000-0000-000000000000"}))
+            cloud.assert_not_called()
+            mutate.assert_not_called()
+        self.assertTrue(self.key.exists())
+
+    def test_foreign_group_and_unexpected_resources_refuse_deletion(self):
+        state = self.prepare()
+        scenarios = [
+            ({**self.group(state), "tags": {}}, []),
+            (self.group(state), [{"id": state["planned_resource_ids"]["vm"] + "-foreign", "tags": azure.ownership_tags(state)}]),
+            (self.group(state), [{"id": state["planned_resource_ids"]["vm"], "tags": {}}]),
+        ]
+        for group, resources in scenarios:
+            with self.subTest(group=group, resources=resources), mock.patch.object(azure, "_group", return_value=group), mock.patch.object(azure, "_resources", return_value=resources), mock.patch.object(deployment_engine, "execute_playbook") as mutate:
+                self.assertFalse(azure.cleanup_azure(self.config))
+                mutate.assert_not_called()
+                self.assertTrue(self.key.exists())
+                self.assertTrue((self.state_dir / "test-azure.json").exists())
+
+    def test_implicit_os_disk_requires_exact_owned_vm(self):
+        state = self.prepare()
+        disk = {"id": state["planned_resource_ids"]["os_disk"], "managedBy": state["planned_resource_ids"]["vm"]}
+        azure.validate_ownership(state, self.group(state), [disk])
+        with self.assertRaises(ValueError):
+            azure.validate_ownership(state, self.group(state), [{**disk, "managedBy": disk["managedBy"] + "-foreign"}])
+
+    def test_cleanup_removes_only_exact_generated_keys_after_absence(self):
+        self.owned_state()
+        neighbor = Path(str(self.key) + "-keep")
+        neighbor.write_text("unrelated")
+        with mock.patch.object(azure, "_group", return_value=None):
+            self.assertTrue(azure.cleanup_azure(self.config))
+        self.assertFalse(self.key.exists())
+        self.assertFalse(Path(str(self.key) + ".pub").exists())
+        self.assertTrue(neighbor.exists())
+        self.assertFalse((self.state_dir / "test-azure.json").exists())
+        self.assertEqual(json.loads((self.state_dir / "archive/test-azure.json").read_text())["status"], "deleted")
+
+    def test_user_supplied_keys_are_preserved(self):
+        self.config["ssh_key_generated"] = False
+        self.prepare()
+        with mock.patch.object(azure, "_group", return_value=None):
+            self.assertTrue(azure.cleanup_azure(self.config))
+        self.assertTrue(self.key.exists())
+        self.assertTrue(Path(str(self.key) + ".pub").exists())
+
+    def test_deletion_failure_preserves_state_and_key(self):
+        state = self.owned_state()
+        with mock.patch.object(azure, "_group", return_value=self.group(state)), mock.patch.object(azure, "_resources", return_value=self.resources(state)), mock.patch.object(azure, "_wait_deployment") as cancel, mock.patch.object(deployment_engine, "execute_playbook", return_value=False):
+            self.assertFalse(azure.cleanup_azure(self.config))
+            self.assertTrue(cancel.call_args.kwargs["cancel"])
+        self.assertEqual(azure.load_state("test-azure")["status"], "cleanup_failed")
+        self.assertTrue(self.key.exists())
+
+    def test_deletion_wait_timeout_is_not_success(self):
+        state = self.owned_state()
+        with mock.patch.object(azure, "_group", return_value=self.group(state)), mock.patch.object(azure, "_resources", return_value=self.resources(state)), mock.patch.object(azure, "_wait_deployment"), mock.patch.object(deployment_engine, "execute_playbook", return_value=True):
+            self.assertFalse(azure.cleanup_azure({**self.config, "azure_cleanup_deadline": time.monotonic() - 1}))
+        self.assertTrue(self.key.exists())
+        self.assertTrue((self.state_dir / "test-azure.json").exists())
+
+
+class RoutingAndTemplateTests(AzureFixture):
+    def test_old_provider_selection_and_azure_capability(self):
+        with mock.patch("builtins.input", return_value="1"), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(provider_utils.select_provider(), "aws")
+            self.assertEqual(provider_utils.select_provider("infrastructure"), "azure")
+        with mock.patch("builtins.input", return_value="3"), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(provider_utils.select_provider(), "flokinet")
+
+    def test_existing_routes_remain_and_azure_cannot_route_payloads(self):
+        for provider, dirname in (("aws", "AWS"), ("linode", "Linode"), ("flokinet", "FlokiNET")):
+            self.assertEqual(deployment_engine.determine_playbook({"provider": provider, "c2_only": True}), f"providers/{dirname}/c2.yml")
+            self.assertEqual(deployment_engine.determine_playbook({"provider": provider, "attack_box_deployment": True}), f"providers/{dirname}/attack_box.yml")
+        self.assertTrue(deployment_engine.determine_playbook(self.config).endswith("providers/Azure/infrastructure.yml"))
+        for extra in ({"c2_only": True}, {"attack_box_deployment": True}, {"phishing_deployment": True}, {"infrastructure_deployment": False}):
+            self.assertIsNone(deployment_engine.determine_playbook({**self.config, **extra}))
+
+    def test_shared_entry_points_dispatch_to_azure(self):
+        with mock.patch.object(azure, "deploy_azure", return_value=True) as deploy:
+            self.assertTrue(deployment_engine.deploy_infrastructure(self.config))
+            deploy.assert_called_once()
+        with mock.patch.object(azure, "cleanup_azure", return_value=True) as cleanup:
+            self.assertTrue(cleanup_engine.execute_teardown(self.config))
+            cleanup.assert_called_once()
+
+    def test_rendered_arm_security_and_determinism(self):
+        state = self.prepare()
+        template = azure.render_template(state)
+        self.assertEqual(template, azure.render_template(state))
+        resources = template["resources"]
+        types = {resource["type"]: resource for resource in resources}
+        self.assertNotIn("Microsoft.Storage/storageAccounts", types)
+        vm = types["Microsoft.Compute/virtualMachines"]
+        self.assertEqual(vm["apiVersion"], "2024-11-01")
+        self.assertTrue(vm["properties"]["osProfile"]["linuxConfiguration"]["disablePasswordAuthentication"])
+        self.assertTrue(vm["properties"]["diagnosticsProfile"]["bootDiagnostics"]["enabled"])
+        self.assertNotIn("storageUri", vm["properties"]["diagnosticsProfile"]["bootDiagnostics"])
+        self.assertEqual(vm["properties"]["storageProfile"]["osDisk"]["diskSizeGB"], 32)
+        self.assertEqual(vm["properties"]["storageProfile"]["osDisk"]["managedDisk"]["storageAccountType"], "StandardSSD_LRS")
+        rules = types["Microsoft.Network/networkSecurityGroups"]["properties"]["securityRules"]
+        allows = [rule["properties"] for rule in rules if rule["properties"]["access"] == "Allow"]
+        self.assertEqual(len(allows), 1)
+        self.assertEqual(allows[0]["sourceAddressPrefix"], "8.8.8.8/32")
+        self.assertEqual(allows[0]["destinationPortRange"], "22")
+        self.assertTrue(any(rule["properties"]["access"] == "Deny" and rule["properties"]["destinationPortRange"] == "*" for rule in rules))
+        self.assertNotIn("customData", vm["properties"]["osProfile"])
+        for resource in resources:
+            self.assertEqual(resource["tags"], azure.ownership_tags(state))
+            if resource["type"].startswith("Microsoft.Network/"):
+                self.assertEqual(resource["apiVersion"], "2024-05-01")
+        self.assertEqual(vm["name"], state["planned_resource_ids"]["vm"].rsplit("/", 1)[1])
+
+    def test_populated_unrelated_credentials_are_excluded_from_child_and_vars(self):
+        secrets = {"AWS_ACCESS_KEY_ID": "aws-key", "AWS_SECRET_ACCESS_KEY": "aws-secret", "AWS_SESSION_TOKEN": "aws-session", "LINODE_TOKEN": "linode-secret", "FLOKINET_API_KEY": "floki-secret", "ANSIBLE_EXTRA_VARS": "leaked"}
+        state = self.prepare()
+        config = {**state, "azure_state_dir": str(self.state_dir), "aws_secret_key": "aws-secret", "linode_token": "linode-secret", "flokinet_api_key": "floki-secret"}
+        captured = {}
+        def execute(argv, **kwargs):
+            captured["variables"] = json.loads(Path(argv[argv.index("--extra-vars") + 1][1:]).read_text())
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        with mock.patch.dict(os.environ, secrets), mock.patch.object(azure, "run_command", side_effect=execute) as command:
+            env = azure.azure_environment()
+            self.assertFalse(set(secrets) & set(env))
+            self.assertFalse(set(secrets) & set(smoke.child_environment()))
+            self.assertTrue(deployment_engine.execute_playbook(str(ROOT / "providers/Azure/infrastructure.yml"), config))
+            command.assert_called_once()
+            argv = command.call_args.args[0]
+            serialized = json.dumps(argv)
+            for secret in secrets.values():
+                self.assertNotIn(secret, serialized)
+                self.assertNotIn(secret, json.dumps(captured["variables"]))
+            self.assertEqual(os.environ["AWS_SECRET_ACCESS_KEY"], "aws-secret")
+
+
+class ProcessTests(unittest.TestCase):
+    def test_hung_command_is_bounded(self):
+        started = time.monotonic()
+        with self.assertRaises(subprocess.TimeoutExpired):
+            azure.run_command([sys.executable, "-c", "import time; time.sleep(30)"], timeout=0.1)
+        self.assertLess(time.monotonic() - started, 5)
+
+    def test_command_error_propagates(self):
+        with self.assertRaises(RuntimeError):
+            azure.run_command([sys.executable, "-c", "import sys;sys.exit(7)"])
+
+    def test_deadline_prevents_child_start(self):
+        with mock.patch.object(azure.subprocess, "Popen") as start, self.assertRaises(TimeoutError):
+            azure.run_command(["unused"], deadline=time.monotonic() - 1)
+        start.assert_not_called()
+
+    def test_sigint_and_sigterm_stop_child_process_group(self):
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            with self.subTest(signal=sig):
+                code = f'''import os,sys,threading,time,signal
+sys.path.insert(0,{str(ROOT)!r})
+from utils import azure_utils as a
+threading.Timer(0.3, lambda: os.kill(os.getpid(), {int(sig)})).start()
+try:
+    a.run_command([sys.executable, '-c', 'import time;time.sleep(30)'], timeout=15)
+except KeyboardInterrupt:
+    print('interrupted')
+else:
+    raise AssertionError('signal was not propagated')
+'''
+                result = subprocess.run([sys.executable, "-B", "-c", code], capture_output=True, text=True, timeout=8)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("interrupted", result.stdout)
+
+
+class SmokeTests(unittest.TestCase):
+    def test_dry_run_performs_no_commands_or_writes(self):
+        with mock.patch.object(smoke.subprocess, "Popen") as process, mock.patch.object(smoke.Path, "open") as write, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(smoke.main(["--dry-run"]), 0)
+            self.assertEqual(smoke.main([]), 0)
+        process.assert_not_called()
+        write.assert_not_called()
+
+    def test_unexpected_staged_paths_stop_before_checks_or_push(self):
+        runner = smoke.Runner()
+        with mock.patch.object(runner, "git", return_value="foreign.txt\0") as git, mock.patch.object(runner, "run") as run:
+            with self.assertRaises(smoke.SmokeError):
+                runner.commit_and_push()
+            self.assertEqual(git.call_count, 1)
+            run.assert_not_called()
+
+    def test_sku_lookup_pages_and_stops_at_approved_size(self):
+        runner = smoke.Runner()
+        next_link = f"https://management.azure.com/subscriptions/{smoke.SUBSCRIPTION}/next"
+        target = {"name": smoke.SIZE, "resourceType": "virtualMachines"}
+        with mock.patch.object(runner, "az", side_effect=[{"value": [], "nextLink": next_link}, {"value": [target], "nextLink": next_link + "unused"}]) as cloud:
+            self.assertEqual(runner.find_sku(), target)
+            self.assertEqual(cloud.call_count, 2)
+            self.assertIn("location%20eq%20%27eastus%27", cloud.call_args_list[0].args[-1])
+
+    def test_wrong_subscription_is_refused(self):
+        runner = smoke.Runner()
+        with mock.patch.object(runner, "git", side_effect=[str(ROOT), "public", "forgejo-url"]), mock.patch.object(smoke.shutil, "which", return_value="tool"), mock.patch.object(runner, "az", return_value={"id": "wrong", "state": "Enabled"}):
+            with self.assertRaisesRegex(smoke.SmokeError, "subscription"):
+                runner.validate()
+
+    def test_existing_group_stops_before_baseline_acceptance(self):
+        runner = smoke.Runner()
+        with mock.patch.object(runner, "az", return_value=True), mock.patch.object(runner, "record") as record:
+            with self.assertRaises(smoke.SmokeError):
+                runner.baseline("existing-group")
+            record.assert_not_called()
+
+    def test_wrong_branch_stops_before_cloud_calls(self):
+        runner = smoke.Runner()
+        with mock.patch.object(runner, "git", side_effect=[str(ROOT), "other"]), mock.patch.object(runner, "az") as cloud:
+            with self.assertRaises(smoke.SmokeError):
+                runner.validate()
+            cloud.assert_not_called()
+
+    def test_push_failure_prevents_artifact_and_cloud_mutations(self):
+        runner = smoke.Runner()
+        def git(*args, **kwargs):
+            if args[0] == "push":
+                raise smoke.SmokeError("push failed")
+            return "sha" if args == ("rev-parse", "HEAD") else ""
+        with mock.patch.object(runner, "git", side_effect=git), mock.patch.object(runner, "run"), mock.patch.object(runner, "archive") as archive:
+            with self.assertRaisesRegex(smoke.SmokeError, "push failed"):
+                runner.commit_and_push()
+            archive.assert_not_called()
+
+    def test_remote_sha_mismatch_is_refused(self):
+        runner = smoke.Runner()
+        def git(*args, **kwargs):
+            if args == ("rev-parse", "HEAD"):
+                return "expected"
+            if args[0] == "ls-remote":
+                return "different refs/heads/public"
+            return ""
+        with mock.patch.object(runner, "git", side_effect=git), mock.patch.object(runner, "run"):
+            with self.assertRaisesRegex(smoke.SmokeError, "exact deployment commit"):
+                runner.commit_and_push()
+
+    def test_signal_handler_preserves_cleanup_window(self):
+        runner = smoke.Runner()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            with self.assertRaises(smoke.SmokeInterrupted):
+                runner.handle_signal(sig, None)
+        runner.cleaning = True
+        runner.handle_signal(signal.SIGTERM, None)
+        self.assertTrue(runner.interrupted)
+
+    def test_failed_cleanup_cannot_produce_success(self):
+        runner = mock.Mock()
+        runner.root = ROOT
+        runner.evidence = None
+        runner.interrupted = False
+        runner.archive.return_value = ROOT
+        runner.cleanup.return_value = False
+        with mock.patch.object(smoke, "Runner", return_value=runner), mock.patch.object(smoke.Path, "exists", return_value=False), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(smoke.activate("8.8.8.8"), 1)
+        runner.cleanup.assert_called_once()
+        runner.verify.assert_called_once()
+
+    def test_preflight_failure_still_cleans_up_without_deploying(self):
+        runner = mock.Mock()
+        runner.root = ROOT
+        runner.evidence = None
+        runner.interrupted = False
+        runner.archive.return_value = ROOT
+        runner.register_and_preflight.side_effect = smoke.SmokeError("quota")
+        runner.cleanup.return_value = True
+        with mock.patch.object(smoke, "Runner", return_value=runner), mock.patch.object(smoke.Path, "exists", return_value=False), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(smoke.activate("8.8.8.8"), 1)
+        runner.cleanup.assert_called_once()
+        runner.verify.assert_not_called()
+        self.assertEqual([call.args[1] for call in runner.worker.call_args_list], ["key"])
+
+    def test_prepare_never_deploys_or_verifies_and_records_separate_result(self):
+        runner = mock.Mock()
+        runner.root = ROOT
+        runner.evidence = ROOT / "logs" / "test-evidence"
+        runner.interrupted = False
+        runner.archive.return_value = ROOT
+        runner.cleanup.return_value = True
+        with mock.patch.object(smoke, "Runner", return_value=runner), mock.patch.object(smoke.Path, "exists", return_value=False), contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(smoke.activate("8.8.8.8", prepare_only=True), 0)
+        runner.register_and_preflight.assert_called_once()
+        runner.cleanup.assert_called_once()
+        runner.verify.assert_not_called()
+        self.assertEqual([call.args[1] for call in runner.worker.call_args_list], ["key"])
+        result = next(call.args[1] for call in runner.record.call_args_list if call.args[0] == "result.json")
+        self.assertTrue(result["prepared"])
+        self.assertFalse(result["passed"])
+        self.assertFalse(result["validation_passed"])
+        self.assertIn("prepared=true", output.getvalue())
+        self.assertNotIn("smoke passed", output.getvalue())
+
+
+if __name__ == "__main__":
+    unittest.main()

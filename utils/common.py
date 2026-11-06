@@ -13,18 +13,20 @@ import re
 from datetime import datetime
 
 # Constants for providers
-PROVIDERS = ["aws", "linode", "flokinet"]
+PROVIDERS = ["aws", "linode", "flokinet", "azure"]
 DEFAULT_SSH_USER = {
     "aws": "kali",
     "linode": "root",
-    "flokinet": "root"
+    "flokinet": "root",
+    "azure": "azureuser"
 }
 
 # Directory names - maintain correct case for each provider
 PROVIDER_DIRS = {
     "aws": "AWS",
     "linode": "Linode", 
-    "flokinet": "FlokiNET"
+    "flokinet": "FlokiNET",
+    "azure": "Azure"
 }
 
 # Color codes for terminal output

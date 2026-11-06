@@ -64,6 +64,52 @@ ansible --version
 
 ## Usage
 
+### Azure infrastructure-only VM
+
+The Azure flow and its smoke-test script require Python 3.12 or newer.
+
+Choose **Tools & Utilities → Infrastructure-only VM (Azure)**, or run
+`python3 modules/infrastructure/deploy_infrastructure.py`. Azure is offered only
+for this flow. It creates a dedicated resource group, network, firewall, static
+Standard IPv4, NIC and Ubuntu 24.04 VM with a 32-GiB StandardSSD managed disk.
+SSH is allowed only from your public IPv4 /32, password login is disabled, and
+normal system logs and managed boot diagnostics remain enabled.
+
+Use an authenticated Azure CLI session (`az login`) and supply the subscription,
+region, VM size and SSH public key explicitly. No Azure SDK package is required;
+the localhost Ansible playbooks use the installed Azure CLI. Register
+`Microsoft.Compute` and `Microsoft.Network` and check regional quota, policy,
+image and SKU availability before deploying. See
+`providers/Azure/vars.example.yaml` for non-secret configuration. The controller
+does not pass other providers' credentials into Azure tasks.
+
+Deployment intent is saved atomically with owner-only permissions under
+`deployments/azure/<deployment_id>.json` before cloud creation. Repeat a deployment
+with the same configuration to update its resources. Recovery uses
+`python3 modules/infrastructure/deploy_infrastructure.py --teardown-id <deployment_id>`;
+the same module's `--teardown-all` and main Cleanup menu also discover
+these files independently of legacy logs. Cleanup refuses foreign groups and
+unexpected resources, cancels active ARM provisioning, and confirms group deletion
+before removing only keys generated for that deployment. Keep failed state files
+for recovery; successful state is retained in `deployments/azure/archive/`.
+
+Preview the reviewed live smoke with `python3 deploy.py --deploy --azure-smoke --dry-run`.
+Run `python3 scripts/deploy_azure_smoke.py --prepare` for the reviewed commit, push,
+artifact, registration and preflight steps without creating a resource group or VM.
+Preparation cleans its generated key and records a preparation result; it does not
+report a passed live test. Run the actual test with
+`python3 deploy.py --deploy --azure-smoke --activate`, which repeats all preconditions.
+Activation commits approved paths through hooks, pushes and verifies
+`forgejo/public`, archives the committed source, checks a new empty target, and
+tests one temporary VM in East US before cleanup. Live defaults are subscription
+`cc2a66d1-67c2-47ca-856f-19a4eae52cfe` and `Standard_D2as_v4`; the script stops on
+quota, image, SKU or policy failure. SSH uses a dedicated known_hosts file and
+explicit `accept-new` trust on first use; changed keys are rejected. Provisioning
+and validation have a 30-minute deadline, with a separate 10-minute cleanup budget.
+SIGINT/SIGTERM stop controller children and trigger cleanup; SIGKILL or workstation
+loss can leave resources that require the persisted-state recovery command.
+Provider registrations remain enabled after the test.
+
 ### Main Menu (Easiest Method)
 
 Simply run:

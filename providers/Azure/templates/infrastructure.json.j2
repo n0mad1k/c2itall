@@ -1,0 +1,55 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "resources": [
+    {
+      "type": "Microsoft.Network/networkSecurityGroups", "apiVersion": "2024-05-01",
+      "name": {{ names.nsg | tojson }}, "location": {{ azure_location | tojson }}, "tags": {{ tags | tojson }},
+      "properties": {"securityRules": [
+        {"name": "operator-ssh", "properties": {"priority": 100, "direction": "Inbound", "access": "Allow", "protocol": "Tcp", "sourcePortRange": "*", "destinationPortRange": "22", "sourceAddressPrefix": {{ operator_ip | tojson }}, "destinationAddressPrefix": "*"}},
+        {"name": "deny-other-inbound", "properties": {"priority": 200, "direction": "Inbound", "access": "Deny", "protocol": "*", "sourcePortRange": "*", "destinationPortRange": "*", "sourceAddressPrefix": "*", "destinationAddressPrefix": "*"}}
+      ]}
+    },
+    {
+      "type": "Microsoft.Network/virtualNetworks", "apiVersion": "2024-05-01",
+      "name": {{ names.vnet | tojson }}, "location": {{ azure_location | tojson }}, "tags": {{ tags | tojson }},
+      "properties": {"addressSpace": {"addressPrefixes": ["10.42.0.0/16"]}, "subnets": [{"name": "default", "properties": {"addressPrefix": "10.42.0.0/24"}}]}
+    },
+    {
+      "type": "Microsoft.Network/publicIPAddresses", "apiVersion": "2024-05-01",
+      "name": {{ names.public_ip | tojson }}, "location": {{ azure_location | tojson }}, "tags": {{ tags | tojson }},
+      "sku": {"name": "Standard"}, "properties": {"publicIPAllocationMethod": "Static", "publicIPAddressVersion": "IPv4"}
+    },
+    {
+      "type": "Microsoft.Network/networkInterfaces", "apiVersion": "2024-05-01",
+      "name": {{ names.nic | tojson }}, "location": {{ azure_location | tojson }}, "tags": {{ tags | tojson }},
+      "dependsOn": ["[resourceId('Microsoft.Network/virtualNetworks', '{{ names.vnet }}')]", "[resourceId('Microsoft.Network/networkSecurityGroups', '{{ names.nsg }}')]", "[resourceId('Microsoft.Network/publicIPAddresses', '{{ names.public_ip }}')]"],
+      "properties": {
+        "networkSecurityGroup": {"id": "[resourceId('Microsoft.Network/networkSecurityGroups', '{{ names.nsg }}')]"},
+        "ipConfigurations": [{"name": "primary", "properties": {"privateIPAllocationMethod": "Dynamic", "subnet": {"id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', '{{ names.vnet }}', 'default')]"}, "publicIPAddress": {"id": "[resourceId('Microsoft.Network/publicIPAddresses', '{{ names.public_ip }}')]"}}}]
+      }
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines", "apiVersion": "2024-11-01",
+      "name": {{ names.vm | tojson }}, "location": {{ azure_location | tojson }}, "tags": {{ tags | tojson }},
+      "dependsOn": ["[resourceId('Microsoft.Network/networkInterfaces', '{{ names.nic }}')]"],
+      "properties": {
+        "hardwareProfile": {"vmSize": {{ azure_vm_size | tojson }}},
+        "storageProfile": {
+          "imageReference": {"publisher": "Canonical", "offer": "ubuntu-24_04-lts", "sku": "server", "version": "latest"},
+          "osDisk": {"name": {{ names.os_disk | tojson }}, "createOption": "FromImage", "diskSizeGB": 32, "managedDisk": {"storageAccountType": "StandardSSD_LRS"}, "deleteOption": "Delete"}
+        },
+        "osProfile": {
+          "computerName": {{ names.vm | tojson }}, "adminUsername": "azureuser",
+          "linuxConfiguration": {"disablePasswordAuthentication": true, "provisionVMAgent": true, "ssh": {"publicKeys": [{"path": "/home/azureuser/.ssh/authorized_keys", "keyData": {{ ssh_public_key | tojson }}}]}}
+        },
+        "networkProfile": {"networkInterfaces": [{"id": "[resourceId('Microsoft.Network/networkInterfaces', '{{ names.nic }}')]", "properties": {"primary": true, "deleteOption": "Delete"}}]},
+        "diagnosticsProfile": {"bootDiagnostics": {"enabled": true}}
+      }
+    }
+  ],
+  "outputs": {
+    "public_ip": {"type": "string", "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', '{{ names.public_ip }}'), '2024-05-01').ipAddress]"},
+    "vm_id": {"type": "string", "value": "[resourceId('Microsoft.Compute/virtualMachines', '{{ names.vm }}')]"}
+  }
+}

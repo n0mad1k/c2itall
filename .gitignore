@@ -116,3 +116,5 @@ AUDIT_*.md
 FIXES_*.md
 FIXES.md
 GATE_*.md
+.codex-state/
+deployments/azure/

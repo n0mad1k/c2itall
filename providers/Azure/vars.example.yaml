@@ -1,0 +1,13 @@
+# CLI session authentication: az login, then select the explicit subscription.
+# Copy only non-secret inputs into your deployment configuration.
+provider: azure
+deployment_type: infrastructure
+infrastructure_deployment: true
+deployment_id: example-vm
+azure_subscription_id: 00000000-0000-0000-0000-000000000000
+azure_location: eastus
+azure_vm_size: Standard_D2as_v4
+azure_resource_group: c2itall-example-vm
+operator_ip: 8.8.8.8/32  # Replace with your workstation public IPv4 /32.
+ssh_key_path: ~/.ssh/id_ed25519.pub
+ssh_key_generated: false

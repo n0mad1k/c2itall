@@ -245,6 +245,7 @@ def tools_menu():
         print(f"8) Claude Bot {COLORS['CYAN']}(Matrix-Claude Code Bridge){COLORS['RESET']}")
         print(f"9) Chaos C2 {COLORS['CYAN']}(Deploy / Manage Chaos teamserver){COLORS['RESET']}")
         print(f"10) WEBRUNNER {COLORS['CYAN']}(Distributed Geo-Targeted Recon){COLORS['RESET']}")
+        print("11) Infrastructure-only VM (Azure)")
         print(f"99) Return to Main Menu")
         
         choice = input(f"\nSelect an option: ")
@@ -279,6 +280,12 @@ def tools_menu():
                 chaos_module.chaos_menu()
         elif choice == "10":
             deploy_webrunner()
+        elif choice == "11":
+            module_path = os.path.join(os.path.dirname(__file__), 'modules', 'infrastructure', 'deploy_infrastructure.py')
+            module = import_module_from_path('deploy_infrastructure_vm', module_path)
+            if module:
+                module.main([])
+            wait_for_input()
         elif choice == "99":
             return
         else:
@@ -392,7 +399,25 @@ def interactive_teardown():
         print(f"{COLORS['CYAN']}Select Deployment to Teardown...{COLORS['RESET']}\n")
         
         # Run the teardown script directly with --select to bypass the menu
-        os.system(f"{sys.executable} teardown.py --select")
+        from utils.azure_utils import list_states
+        from utils.cleanup_engine import execute_teardown
+        azure_states = list_states()
+        if azure_states:
+            for index, state in enumerate(azure_states, 1):
+                print(f"{index}) Azure {state['deployment_id']} ({state['status']})")
+            selection = input('Select Azure number, L for legacy deployments, or 99 to cancel: ').strip()
+            if selection == '99':
+                return
+            if selection.lower() != 'l':
+                if selection.isdigit() and 1 <= int(selection) <= len(azure_states):
+                    state = azure_states[int(selection) - 1]
+                    if confirm_action(f"Delete Azure deployment {state['deployment_id']}?", default=False):
+                        execute_teardown(state)
+                else:
+                    print('Invalid deployment selection')
+                wait_for_input()
+                return
+        subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__), 'teardown.py'), '--select'])
         
         # Return to cleanup menu after teardown completes
         print(f"\n{COLORS['CYAN']}Teardown process completed.{COLORS['RESET']}")
@@ -402,7 +427,7 @@ def interactive_teardown():
         wait_for_input()
 
 def teardown_by_id():
-    """Teardown deployment by ID using standalone teardown script"""
+    """Teardown by ID through shared JSON and legacy-log discovery."""
     print(f"\n{COLORS['BLUE']}Teardown by Deployment ID{COLORS['RESET']}")
     
     deployment_id = input("Enter deployment ID: ").strip()
@@ -412,41 +437,21 @@ def teardown_by_id():
         return
     
     try:
-        result = subprocess.run([sys.executable, "teardown.py", "--deployment-id", deployment_id], 
-                              capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"{COLORS['RED']}Error running teardown: {result.stderr}{COLORS['RESET']}")
-        else:
-            print(result.stdout)
+        from utils.cleanup_engine import teardown_by_deployment_id
+        if not teardown_by_deployment_id(deployment_id):
+            print(f"{COLORS['RED']}Teardown failed; recovery state retained{COLORS['RESET']}")
     except Exception as e:
         print(f"{COLORS['RED']}Error: {str(e)}{COLORS['RESET']}")
     wait_for_input()
 
 def teardown_all():
     """Teardown all infrastructure"""
-    print(f"\n{COLORS['RED']}⚠️  WARNING: This will teardown ALL infrastructure!{COLORS['RESET']}")
-    
-    confirm = input(f"{COLORS['YELLOW']}Are you sure? Type 'DESTROY' to confirm: {COLORS['RESET']}")
-    if confirm != "DESTROY":
-        print(f"{COLORS['GREEN']}Operation cancelled{COLORS['RESET']}")
-        wait_for_input()
-        return
-    
-    # Use the standalone teardown script
-    teardown_script = os.path.join(os.path.dirname(__file__), 'teardown.py')
     try:
-        result = subprocess.run([
-            sys.executable, teardown_script, 
-            '--all', 
-            '--force'
-        ], capture_output=True, text=True)
-        
-        if result.returncode == 0:
+        from utils.cleanup_engine import teardown_all_infrastructure
+        if teardown_all_infrastructure():
             print(f"\n{COLORS['GREEN']}All infrastructure has been torn down{COLORS['RESET']}")
         else:
             print(f"\n{COLORS['RED']}Some teardown operations failed{COLORS['RESET']}")
-            if result.stderr:
-                print(f"Error: {result.stderr}")
     except Exception as e:
         print(f"\n{COLORS['RED']}Error running teardown: {e}{COLORS['RESET']}")
     
@@ -593,9 +598,13 @@ def list_deployments():
     print(f"\n{COLORS['BLUE']}Active Deployments{COLORS['RESET']}")
     
     import glob
+    from utils.azure_utils import list_states
+    azure_states = list_states()
+    for state in azure_states:
+        print(f"  Azure {state['deployment_id']}: {state['status']} / {state['azure_resource_group']}")
     info_files = glob.glob("logs/deployment_info_*.txt")
     
-    if not info_files:
+    if not info_files and not azure_states:
         print(f"{COLORS['GREEN']}No active deployments found{COLORS['RESET']}")
     else:
         print(f"Found {len(info_files)} deployments:\n")
@@ -678,6 +687,10 @@ def show_usage():
 
 if __name__ == "__main__":
     try:
+        if '--deploy' in sys.argv and '--azure-smoke' in sys.argv:
+            from scripts.deploy_azure_smoke import main as azure_smoke_main
+            forwarded = [arg for arg in sys.argv[1:] if arg not in ('--deploy', '--azure-smoke')]
+            sys.exit(azure_smoke_main(forwarded))
         # Parse command line arguments
         parser = argparse.ArgumentParser(description="C2itall - Modular red team infrastructure deployment")
         parser.add_argument('--auto-teardown', action='store_true', 

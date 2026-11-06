@@ -1,0 +1,49 @@
+---
+- name: Provision an infrastructure-only Azure VM
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  tasks:
+    - name: Create the dedicated owned resource group
+      ansible.builtin.command:
+        argv:
+          - az
+          - group
+          - create
+          - --subscription
+          - "{{ azure_subscription_id }}"
+          - --name
+          - "{{ azure_resource_group }}"
+          - --location
+          - "{{ azure_location }}"
+          - --tags
+          - "c2itall-deployment={{ deployment_id }}"
+          - "c2itall-owner={{ ownership_marker }}"
+          - --only-show-errors
+          - --output
+          - json
+      changed_when: true
+    - name: Submit incremental ARM infrastructure deployment
+      ansible.builtin.command:
+        argv:
+          - az
+          - deployment
+          - group
+          - create
+          - --subscription
+          - "{{ azure_subscription_id }}"
+          - --resource-group
+          - "{{ azure_resource_group }}"
+          - --name
+          - "{{ deployment_id }}"
+          - --template-file
+          - "{{ azure_template_file }}"
+          - --mode
+          - Incremental
+          - --no-wait
+          - --only-show-errors
+          - --output
+          - json
+      changed_when: true
