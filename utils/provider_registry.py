@@ -4,30 +4,44 @@ Legacy providers keep their existing dispatch until a neutral infrastructure
 adapter is implemented. Registration never implies support for every workload.
 """
 
-from dataclasses import dataclass, field
+from collections import namedtuple
 from importlib import import_module
-from typing import Mapping
-from typing import Protocol
 
 
-class InfrastructureAdapter(Protocol):
-    def gather_config(self): ...
-    def validate_config(self, config, require_key=True): ...
-    def prepare_key(self, config): ...
-    def playbook(self, config): ...
-    def deploy(self, config): ...
-    def cleanup(self, config): ...
-    def load_state(self, deployment_id): ...
-    def list_states(self): ...
+class InfrastructureAdapter:
+    """Lifecycle contract; kept importable by legacy Python controllers."""
+
+    def gather_config(self):
+        raise NotImplementedError
+
+    def validate_config(self, config, require_key=True):
+        raise NotImplementedError
+
+    def prepare_key(self, config):
+        raise NotImplementedError
+
+    def playbook(self, config):
+        raise NotImplementedError
+
+    def deploy(self, config):
+        raise NotImplementedError
+
+    def cleanup(self, config):
+        raise NotImplementedError
+
+    def load_state(self, deployment_id):
+        raise NotImplementedError
+
+    def list_states(self):
+        raise NotImplementedError
 
 
-@dataclass(frozen=True)
-class ProviderSpec:
-    directory: str
-    ssh_user: str
-    legacy_menu: bool = True
-    config_loader: str | None = None
-    routes: Mapping[str, str] = field(default_factory=dict)
+class ProviderSpec(namedtuple('_ProviderSpec', 'directory ssh_user legacy_menu config_loader routes')):
+    __slots__ = ()
+
+    def __new__(cls, directory, ssh_user, legacy_menu=True, config_loader=None, routes=None):
+        return super(ProviderSpec, cls).__new__(cls, directory, ssh_user, legacy_menu,
+                                               config_loader, dict(routes or {}))
 
     @property
     def capabilities(self):
@@ -84,7 +98,7 @@ def providers_for(capability=None):
             if (spec.legacy_menu if capability is None else capability in spec.capabilities)]
 
 
-def infrastructure_adapter(provider) -> InfrastructureAdapter | None:
+def infrastructure_adapter(provider):
     dispatcher = provider_dispatcher(provider)
     return dispatcher.route('infrastructure') if dispatcher is not None else None
 

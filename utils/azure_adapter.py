@@ -2,9 +2,10 @@
 
 import re
 from . import azure_utils
+from .provider_registry import InfrastructureAdapter
 
 
-class AzureInfrastructureAdapter:
+class AzureInfrastructureAdapter(InfrastructureAdapter):
     def gather_config(self):
         return azure_utils.gather_azure_config()
 

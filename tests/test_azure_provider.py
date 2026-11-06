@@ -24,7 +24,6 @@ sys.path.insert(0, str(ROOT))
 from utils import azure_utils as azure
 from utils import cleanup_engine, deployment_engine, provider_utils
 from utils import provider_registry as registry
-from dataclasses import replace
 
 spec = importlib.util.spec_from_file_location("azure_smoke", ROOT / "scripts/deploy_azure_smoke.py")
 smoke = importlib.util.module_from_spec(spec)
@@ -371,6 +370,15 @@ class RoutingAndTemplateTests(AzureFixture):
 
 
 class ProviderContractTests(AzureFixture):
+    def test_legacy_imports_do_not_load_azure_adapter_or_runtime(self):
+        result = subprocess.run([sys.executable, '-B', '-c',
+            "import sys; from utils import provider_utils, deployment_engine, cleanup_engine; "
+            "assert 'utils.azure_adapter' not in sys.modules; "
+            "assert 'utils.azure_utils' not in sys.modules; "
+            "assert provider_utils.available_providers() == ['aws', 'linode', 'flokinet']"],
+            cwd=ROOT, capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_every_provider_uses_dispatcher_and_original_configuration_loader(self):
         from utils import aws_utils, linode_utils, flokinet_utils
         for name, module, function in (
@@ -385,7 +393,7 @@ class ProviderContractTests(AzureFixture):
                 gather.assert_called_once_with()
 
     def test_registered_workload_precedes_legacy_and_failure_never_falls_back(self):
-        spec = replace(registry.PROVIDER_SPECS['aws'], routes={'infrastructure': 'synthetic:Adapter'})
+        spec = registry.PROVIDER_SPECS['aws']._replace(routes={'infrastructure': 'synthetic:Adapter'})
         adapter = mock.Mock()
         config = {**self.config, 'provider': 'aws'}
         with mock.patch.dict(registry.PROVIDER_SPECS, {'aws': spec}), mock.patch.object(registry, '_load', return_value=lambda: adapter), mock.patch.object(deployment_engine, 'execute_playbook') as legacy:
@@ -402,7 +410,7 @@ class ProviderContractTests(AzureFixture):
                 old_cleanup.assert_not_called()
 
     def test_legacy_routes_do_not_import_unrelated_new_adapter(self):
-        spec = replace(registry.PROVIDER_SPECS['aws'], routes={'infrastructure': 'unavailable:Adapter'})
+        spec = registry.PROVIDER_SPECS['aws']._replace(routes={'infrastructure': 'unavailable:Adapter'})
         with mock.patch.dict(registry.PROVIDER_SPECS, {'aws': spec}), mock.patch.object(registry, '_load', side_effect=AssertionError('unexpected adapter import')):
             cases = [({}, 'c2'), ({'attack_box_deployment': True}, 'attack_box'),
                      ({'redirector_only': True}, 'redirector'), ({'tracker_deployment': True}, 'tracker'),
