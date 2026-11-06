@@ -404,6 +404,46 @@ else:
 
 
 class SmokeTests(unittest.TestCase):
+    def quota_preflight(self, usage):
+        """Exercise the real preflight through quota checks, stopping before image I/O."""
+        runner = smoke.Runner()
+        sku = {"family": "standardDASv4Family", "capabilities": [{"name": "vCPUs", "value": "2"}]}
+        def cloud(*args):
+            if args[:2] == ("provider", "show"):
+                return {"registrationState": "Registered"}
+            if args[:2] == ("vm", "list-usage"):
+                return usage
+            if args[:3] == ("vm", "image", "show"):
+                raise LookupError("quota checks passed")
+            raise AssertionError(f"Unexpected cloud call: {args}")
+        with mock.patch.object(runner, "az", side_effect=cloud), mock.patch.object(runner, "find_sku", return_value=sku):
+            runner.register_and_preflight(ROOT, {})
+
+    def test_quota_normalizes_decimal_strings_and_integers(self):
+        for value, expected in ((0, 0), (4, 4), ("0", 0), ("004", 4)):
+            with self.subTest(value=value):
+                self.assertEqual(smoke.nonnegative_count(value, "test"), expected)
+        for current, limit in (("0", "4"), (0, 4), ("2", 4), (2, "4")):
+            usage = [{"name": {"value": name}, "currentValue": current, "limit": limit}
+                     for name in ("cores", "standardDASv4Family")]
+            with self.subTest(current=current, limit=limit), self.assertRaisesRegex(LookupError, "quota checks passed"):
+                self.quota_preflight(usage)
+
+    def test_insufficient_regional_or_family_quota_is_refused(self):
+        for insufficient_name in ("cores", "standardDASv4Family"):
+            usage = [{"name": {"value": name}, "currentValue": "3" if name == insufficient_name else "0", "limit": "4"}
+                     for name in ("cores", "standardDASv4Family")]
+            with self.subTest(quota=insufficient_name), self.assertRaisesRegex(smoke.SmokeError, "Insufficient quota"):
+                self.quota_preflight(usage)
+
+    def test_malformed_quota_counts_are_refused(self):
+        invalid = (True, False, -1, "-1", "+1", " 1", "1 ", "1.0", 1.0, "", None, "abc", "١", "1e3")
+        for field in ("currentValue", "limit"):
+            for value in invalid:
+                usage = [{"name": {"value": "cores"}, "currentValue": "0", "limit": "4", field: value}]
+                with self.subTest(field=field, value=value), self.assertRaisesRegex(smoke.SmokeError, "nonnegative decimal count"):
+                    self.quota_preflight(usage)
+
     def test_dry_run_performs_no_commands_or_writes(self):
         with mock.patch.object(smoke.subprocess, "Popen") as process, mock.patch.object(smoke.Path, "open") as write, contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(smoke.main(["--dry-run"]), 0)

@@ -73,6 +73,18 @@ def remaining(deadline, maximum=60):
     return budget
 
 
+def nonnegative_count(value, field):
+    """Azure CLI versions return quota counts as either JSON integers or strings."""
+    if type(value) is int and value >= 0:
+        return value
+    if isinstance(value, str) and value.isascii() and value.isdecimal():
+        try:
+            return int(value)
+        except ValueError:
+            pass
+    raise SmokeError(f"Invalid {field}: expected a nonnegative decimal count")
+
+
 def child_environment():
     return {key: value for key, value in os.environ.items()
             if not key.upper().startswith(("AWS_", "LINODE", "FLOKINET", "ANSIBLE_"))}
@@ -220,7 +232,9 @@ class Runner:
         if sku.get("restrictions"):
             raise SmokeError("Approved VM size unavailable/restricted; no fallback permitted")
         capabilities = {item["name"]: item["value"] for item in sku["capabilities"]}
-        cores = int(capabilities["vCPUs"])
+        cores = nonnegative_count(capabilities.get("vCPUs"), "SKU vCPUs")
+        if cores == 0:
+            raise SmokeError("Approved SKU must require at least one vCPU")
         usage = self.az("vm", "list-usage", "--location", LOCATION)
         quota_names = {"cores", sku["family"].lower()}
         found = set()
@@ -228,7 +242,9 @@ class Runner:
             name = quota.get("name", {}).get("value", "").lower()
             if name in quota_names:
                 found.add(name)
-                if quota["currentValue"] + cores > quota["limit"]:
+                current = nonnegative_count(quota.get("currentValue"), f"{name} currentValue")
+                limit = nonnegative_count(quota.get("limit"), f"{name} limit")
+                if current + cores > limit:
                     raise SmokeError(f"Insufficient quota: {name}")
         if found != quota_names:
             raise SmokeError("Could not verify regional and VM-family vCPU quotas")
