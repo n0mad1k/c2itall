@@ -404,6 +404,94 @@ else:
 
 
 class SmokeTests(unittest.TestCase):
+    def verification_fixture(self, disk_field="diskSizeGB", disk_size=32):
+        """CLI response structure with synthetic identifiers, never live evidence."""
+        base = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test-smoke/providers/"
+        vm_id = base + "Microsoft.Compute/virtualMachines/test-vm"
+        disk_id = base + "Microsoft.Compute/disks/test-osdisk"
+        vm = {
+            "id": vm_id, "name": "test-vm", "location": "eastus",
+            "hardwareProfile": {"vmSize": smoke.SIZE},
+            "storageProfile": {
+                "imageReference": {"publisher": "Canonical", "offer": "ubuntu-24_04-lts",
+                                   "sku": "server", "version": "latest", "exactVersion": "24.04.202601010"},
+                "osDisk": {disk_field: disk_size, "caching": "ReadWrite", "createOption": "FromImage",
+                           "deleteOption": "Delete", "name": "test-osdisk", "osType": "Linux",
+                           "managedDisk": {"id": disk_id, "resourceGroup": "test-smoke", "storageAccountType": "StandardSSD_LRS"}},
+            },
+            "osProfile": {"adminUsername": "azureuser", "linuxConfiguration": {
+                "disablePasswordAuthentication": True, "provisionVMAgent": True,
+                "ssh": {"publicKeys": [{"path": "/home/azureuser/.ssh/authorized_keys", "keyData": "synthetic-public-key"}]}}},
+            "diagnosticsProfile": {"bootDiagnostics": {"enabled": True}},
+            "provisioningState": "Succeeded",
+        }
+        ips = [{"id": base + "Microsoft.Network/publicIPAddresses/test-ip", "sku": {"name": "Standard"},
+                "publicIPAllocationMethod": "Static", "publicIPAddressVersion": "IPv4", "ipAddress": "8.8.4.4"}]
+        nsgs = [{"id": base + "Microsoft.Network/networkSecurityGroups/test-nsg", "securityRules": [
+            {"name": "ssh", "direction": "Inbound", "access": "Allow", "sourceAddressPrefix": "8.8.8.8/32",
+             "destinationPortRange": "22", "protocol": "Tcp", "priority": 100},
+            {"name": "deny-other", "direction": "Inbound", "access": "Deny", "sourceAddressPrefix": "*",
+             "destinationPortRange": "*", "protocol": "*", "priority": 200},
+        ]}]
+        resources = [{"id": vm_id}, {"id": disk_id}, {"id": ips[0]["id"]}, {"id": nsgs[0]["id"]}]
+        config = {"azure_resource_group": "test-smoke", "operator_ip": "8.8.8.8/32",
+                  "ssh_private_key_path": "/synthetic/c2deploy_test-smoke"}
+        runner = smoke.Runner()
+        runner.evidence = Path("/synthetic/evidence")
+        runner.deadline = time.monotonic() + 60
+        def cloud(*args):
+            if args[:2] == ("vm", "list"):
+                return [copy.deepcopy(vm)]
+            if args[:3] == ("network", "public-ip", "list"):
+                return copy.deepcopy(ips)
+            if args[:3] == ("network", "nsg", "list"):
+                return copy.deepcopy(nsgs)
+            if args[:2] == ("resource", "list"):
+                return copy.deepcopy(resources)
+            raise AssertionError(f"Unexpected verification call: {args}")
+        return runner, config, vm, cloud
+
+    def test_full_verifier_accepts_current_and_legacy_disk_size_fields(self):
+        for spelling in ("diskSizeGB", "diskSizeGb"):
+            with self.subTest(spelling=spelling):
+                runner, config, vm, cloud = self.verification_fixture(spelling)
+                with mock.patch.object(runner, "az", side_effect=cloud) as az, mock.patch.object(runner, "run", return_value="active") as ssh, mock.patch.object(runner, "worker") as repeat, mock.patch.object(runner, "record") as record:
+                    runner.verify(config, ROOT)
+                    ssh.assert_called_once()
+                    argv = ssh.call_args.args[0]
+                    self.assertEqual(argv[:3], ["ssh", "-F", "/dev/null"])
+                    self.assertIn("StrictHostKeyChecking=accept-new", argv)
+                    self.assertIn("UserKnownHostsFile=/synthetic/evidence/known_hosts", argv)
+                    self.assertEqual(ssh.call_args.kwargs["timeout"], 30)
+                    self.assertEqual(repeat.call_args.args, (ROOT, "deploy", config))
+                    self.assertLessEqual(repeat.call_args.kwargs["timeout"], 60)
+                    self.assertEqual(sum(call.args[:2] == ("vm", "list") for call in az.call_args_list), 2)
+                    self.assertEqual(sum(call.args[:2] == ("resource", "list") for call in az.call_args_list), 2)
+                    result = record.call_args.args[1]
+                    self.assertEqual(record.call_args.args[0], "validation.json")
+                    self.assertEqual(result["vm_id"], vm["id"])
+                    self.assertEqual(result["ssh"], "passed")
+                    self.assertEqual(result["repeat"], "passed")
+
+    def test_full_verifier_rejects_wrong_or_ambiguous_disk_sizes_before_ssh(self):
+        for spelling in ("diskSizeGB", "diskSizeGb"):
+            for value in (31, 64, "32", 32.0, True, None):
+                with self.subTest(spelling=spelling, value=value):
+                    runner, config, vm, cloud = self.verification_fixture(spelling, value)
+                    with mock.patch.object(runner, "az", side_effect=cloud), mock.patch.object(runner, "run") as ssh, mock.patch.object(runner, "worker") as repeat:
+                        with self.assertRaisesRegex(smoke.SmokeError, "OS disk"):
+                            runner.verify(config, ROOT)
+                        ssh.assert_not_called()
+                        repeat.assert_not_called()
+        for sizes in ({}, {"diskSizeGB": 32, "diskSizeGb": 64}):
+            with self.subTest(sizes=sizes):
+                runner, config, vm, cloud = self.verification_fixture()
+                disk = vm["storageProfile"]["osDisk"]
+                disk.pop("diskSizeGB")
+                disk.update(sizes)
+                with mock.patch.object(runner, "az", side_effect=cloud), self.assertRaisesRegex(smoke.SmokeError, "OS disk"):
+                    runner.verify(config, ROOT)
+
     def quota_preflight(self, usage):
         """Exercise the real preflight through quota checks, stopping before image I/O."""
         runner = smoke.Runner()

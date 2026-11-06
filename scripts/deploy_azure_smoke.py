@@ -299,7 +299,11 @@ class Runner:
         if (vm["hardwareProfile"]["vmSize"] != SIZE or image["publisher"].lower() != "canonical"
                 or image["offer"] != "ubuntu-24_04-lts" or image["sku"] != "server"):
             raise SmokeError("VM differs from approved size/image")
-        if disk["diskSizeGb"] != 32 or disk["managedDisk"]["storageAccountType"] != "StandardSSD_LRS":
+        # Current CLI uses diskSizeGB; older serializers used diskSizeGb. Fail
+        # closed if either present spelling conflicts or isn't an integer 32.
+        disk_sizes = [disk[key] for key in ("diskSizeGB", "diskSizeGb") if key in disk]
+        if (not disk_sizes or any(type(size) is not int or size != 32 for size in disk_sizes)
+                or disk["managedDisk"]["storageAccountType"] != "StandardSSD_LRS"):
             raise SmokeError("OS disk differs from approved disk")
         if not vm["osProfile"]["linuxConfiguration"]["disablePasswordAuthentication"]:
             raise SmokeError("VM allows SSH password authentication")
