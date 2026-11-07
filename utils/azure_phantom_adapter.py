@@ -13,6 +13,16 @@ _WEB_RULES = (
 )
 
 
+def _operator_source(config):
+    value = str(config.get('operator_ip', '')).strip()
+    if '/' not in value:
+        value += '/32'
+    network = ipaddress.ip_network(value, strict=True)
+    if network.version != 4 or network.prefixlen != 32 or not network.is_global:
+        raise ValueError('Azure Phantom operator_ip must be one global IPv4 host')
+    return str(network)
+
+
 def _service_rules(config):
     service = config.get('server_type')
     if service == 'all_in_one':
@@ -37,10 +47,16 @@ def _service_rules(config):
         return [{'name': 'wireguard', 'protocol': 'Udp',
                  'port': int(config.get('vpn_port', 51820)), 'source': '*'}]
     if service == 'dns':
+        operator = _operator_source(config)
         return [
-            {'name': 'public-dns-tcp', 'protocol': 'Tcp', 'port': 53, 'source': '*'},
-            {'name': 'public-dns-udp', 'protocol': 'Udp', 'port': 53, 'source': '*'},
-            *_WEB_RULES,
+            {'name': 'operator-dns-tcp', 'protocol': 'Tcp', 'port': 53,
+             'source': operator},
+            {'name': 'operator-dns-udp', 'protocol': 'Udp', 'port': 53,
+             'source': operator},
+            {'name': 'operator-dns-http', 'protocol': 'Tcp', 'port': 80,
+             'source': operator},
+            {'name': 'operator-dns-https', 'protocol': 'Tcp', 'port': 443,
+             'source': operator},
         ]
     if service == 'matrix':
         rules = [*_WEB_RULES, {'name': 'matrix-federation', 'protocol': 'Tcp',

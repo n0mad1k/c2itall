@@ -106,9 +106,9 @@ def expected_allow_rules(config):
     if service == "vpn":
         return {("tcp", "22", operator), ("udp", "51820", "*")}
     if service == "dns":
-        return {("tcp", "22", operator), ("tcp", "53", "*"),
-                ("udp", "53", "*"), ("tcp", "80", "*"),
-                ("tcp", "443", "*")}
+        return {("tcp", "22", operator), ("tcp", "53", operator),
+                ("udp", "53", operator), ("tcp", "80", operator),
+                ("tcp", "443", operator)}
     if service == "matrix":
         rules = {("tcp", "22", operator), ("tcp", "80", "*"),
                  ("tcp", "443", "*"), ("tcp", "8448", "*")}

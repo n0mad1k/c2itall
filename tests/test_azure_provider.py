@@ -1447,10 +1447,12 @@ class RoutingAndTemplateTests(AzureFixture):
         }
         for service, ports in expected.items():
             with self.subTest(service=service):
-                rules = _service_rules({'server_type': service})
+                rules = _service_rules({
+                    'server_type': service, 'operator_ip': '8.8.8.8'})
                 self.assertEqual({(rule['protocol'], rule['port']) for rule in rules},
                                  ports)
-                self.assertTrue(all(rule['source'] == '*' for rule in rules))
+                expected_source = '8.8.8.8/32' if service == 'dns' else '*'
+                self.assertTrue(all(rule['source'] == expected_source for rule in rules))
         all_in_one = _service_rules({
             'server_type': 'all_in_one', 'services': ['vpn', 'vault']})
         self.assertEqual(
