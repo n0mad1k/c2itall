@@ -535,6 +535,34 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertEqual(captured['data']['aws_secret_key'], 'secret')
         self.assertFalse(captured['path'].exists())
 
+    def test_saved_workload_reenters_dispatcher_after_restart(self):
+        from utils.legacy_provider_adapter import LegacyProviderAdapter
+
+        logs = self.home / 'logs'
+        logs.mkdir()
+        config = {
+            'provider': 'aws', 'provider_workload': 'c2',
+            'deployment_id': 'restart-route',
+            # The subtype is deliberately not a registered workload. Cleanup
+            # must use the canonical workload persisted alongside it.
+            'deployment_type': 'cobalt_strike',
+        }
+        previous = Path.cwd()
+        try:
+            os.chdir(self.home)
+            deployment_engine.save_deployment_info(config)
+            restored = cleanup_engine.parse_deployment_info(
+                'logs/deployment_info_restart-route.txt')
+        finally:
+            os.chdir(previous)
+
+        self.assertEqual(restored['provider_workload'], 'c2')
+        self.assertIsInstance(registry.workload_route(restored), LegacyProviderAdapter)
+        with mock.patch.object(
+                cleanup_engine, 'execute_legacy_teardown', return_value=True) as legacy:
+            self.assertTrue(cleanup_engine.execute_teardown(restored))
+        legacy.assert_called_once_with(restored)
+
     def test_webrunner_uses_registry_order_and_composite_dispatch(self):
         module_spec = importlib.util.spec_from_file_location(
             'webrunner_dispatch_test',

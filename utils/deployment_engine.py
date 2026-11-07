@@ -456,6 +456,7 @@ def save_deployment_info(config):
             # Write key configuration items
             keys_to_save = [
                 'provider', 'deployment_id', 'deployment_type',
+                'provider_workload',
                 'attack_box_name', 'c2_name', 'redirector_name', 'tracker_name',
                 'chat_server_name',
                 'domain', 'c2_subdomain', 'redirector_subdomain',
