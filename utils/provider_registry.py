@@ -48,12 +48,26 @@ class InfrastructureAdapter(WorkloadAdapter):
         raise NotImplementedError
 
 
-class ProviderSpec(namedtuple('_ProviderSpec', 'directory ssh_user legacy_menu config_loader routes')):
+class ProviderRuntime:
+    """Optional controller runtime for provider-specific process execution."""
+
+    def execute_playbook(self, playbook, config, output_filter):
+        raise NotImplementedError
+
+    def create_extra_vars(self, config):
+        raise NotImplementedError
+
+
+class ProviderSpec(namedtuple(
+        '_ProviderSpec',
+        'directory ssh_user legacy_menu config_loader routes runtime_loader')):
     __slots__ = ()
 
-    def __new__(cls, directory, ssh_user, legacy_menu=True, config_loader=None, routes=None):
+    def __new__(cls, directory, ssh_user, legacy_menu=True, config_loader=None,
+                routes=None, runtime_loader=None):
         return super(ProviderSpec, cls).__new__(cls, directory, ssh_user, legacy_menu,
-                                               config_loader, dict(routes or {}))
+                                               config_loader, dict(routes or {}),
+                                               runtime_loader)
 
     @property
     def capabilities(self):
@@ -80,6 +94,7 @@ PROVIDER_SPECS = {
                                  'webrunner')}),
     'azure': ProviderSpec('Azure', 'azureuser', False,
                           config_loader='utils.azure_utils:gather_azure_config',
+                          runtime_loader='utils.azure_runtime:azure_runtime',
                           routes={
                               'infrastructure': 'utils.azure_adapter:AzureInfrastructureAdapter',
                               'attack_box': 'utils.azure_workload_adapter:azure_attack_box_adapter',
@@ -134,6 +149,17 @@ class ProviderDispatcher:
 
 def provider_dispatcher(provider):
     return ProviderDispatcher(provider) if provider in PROVIDER_SPECS else None
+
+
+def provider_runtime(provider):
+    """Load an optional provider-specific controller runtime lazily."""
+    spec = PROVIDER_SPECS.get(provider)
+    if spec is None or not spec.runtime_loader:
+        return None
+    runtime = _load(spec.runtime_loader)()
+    if not isinstance(runtime, ProviderRuntime):
+        raise TypeError(f'Invalid provider runtime for {provider}')
+    return runtime
 
 
 def providers_for(capability=None, legacy_fallback=False):

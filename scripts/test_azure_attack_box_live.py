@@ -38,7 +38,8 @@ def verify_committed_source(runner):
         'scripts/test_azure_attack_box_live.py',
         'teardown.py', 'tests/test_azure_provider.py',
         'utils/azure_adapter.py', 'utils/azure_utils.py',
-        'utils/azure_workload_adapter.py', 'utils/cleanup_engine.py',
+        'utils/azure_runtime.py', 'utils/azure_workload_adapter.py',
+        'utils/cleanup_engine.py',
         'utils/deployment_engine.py', 'utils/provider_registry.py',
     )
     for path in paths:

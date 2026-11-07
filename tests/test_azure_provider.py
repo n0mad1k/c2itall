@@ -960,6 +960,24 @@ class RoutingAndTemplateTests(AzureFixture):
                 self.assertNotIn(secret, json.dumps(captured["variables"]))
             self.assertEqual(os.environ["AWS_SECRET_ACCESS_KEY"], "aws-secret")
 
+    def test_azure_controller_runtime_is_loaded_from_provider_metadata(self):
+        from utils.azure_runtime import AzureControllerRuntime
+
+        runtime = registry.provider_runtime('azure')
+        self.assertIsInstance(runtime, AzureControllerRuntime)
+        self.assertIsNone(registry.provider_runtime('aws'))
+        self.assertNotIn("config.get('provider') == 'azure'",
+                         (ROOT / 'utils/deployment_engine.py').read_text())
+
+        allowed = runtime.create_extra_vars({
+            **self.config, 'aws_secret_key': 'excluded',
+            'azure_template_file': '/tmp/template.json',
+        })
+        serialized = json.loads(allowed)
+        self.assertNotIn('aws_secret_key', serialized)
+        self.assertEqual(serialized['azure_template_file'],
+                         '/tmp/template.json')
+
 
 class ProviderContractTests(AzureFixture):
     def test_health_reads_owned_vm_without_mutating_state(self):
