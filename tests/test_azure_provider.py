@@ -390,6 +390,9 @@ class RoutingAndTemplateTests(AzureFixture):
             self.assertNotIn('from utils.ssh_utils import generate_ssh_key', source)
 
     def test_attack_box_sizing_is_applied_through_provider_adapter(self):
+        self.assertEqual(
+            registry.PROVIDER_SPECS['linode'].profile_loader,
+            'utils.linode_utils:apply_linode_profile')
         linode = {
             'provider': 'linode', 'provider_workload': 'attack_box',
             'deployment_id': 'profile-test',
@@ -404,6 +407,14 @@ class RoutingAndTemplateTests(AzureFixture):
                     linode, 'instance_size', profile)
                 self.assertEqual(linode['linode_instance_type'], instance_type)
 
+        with self.assertRaisesRegex(ValueError, 'Unsupported Linode'):
+            provider_utils.apply_provider_profile(
+                linode, 'instance_size', 'invalid')
+
+        unchanged = dict(linode)
+        provider_utils.apply_provider_profile(linode, 'unknown_profile', 'small')
+        self.assertEqual(linode, unchanged)
+
         for provider in ('aws', 'azure'):
             config = {
                 'provider': provider, 'provider_workload': 'attack_box',
@@ -413,9 +424,26 @@ class RoutingAndTemplateTests(AzureFixture):
                 config, 'instance_size', 'small')
             self.assertNotIn('linode_instance_type', config)
 
+        config = {'provider': 'aws', 'provider_workload': 'attack_box'}
+        hook = mock.Mock(return_value=config)
+        spec = registry.PROVIDER_SPECS['aws']._replace(
+            profile_loader='fake:profile')
+        with mock.patch.dict(registry.PROVIDER_SPECS, {'aws': spec}), \
+                mock.patch.object(registry, '_load', return_value=hook) as load:
+            self.assertIs(
+                registry.apply_transition_profile(
+                    'aws', config, 'attack_box', 'instance_size', 'small'),
+                config)
+        load.assert_called_once_with('fake:profile')
+        hook.assert_called_once_with(
+            config, 'attack_box', 'instance_size', 'small')
+
         source = (ROOT / 'modules/attack-box/deploy_attack_box.py').read_text()
         self.assertNotIn('provider == "linode"', source)
         self.assertEqual(source.count('apply_provider_profile('), 2)
+        transition_source = (
+            ROOT / 'utils/legacy_provider_adapter.py').read_text()
+        self.assertNotIn("self.provider == 'linode'", transition_source)
 
     def test_canonical_workload_dispatch_never_retries_failed_handler(self):
         config = {'provider': 'azure', 'provider_workload': 'phishing',

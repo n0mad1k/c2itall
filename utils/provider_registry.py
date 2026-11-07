@@ -66,16 +66,18 @@ class ProviderRuntime:
 class ProviderSpec(namedtuple(
         '_ProviderSpec',
         'directory ssh_user legacy_menu config_loader routes runtime_loader '
-        'environment_loader credential_environment teardown_keys')):
+        'environment_loader profile_loader credential_environment teardown_keys')):
     __slots__ = ()
 
     def __new__(cls, directory, ssh_user, legacy_menu=True, config_loader=None,
                 routes=None, runtime_loader=None, environment_loader=None,
-                credential_environment=None, teardown_keys=None):
+                profile_loader=None, credential_environment=None,
+                teardown_keys=None):
         return super(ProviderSpec, cls).__new__(cls, directory, ssh_user, legacy_menu,
                                                config_loader, dict(routes or {}),
                                                runtime_loader,
                                                environment_loader,
+                                               profile_loader,
                                                tuple(credential_environment or ()),
                                                tuple(teardown_keys or ()))
 
@@ -126,6 +128,7 @@ PROVIDER_SPECS = {
                                 LEGACY_TRANSITION_CAPABILITIES['aws']}),
     'linode': ProviderSpec('Linode', 'root', config_loader='utils.linode_utils:gather_linode_config',
                            environment_loader='utils.linode_utils:prepare_linode_environment',
+                           profile_loader='utils.linode_utils:apply_linode_profile',
                            credential_environment=(
                                ('linode_token', 'LINODE_TOKEN'),),
                            teardown_keys=('linode_token', 'linode_region'),
@@ -216,6 +219,20 @@ def prepare_provider_environment(config, teardown=False):
     if not callable(prepare):
         raise TypeError('Provider environment loader must be callable')
     return prepare(config, teardown=teardown)
+
+
+def apply_transition_profile(provider, config, workload, profile, value):
+    """Apply optional provider-owned tuning for a preserved transition route."""
+    spec = PROVIDER_SPECS.get(provider)
+    if spec is None or not spec.profile_loader:
+        return config
+    apply_profile = _load(spec.profile_loader)
+    if not callable(apply_profile):
+        raise TypeError('Provider profile loader must be callable')
+    result = apply_profile(config, workload, profile, value)
+    if result is not config:
+        raise TypeError('Provider profile loader must return the original config')
+    return config
 
 
 def provider_secret_vars(config):

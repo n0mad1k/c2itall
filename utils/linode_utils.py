@@ -9,6 +9,22 @@ import subprocess
 from .common import COLORS, load_vars_file
 
 
+def apply_linode_profile(config, workload, profile, value):
+    """Translate neutral workload tuning into Linode configuration."""
+    if workload != 'attack_box' or profile != 'instance_size':
+        return config
+    sizes = {
+        'small': 'g6-standard-2',
+        'medium': 'g6-standard-4',
+        'large': 'g6-standard-8',
+        'xlarge': 'g6-standard-16',
+    }
+    if value not in sizes:
+        raise ValueError('Unsupported Linode attack-box instance size')
+    config['linode_instance_type'] = sizes[value]
+    return config
+
+
 def prepare_linode_environment(config, teardown=False):
     """Preserve deployment and teardown token fallback order for Linode."""
     token = config.get('linode_token', '')

@@ -48,20 +48,9 @@ class LegacyProviderAdapter(WorkloadAdapter):
 
     def apply_profile(self, config, profile, value):
         self._validate(config)
-        from .provider_registry import requested_workload
-        workload = requested_workload(config)
-        if (self.provider == 'linode' and workload == 'attack_box' and
-                profile == 'instance_size'):
-            sizes = {
-                'small': 'g6-standard-2',
-                'medium': 'g6-standard-4',
-                'large': 'g6-standard-8',
-                'xlarge': 'g6-standard-16',
-            }
-            if value not in sizes:
-                raise ValueError('Unsupported Linode attack-box instance size')
-            config['linode_instance_type'] = sizes[value]
-        return config
+        from .provider_registry import apply_transition_profile, requested_workload
+        return apply_transition_profile(
+            self.provider, config, requested_workload(config), profile, value)
 
     def _validate(self, config, require_workload=True):
         providers = config.get("providers")
