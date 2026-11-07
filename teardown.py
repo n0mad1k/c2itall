@@ -6,9 +6,7 @@ This script can be used to teardown infrastructure when the main menu fails
 
 import os
 import sys
-import subprocess
 import logging
-import json
 import glob
 import argparse
 from datetime import datetime
@@ -243,10 +241,6 @@ def teardown_deployment(deployment_id, force=False):
     
     if success:
         print(f"\n{COLORS['GREEN']}Teardown completed successfully!{COLORS['RESET']}")
-        # Clean up SSH keys
-        cleanup_ssh_keys(deployment_id)
-        # Archive logs
-        archive_logs(deployment_id)
     else:
         print(f"\n{COLORS['RED']}Teardown failed or incomplete{COLORS['RESET']}")
         print(f"Check logs for details: {log_file}")
@@ -278,9 +272,6 @@ def teardown_all_deployments(force=False):
             success = teardown_adapter_state(config, force=True)
         else:
             success = execute_teardown(config)
-            if success:
-                cleanup_ssh_keys(deployment_id)
-                archive_logs(deployment_id)
         if success:
             success_count += 1
         else:
@@ -338,86 +329,18 @@ def execute_teardown(config):
 
 
 def execute_legacy_teardown(config):
-    """Execute the standalone tool's preserved legacy cleanup path."""
-    provider = config.get('provider')
-
-    # Set provider environment
-    set_provider_environment(config)
-    
-    # Get provider directory
-    provider_dir = PROVIDER_DIRS.get(provider, provider.capitalize())
-    cleanup_playbook = f"providers/{provider_dir}/cleanup.yml"
-    
-    if not os.path.exists(cleanup_playbook):
-        print(f"{COLORS['RED']}Cleanup playbook not found: {cleanup_playbook}{COLORS['RESET']}")
-        show_manual_cleanup_guidance(config)
-        return False
-    
-    print(f"Using cleanup playbook: {cleanup_playbook}")
-    
-    # Create extra vars
-    extra_vars = create_extra_vars(config)
-    
-    # Build ansible command - use venv ansible if available
-    venv_ansible = os.path.join(os.path.dirname(__file__), 'venv', 'bin', 'ansible-playbook')
-    if os.path.exists(venv_ansible):
-        ansible_cmd = venv_ansible
-        # Set Python interpreter for the venv
-        venv_python = os.path.join(os.path.dirname(__file__), 'venv', 'bin', 'python')
-        os.environ['ANSIBLE_PYTHON_INTERPRETER'] = venv_python
-    else:
-        ansible_cmd = 'ansible-playbook'
-    
-    cmd = [
-        ansible_cmd,
-        cleanup_playbook,
-        '--extra-vars', extra_vars,
-        '-v'
-    ]
-    
-    print(f"Executing: {' '.join(cmd)}")
-    
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        
-        print(f"Return code: {result.returncode}")
-        if result.stdout:
-            print(f"STDOUT:\n{result.stdout}")
-        if result.stderr:
-            print(f"STDERR:\n{result.stderr}")
-        
-        return result.returncode == 0
-        
-    except subprocess.TimeoutExpired:
-        print(f"{COLORS['RED']}Teardown timed out after 5 minutes{COLORS['RESET']}")
-        return False
-    except Exception as e:
-        print(f"{COLORS['RED']}Error executing teardown: {e}{COLORS['RESET']}")
-        return False
+    """Use the same provider-owned legacy cleanup path as the main tool."""
+    from utils.cleanup_engine import execute_legacy_teardown as shared_cleanup
+    return shared_cleanup(config)
 
 def set_provider_environment(config):
     """Delegate legacy teardown environment setup to provider metadata."""
     return prepare_provider_environment(config, teardown=True)
 
 def create_extra_vars(config):
-    """Create Ansible extra variables"""
-    extra_vars = {
-        'deployment_id': config.get('deployment_id'),
-        'provider': config.get('provider'),
-        'skip_confirmation': True
-    }
-    
-    # Add instance names
-    if config.get('redirector_name'):
-        extra_vars['redirector_name'] = config['redirector_name']
-    if config.get('c2_name'):
-        extra_vars['c2_name'] = config['c2_name']
-    if config.get('tracker_name'):
-        extra_vars['tracker_name'] = config['tracker_name']
-    if config.get('attack_box_name'):
-        extra_vars['attack_box_name'] = config['attack_box_name']
-    
-    return json.dumps(extra_vars)
+    """Compatibility wrapper for the canonical teardown serializer."""
+    from utils.cleanup_engine import create_teardown_vars
+    return create_teardown_vars(config)
 
 def cleanup_ssh_keys(deployment_id):
     """Clean up SSH keys for deployment"""

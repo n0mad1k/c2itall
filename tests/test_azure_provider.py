@@ -1669,6 +1669,23 @@ class ProviderContractTests(AzureFixture):
             self.assertTrue(standalone.execute_teardown(missing))
         legacy.assert_called_once_with(missing)
 
+    def test_standalone_legacy_cleanup_delegates_to_canonical_engine(self):
+        import teardown as standalone
+
+        config = {
+            'provider': 'linode', 'provider_workload': 'c2',
+            'deployment_id': 'shared-cleanup', 'linode_token': 'token',
+            'mta_name': 'mail-shared-cleanup',
+        }
+        with mock.patch(
+                'utils.cleanup_engine.execute_legacy_teardown',
+                return_value=False) as shared:
+            self.assertFalse(standalone.execute_legacy_teardown(config))
+        shared.assert_called_once_with(config)
+        self.assertEqual(
+            json.loads(standalone.create_extra_vars(config)),
+            json.loads(cleanup_engine.create_teardown_vars(config)))
+
     def test_standalone_discovery_merges_state_and_logs_with_adapter_priority(self):
         import teardown as standalone
         state = self.prepare()
@@ -1698,7 +1715,7 @@ class ProviderContractTests(AzureFixture):
             self.assertFalse(standalone.teardown_all_deployments(force=True))
             logs.assert_not_called()
 
-    def test_standalone_batch_preserves_legacy_cleanup_and_never_retries_failed_adapter(self):
+    def test_standalone_batch_does_not_duplicate_canonical_legacy_closeout(self):
         import teardown as standalone
         state = self.prepare()
         legacy = {'provider': 'aws', 'deployment_id': 'legacy-1'}
@@ -1707,8 +1724,8 @@ class ProviderContractTests(AzureFixture):
                 self.assertEqual(standalone.teardown_all_deployments(force=True), adapter_ok)
                 adapter.assert_called_once_with(state)
                 execute.assert_called_once_with(legacy)
-                keys.assert_called_once_with('legacy-1')
-                archive.assert_called_once_with('legacy-1')
+                keys.assert_not_called()
+                archive.assert_not_called()
 
     def test_standalone_batch_cancellation_and_missing_adapter_prevent_legacy_cleanup(self):
         import teardown as standalone
