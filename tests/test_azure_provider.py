@@ -821,9 +821,12 @@ class RoutingAndTemplateTests(AzureFixture):
         })
 
     def test_azure_attack_box_adapter_owns_routed_lifecycle(self):
-        from utils.azure_workload_adapter import AzureAttackBoxAdapter
+        from utils.azure_workload_adapter import (
+            AzureAttackBoxAdapter, AzureSingleVmWorkloadAdapter,
+        )
 
         adapter = AzureAttackBoxAdapter()
+        self.assertIsInstance(adapter, AzureSingleVmWorkloadAdapter)
         config = {
             'provider': 'azure', 'provider_workload': 'attack_box',
             'deployment_id': 'test-azure', 'deployment_type': 'quick_recon_box',
@@ -859,6 +862,57 @@ class RoutingAndTemplateTests(AzureFixture):
                 mock.patch.object(cleanup_engine, 'archive_deployment_logs') as archive:
             self.assertTrue(adapter.cleanup(config))
         archive.assert_called_once_with('test-azure')
+
+    def test_azure_single_vm_base_exposes_a_workload_only_extension_point(self):
+        from utils.azure_workload_adapter import AzureSingleVmWorkloadAdapter
+
+        class ExampleAdapter(AzureSingleVmWorkloadAdapter):
+            workload = 'example'
+            address_key = 'example_ip'
+            playbook_name = 'example.yml'
+            service_log_suffix = 'example'
+
+            def _validate_workload(self, config):
+                if config.get('deployment_type') != 'example_service':
+                    raise ValueError('unsupported example subtype')
+
+            def _inbound_rules(self, config):
+                return [{'name': 'example-tls', 'protocol': 'Tcp',
+                         'port': 9443, 'source': '*'}]
+
+        adapter = ExampleAdapter()
+        config = {
+            'provider': 'azure', 'provider_workload': 'example',
+            'deployment_id': 'example-azure',
+            'deployment_type': 'example_service',
+            'azure_subscription_id': smoke.SUBSCRIPTION,
+            'azure_location': 'eastus', 'azure_vm_size': smoke.SIZE,
+            'operator_ip': '8.8.8.8',
+        }
+        infrastructure = adapter._infrastructure_config(config)
+        self.assertEqual(infrastructure['provider_workload'], 'example')
+        self.assertEqual(infrastructure['azure_inbound_rules'], [{
+            'name': 'example-tls', 'protocol': 'Tcp',
+            'port': 9443, 'source': '*'}])
+        self.assertEqual(
+            adapter.playbook(config),
+            str(ROOT / 'providers/Azure/example.yml'))
+        self.assertEqual(adapter.address_key, 'example_ip')
+        service_vars = adapter._service_variables({
+            **config, 'aws_secret_key': 'excluded',
+            'linode_token': 'excluded', 'example_value': 'not-declared',
+        })
+        self.assertEqual(service_vars, {
+            'provider': 'azure', 'provider_workload': 'example',
+            'deployment_id': 'example-azure',
+            'deployment_type': 'example_service',
+        })
+
+        class IncompleteAdapter(AzureSingleVmWorkloadAdapter):
+            pass
+
+        with self.assertRaisesRegex(TypeError, 'metadata is incomplete'):
+            IncompleteAdapter().playbook(config)
 
     def test_quick_recon_uses_supported_ansible_fact_access(self):
         source = (ROOT / 'modules/attack-box/tasks/configure_quick_recon.yml').read_text()
