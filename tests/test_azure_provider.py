@@ -1116,6 +1116,17 @@ else:
 
 
 class SmokeTests(unittest.TestCase):
+    def test_infrastructure_live_harness_dry_run_has_no_cloud_calls(self):
+        harness_spec = importlib.util.spec_from_file_location(
+            'azure_infrastructure_live',
+            ROOT / 'scripts/test_azure_infrastructure_live.py')
+        harness = importlib.util.module_from_spec(harness_spec)
+        harness_spec.loader.exec_module(harness)
+        with mock.patch.object(harness, 'activate') as activate, contextlib.redirect_stdout(
+                io.StringIO()):
+            self.assertEqual(harness.main([]), 0)
+        activate.assert_not_called()
+
     def monitoring_fixture(self):
         runner = smoke.Runner()
         runner.deadline = time.monotonic() + 60
