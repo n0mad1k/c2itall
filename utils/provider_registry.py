@@ -76,16 +76,18 @@ class WorkloadSpec(namedtuple('_WorkloadSpec', 'entrypoint legacy_fallback')):
 
 class ProviderSpec(namedtuple(
         '_ProviderSpec',
-        'directory ssh_user legacy_menu config_loader routes runtime_loader '
+        'directory ssh_user legacy_menu legacy_capabilities config_loader routes runtime_loader '
         'environment_loader profile_loader credential_environment teardown_keys '
         'cleanup_guidance')):
     __slots__ = ()
 
-    def __new__(cls, directory, ssh_user, legacy_menu=True, config_loader=None,
-                routes=None, runtime_loader=None, environment_loader=None,
-                profile_loader=None, credential_environment=None,
-                teardown_keys=None, cleanup_guidance=None):
+    def __new__(cls, directory, ssh_user, legacy_menu=True,
+                legacy_capabilities=None, config_loader=None, routes=None,
+                runtime_loader=None, environment_loader=None, profile_loader=None,
+                credential_environment=None, teardown_keys=None,
+                cleanup_guidance=None):
         return super(ProviderSpec, cls).__new__(cls, directory, ssh_user, legacy_menu,
+                                               frozenset(legacy_capabilities or ()),
                                                config_loader, dict(routes or {}),
                                                runtime_loader,
                                                environment_loader,
@@ -143,6 +145,9 @@ _TRANSITION_REFERENCES = frozenset({
 
 PROVIDER_SPECS = {
     'aws': ProviderSpec('AWS', 'kali', config_loader='utils.aws_utils:gather_aws_config',
+                        legacy_capabilities=(
+                            LEGACY_TRANSITION_CAPABILITIES['aws'] |
+                            frozenset({'phantom', 'chat'})),
                         environment_loader='utils.aws_utils:prepare_aws_environment',
                         credential_environment=(
                             ('aws_access_key', 'AWS_ACCESS_KEY_ID'),
@@ -159,6 +164,9 @@ PROVIDER_SPECS = {
                         routes={workload: _AWS_TRANSITION for workload in
                                 LEGACY_TRANSITION_CAPABILITIES['aws']}),
     'linode': ProviderSpec('Linode', 'root', config_loader='utils.linode_utils:gather_linode_config',
+                           legacy_capabilities=(
+                               LEGACY_TRANSITION_CAPABILITIES['linode'] |
+                               frozenset({'phantom', 'chat'})),
                            environment_loader='utils.linode_utils:prepare_linode_environment',
                            profile_loader='utils.linode_utils:apply_linode_profile',
                            credential_environment=(
@@ -173,6 +181,9 @@ PROVIDER_SPECS = {
                            routes={workload: _LINODE_TRANSITION for workload in
                                    LEGACY_TRANSITION_CAPABILITIES['linode']}),
     'flokinet': ProviderSpec('FlokiNET', 'root', config_loader='utils.flokinet_utils:gather_flokinet_config',
+                             legacy_capabilities=(
+                                 LEGACY_TRANSITION_CAPABILITIES['flokinet'] |
+                                 frozenset({'phantom', 'chat'})),
                              environment_loader='utils.flokinet_utils:prepare_flokinet_environment',
                              credential_environment=(
                                  ('flokinet_api_key', 'FLOKINET_API_KEY'),),
@@ -240,7 +251,8 @@ class ProviderDispatcher:
                     config = dict(config)
                     config['provider_manages_ssh_key'] = True
                 return config
-            if not (legacy_fallback and self.spec.legacy_menu):
+            if not (legacy_fallback and
+                    capability in self.spec.legacy_capabilities):
                 raise ValueError(f'No configuration route for {self.provider}/{capability}')
         if not self.spec.config_loader:
             raise ValueError(f'Configuration loader is missing for {self.provider}')
@@ -336,7 +348,7 @@ def providers_for(capability=None, legacy_fallback=False):
     return [key for key, spec in PROVIDER_SPECS.items()
             if (spec.legacy_menu if capability is None else
                 capability in spec.capabilities or
-                (legacy_fallback and spec.legacy_menu))]
+                (legacy_fallback and capability in spec.legacy_capabilities))]
 
 
 def provider_route_kind(provider, workload):
@@ -351,7 +363,8 @@ def provider_route_kind(provider, workload):
         return 'transition'
     if reference:
         return 'native'
-    if workload in LEGACY_FALLBACK_WORKLOADS and spec.legacy_menu:
+    if (workload in LEGACY_FALLBACK_WORKLOADS and
+            workload in spec.legacy_capabilities):
         return 'legacy_fallback'
     return 'unsupported'
 
@@ -430,6 +443,10 @@ def validate_provider_registry(load_references=True):
             raise ValueError('Provider directory and SSH user are required: ' + provider)
         if type(spec.legacy_menu) is not bool:
             raise TypeError('Provider legacy_menu must be a boolean: ' + provider)
+        if (any(workload not in CANONICAL_WORKLOADS
+                for workload in spec.legacy_capabilities) or
+                (spec.legacy_capabilities and not spec.legacy_menu)):
+            raise ValueError('Invalid provider legacy capabilities: ' + provider)
 
         for field in reference_fields:
             reference = getattr(spec, field)
@@ -488,6 +505,8 @@ def validate_provider_registry(load_references=True):
             raise ValueError('Transition provider is not registered: ' + provider)
         if not workloads or not workloads.issubset(LEGACY_FALLBACK_WORKLOADS):
             raise ValueError('Invalid transition capability set: ' + provider)
+        if not workloads.issubset(PROVIDER_SPECS[provider].legacy_capabilities):
+            raise ValueError('Transition capabilities are not legacy-enabled: ' + provider)
         for workload in workloads:
             if provider_route_kind(provider, workload) != 'transition':
                 raise ValueError('Transition route metadata drift: {0}/{1}'.format(
@@ -570,10 +589,14 @@ def requested_workload(config):
     return 'c2'
 
 
-def uses_legacy_routes(provider):
+def uses_legacy_routes(provider, workload=None):
     spec = PROVIDER_SPECS.get(provider)
     # Preserve legacy handling of previously accepted, unregistered providers.
-    return spec is None or spec.legacy_menu
+    if spec is None:
+        return True
+    if workload is None or workload not in CANONICAL_WORKLOADS:
+        return spec.legacy_menu
+    return workload in spec.legacy_capabilities
 
 
 def list_infrastructure_states():

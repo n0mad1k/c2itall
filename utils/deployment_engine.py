@@ -16,7 +16,7 @@ from utils.common import COLORS, PROVIDER_DIRS
 from utils.provider_registry import (
     composite_workload_routes, prepare_provider_environment,
     provider_credential_keys, provider_runtime, provider_secret_vars,
-    workload_route, uses_legacy_routes,
+    requested_workload, workload_route, uses_legacy_routes,
 )
 
 _SECRET_KEYS = frozenset({
@@ -39,7 +39,7 @@ def dispatch_workload(config, legacy_deploy):
         if _is_legacy_bridge(adapter):
             return adapter.deploy_with_legacy(config, legacy_deploy)
         return adapter.deploy(config)
-    if uses_legacy_routes(provider):
+    if uses_legacy_routes(provider, requested_workload(config)):
         return legacy_deploy(config)
     logging.error('Provider has no route for this workload')
     return False
@@ -48,10 +48,11 @@ def dispatch_workload(config, legacy_deploy):
 def dispatch_composite_workload(config, legacy_deploy):
     """Dispatch one multi-provider lifecycle without unsafe partial fallback."""
     routes = composite_workload_routes(config)
+    workload = requested_workload(config)
     registered = [(provider, adapter) for provider, adapter in routes
                   if adapter is not None]
     if not registered:
-        if all(uses_legacy_routes(provider) for provider, _ in routes):
+        if all(uses_legacy_routes(provider, workload) for provider, _ in routes):
             return legacy_deploy(config)
         logging.error('Composite workload includes a provider without a route')
         return False
@@ -126,7 +127,7 @@ def determine_playbook(config):
     adapter = workload_route(config)
     if adapter is not None and not _is_legacy_bridge(adapter):
         return adapter.playbook(config)
-    if not uses_legacy_routes(provider):
+    if not uses_legacy_routes(provider, requested_workload(config)):
         return None
     return determine_legacy_playbook(config)
 

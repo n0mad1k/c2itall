@@ -159,10 +159,13 @@ Linode and FlokiNET delegate to the existing functions.
 
 For deployment, playbook selection and cleanup, the dispatcher looks for a
 registered **provider + workload** handler first. If no handler exists, providers
-with legacy support retain their existing route. A handler's failure or invalid
-registration never falls back to legacy execution. Existing selectors and menu
-defaults are preserved; registering one workload does not replace the provider's
-other workloads or advertise unsupported capabilities.
+with explicit legacy support for that workload retain their existing route. A
+handler's failure or invalid registration never falls back to legacy execution.
+Existing selectors and menu defaults are preserved; registering one workload
+does not replace the provider's other workloads or advertise unsupported
+capabilities. Historical unrecognized workload names still retain the broad
+legacy path. FlokiNET is not offered for Attack Box because it has no matching
+legacy playbook.
 
 Attack-box, C2, redirector, phishing and payload-server menus now request their
 canonical workload through this dispatcher. They offer registered handlers plus
@@ -177,9 +180,10 @@ imports. An adapter supplies configuration, validation, key preparation, playboo
 selection, deployment, cleanup and durable-state discovery. New handlers are
 registered in `ProviderSpec.routes`; adding a provider or workload does not
 require adding another provider switch to that module. Azure implements the
-infrastructure and quick-recon attack-box handlers today. AWS, Linode and FlokiNET retain their existing
-workload implementations through the compatibility fallback; they have not been
-silently rewritten or live-tested by this change. WEBRUNNER now uses a composite
+infrastructure and quick-recon attack-box handlers today. AWS, Linode and
+FlokiNET retain only their registered or explicitly declared legacy workload
+implementations; they have not been silently rewritten or live-tested by this
+change. WEBRUNNER now uses a composite
 dispatcher: an all-legacy provider selection runs its existing playbook once, and
 a compatible all-new selection uses its registered handler. Mixed new/legacy or
 incompatible handler selections stop before provisioning because splitting one

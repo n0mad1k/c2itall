@@ -319,7 +319,7 @@ class RoutingAndTemplateTests(AzureFixture):
                 ['aws', 'linode', 'flokinet', 'azure'])
         self.assertEqual(
             provider_utils.available_providers('attack_box', legacy_fallback=True),
-            ['aws', 'linode', 'flokinet', 'azure'])
+            ['aws', 'linode', 'azure'])
 
     def test_workload_config_prefers_registered_handler_then_legacy_loader(self):
         adapter = mock.Mock()
@@ -647,7 +647,7 @@ class RoutingAndTemplateTests(AzureFixture):
             'pairs': 36, 'routes': 21,
             'counts': {
                 'native': 4, 'transition': 17,
-                'legacy_fallback': 7, 'unsupported': 8,
+                'legacy_fallback': 6, 'unsupported': 9,
             },
         })
         rows = registry.provider_support_matrix()
@@ -664,7 +664,7 @@ class RoutingAndTemplateTests(AzureFixture):
             {'c2', 'redirector', 'phishing', 'payload_server', 'webrunner'})
         self.assertEqual(lookup[('aws', 'c2')], 'transition')
         self.assertEqual(lookup[('linode', 'attack_box')], 'transition')
-        self.assertEqual(lookup[('flokinet', 'attack_box')], 'legacy_fallback')
+        self.assertEqual(lookup[('flokinet', 'attack_box')], 'unsupported')
         self.assertEqual(lookup[('aws', 'chat')], 'legacy_fallback')
         self.assertEqual(lookup[('aws', 'infrastructure')], 'unsupported')
 
@@ -861,9 +861,17 @@ class RoutingAndTemplateTests(AzureFixture):
         dispatch.assert_called_once_with(config, module._execute_webrunner_legacy)
 
     def test_existing_routes_remain_and_azure_routes_only_implemented_workloads(self):
-        for provider, dirname in (("aws", "AWS"), ("linode", "Linode"), ("flokinet", "FlokiNET")):
+        for provider, dirname in (("aws", "AWS"), ("linode", "Linode")):
             self.assertEqual(deployment_engine.determine_playbook({"provider": provider, "c2_only": True}), f"providers/{dirname}/c2.yml")
             self.assertEqual(deployment_engine.determine_playbook({"provider": provider, "attack_box_deployment": True}), f"providers/{dirname}/attack_box.yml")
+        self.assertEqual(
+            deployment_engine.determine_playbook(
+                {"provider": "flokinet", "c2_only": True}),
+            "providers/FlokiNET/c2.yml")
+        self.assertIsNone(deployment_engine.determine_playbook({
+            "provider": "flokinet", "provider_workload": "attack_box",
+            "attack_box_deployment": True,
+        }))
         self.assertTrue(deployment_engine.determine_playbook(self.config).endswith("providers/Azure/infrastructure.yml"))
         attack = {
             **self.config, 'provider_workload': 'attack_box',
@@ -876,6 +884,33 @@ class RoutingAndTemplateTests(AzureFixture):
         for extra in ({"c2_only": True}, {"phishing_deployment": True}, {"infrastructure_deployment": False}):
             self.assertIsNone(deployment_engine.determine_playbook({**self.config, **extra}))
 
+    def test_unsupported_flokinet_attack_box_never_enters_legacy_execution(self):
+        import teardown as standalone
+
+        config = {
+            'provider': 'flokinet', 'provider_workload': 'attack_box',
+            'deployment_type': 'kali_attack_box', 'deployment_id': 'unsupported',
+            'attack_box_deployment': True,
+        }
+        with self.assertRaisesRegex(ValueError, 'No configuration route'):
+            provider_utils.gather_provider_config(
+                'flokinet', 'attack_box', legacy_fallback=True)
+
+        legacy_deploy = mock.Mock(return_value=True)
+        self.assertFalse(
+            deployment_engine.dispatch_workload(config, legacy_deploy))
+        legacy_deploy.assert_not_called()
+
+        with mock.patch.object(
+                cleanup_engine, 'execute_legacy_teardown') as cleanup:
+            self.assertFalse(cleanup_engine.execute_teardown(config))
+        cleanup.assert_not_called()
+
+        with mock.patch.object(
+                standalone, 'execute_legacy_teardown') as cleanup:
+            self.assertFalse(standalone.execute_teardown(config))
+        cleanup.assert_not_called()
+
     def test_phantom_and_attack_box_routes_do_not_expose_unimplemented_azure_workloads(self):
         self.assertEqual(
             provider_utils.available_providers('phantom', legacy_fallback=True),
@@ -885,7 +920,7 @@ class RoutingAndTemplateTests(AzureFixture):
             ['aws', 'linode', 'flokinet'])
         self.assertEqual(
             provider_utils.available_providers('attack_box', legacy_fallback=True),
-            ['aws', 'linode', 'flokinet', 'azure'])
+            ['aws', 'linode', 'azure'])
         self.assertEqual(
             provider_utils.available_providers('chat', legacy_fallback=True),
             ['aws', 'linode', 'flokinet', 'azure'])

@@ -19,8 +19,8 @@ from utils.common import COLORS, PROVIDER_DIRS, confirm_action
 from utils.provider_registry import (
     infrastructure_adapter, list_infrastructure_states,
     load_infrastructure_state, prepare_provider_environment,
-    provider_cleanup_guidance, provider_teardown_vars, uses_legacy_routes,
-    workload_route,
+    provider_cleanup_guidance, provider_teardown_vars, requested_workload,
+    uses_legacy_routes, workload_route,
 )
 
 def teardown_by_deployment_id(deployment_id):
@@ -131,10 +131,14 @@ def execute_teardown(config):
     """Execute teardown based on configuration"""
     provider = config.get('provider')
     adapter = workload_route(config)
-    if adapter is None and not uses_legacy_routes(provider):
+    legacy = uses_legacy_routes(provider, requested_workload(config))
+    if adapter is None and not legacy:
         adapter = infrastructure_adapter(provider)
     if adapter is not None:
         return adapter.cleanup(config)
+    if not legacy:
+        logging.error('Provider has no cleanup route for this workload')
+        return False
     return execute_legacy_teardown(config)
 
 

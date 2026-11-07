@@ -20,7 +20,7 @@ try:
     from utils.common import COLORS, PROVIDER_DIRS, setup_logging
     from utils.provider_registry import (
         prepare_provider_environment, provider_cleanup_guidance,
-        workload_route, uses_legacy_routes,
+        requested_workload, workload_route, uses_legacy_routes,
     )
 except ImportError as e:
     print(f"Error importing utils: {e}")
@@ -331,7 +331,7 @@ def execute_teardown(config):
         if callable(cleanup_with_legacy):
             return adapter.cleanup_with_legacy(config, execute_legacy_teardown)
         return adapter.cleanup(config)
-    if not uses_legacy_routes(provider):
+    if not uses_legacy_routes(provider, requested_workload(config)):
         print(f"{COLORS['RED']}Provider has no cleanup route for this workload{COLORS['RESET']}")
         return False
     return execute_legacy_teardown(config)
