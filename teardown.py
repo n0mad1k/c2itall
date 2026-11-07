@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
     from utils.common import COLORS, PROVIDER_DIRS, setup_logging
+    from utils.provider_registry import workload_route, uses_legacy_routes
 except ImportError as e:
     print(f"Error importing utils: {e}")
     print("Make sure you're running this from the c2itall directory")
@@ -314,14 +315,29 @@ def parse_deployment_info(info_file):
         return None
 
 def execute_teardown(config):
-    """Execute the actual teardown"""
+    """Prefer the registered workload cleanup, then preserve legacy behavior."""
     provider = config.get('provider')
-    deployment_id = config.get('deployment_id')
-    
+
     if not provider:
         print(f"{COLORS['RED']}No provider specified in configuration{COLORS['RESET']}")
         return False
-    
+
+    adapter = workload_route(config)
+    if adapter is not None:
+        cleanup_with_legacy = getattr(type(adapter), 'cleanup_with_legacy', None)
+        if callable(cleanup_with_legacy):
+            return adapter.cleanup_with_legacy(config, execute_legacy_teardown)
+        return adapter.cleanup(config)
+    if not uses_legacy_routes(provider):
+        print(f"{COLORS['RED']}Provider has no cleanup route for this workload{COLORS['RESET']}")
+        return False
+    return execute_legacy_teardown(config)
+
+
+def execute_legacy_teardown(config):
+    """Execute the standalone tool's preserved legacy cleanup path."""
+    provider = config.get('provider')
+
     # Set provider environment
     set_provider_environment(config)
     

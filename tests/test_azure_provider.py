@@ -904,6 +904,36 @@ class ProviderContractTests(AzureFixture):
             self.assertFalse(standalone.teardown_deployment('Old_ID', force=True))
             logs.assert_called_once_with('logs/deployment_info_Old_ID*.txt')
 
+    def test_standalone_cleanup_uses_registered_route_before_legacy(self):
+        import teardown as standalone
+
+        config = {'provider': 'aws', 'provider_workload': 'c2',
+                  'deployment_id': 'legacy-1'}
+        with mock.patch.object(
+                standalone, 'execute_legacy_teardown', return_value=False) as legacy:
+            self.assertFalse(standalone.execute_teardown(config))
+        legacy.assert_called_once_with(config)
+
+        native = mock.Mock()
+        spec = registry.PROVIDER_SPECS['aws']._replace(
+            routes={'c2': 'synthetic:Adapter'})
+        with mock.patch.dict(registry.PROVIDER_SPECS, {'aws': spec}), \
+                mock.patch.object(registry, '_load', return_value=lambda: native), \
+                mock.patch.object(standalone, 'execute_legacy_teardown') as legacy:
+            native.cleanup.return_value = False
+            self.assertFalse(standalone.execute_teardown(config))
+            legacy.assert_not_called()
+            native.cleanup.side_effect = RuntimeError('new cleanup failed')
+            with self.assertRaisesRegex(RuntimeError, 'new cleanup failed'):
+                standalone.execute_teardown(config)
+            legacy.assert_not_called()
+
+        missing = {**config, 'provider_workload': 'unmigrated'}
+        with mock.patch.object(
+                standalone, 'execute_legacy_teardown', return_value=True) as legacy:
+            self.assertTrue(standalone.execute_teardown(missing))
+        legacy.assert_called_once_with(missing)
+
     def test_standalone_discovery_merges_state_and_logs_with_adapter_priority(self):
         import teardown as standalone
         state = self.prepare()

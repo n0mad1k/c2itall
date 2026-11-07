@@ -50,9 +50,15 @@ class LegacyProviderAdapter(WorkloadAdapter):
         return legacy_deploy(config)
 
     def cleanup(self, config):
-        self._validate(config, require_workload=False)
         from .cleanup_engine import execute_legacy_teardown
-        return execute_legacy_teardown(config)
+        return self.cleanup_with_legacy(config, execute_legacy_teardown)
+
+    def cleanup_with_legacy(self, config, legacy_cleanup):
+        self._validate(config, require_workload=False)
+        if not callable(legacy_cleanup):
+            raise TypeError("Legacy cleanup executor must be callable")
+        # Preserve the caller's established cleanup behavior exactly once.
+        return legacy_cleanup(config)
 
     def _validate(self, config, require_workload=True):
         providers = config.get("providers")
