@@ -66,14 +66,16 @@ def gather_attack_box_parameters(attack_box_type="kali"):
     print(f"Deployment ID: {COLORS['CYAN']}{config['deployment_id']}{COLORS['RESET']}")
     
     # Provider selection
-    provider = select_provider('attack_box', legacy_fallback=True)
+    provider = select_provider(
+        'attack_box', legacy_fallback=True, variant=attack_box_type)
     if not provider:
         return None
     config['provider'] = provider
     
     # Get provider-specific configuration
     provider_config = gather_provider_config(
-        provider, 'attack_box', legacy_fallback=True)
+        provider, 'attack_box', legacy_fallback=True,
+        variant=attack_box_type)
     if not provider_config:
         return None
     config.update(provider_config)
@@ -270,14 +272,16 @@ def gather_quick_recon_parameters():
     print(f"\nDeployment ID: {COLORS['CYAN']}{config['deployment_id']}{COLORS['RESET']}")
     
     # Provider selection
-    provider = select_provider('attack_box', legacy_fallback=True)
+    provider = select_provider(
+        'attack_box', legacy_fallback=True, variant='quick_recon')
     if not provider:
         return None
     config['provider'] = provider
     
     # Get provider-specific configuration
     provider_config = gather_provider_config(
-        provider, 'attack_box', legacy_fallback=True)
+        provider, 'attack_box', legacy_fallback=True,
+        variant='quick_recon')
     if not provider_config:
         return None
     config.update(provider_config)

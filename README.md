@@ -163,9 +163,11 @@ with explicit legacy support for that workload retain their existing route. A
 handler's failure or invalid registration never falls back to legacy execution.
 Existing selectors and menu defaults are preserved; registering one workload
 does not replace the provider's other workloads or advertise unsupported
-capabilities. Historical unrecognized workload names still retain the broad
-legacy path. FlokiNET is not offered for Attack Box because it has no matching
-legacy playbook.
+capabilities. Workloads with provider-specific subtypes declare those variants
+in the same registry, so configuration stops before provisioning when a provider
+does not implement the requested subtype. Historical unrecognized workload names
+still retain the broad legacy path. FlokiNET is not offered for Attack Box
+because it has no matching legacy playbook.
 
 Attack-box, C2, redirector, phishing and payload-server menus now request their
 canonical workload through this dispatcher. They offer registered handlers plus
@@ -191,8 +193,9 @@ scan lifecycle would make results and cleanup ambiguous.
 
 The read-only coverage audit derives its result from the same registry used for
 dispatch. It distinguishes native handlers, explicit transition handlers, legacy
-fallbacks and unsupported combinations. Requiring Azure currently exits nonzero
-and lists the service routes that remain unimplemented:
+fallbacks, partial subtype coverage and unsupported combinations. Requiring
+Azure currently exits nonzero and lists the service routes and Attack Box
+variants that remain unimplemented:
 
 ```bash
 python3 scripts/audit_provider_coverage.py --require-provider azure

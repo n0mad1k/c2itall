@@ -320,6 +320,14 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertEqual(
             provider_utils.available_providers('attack_box', legacy_fallback=True),
             ['aws', 'linode', 'azure'])
+        self.assertEqual(
+            provider_utils.available_providers(
+                'attack_box', legacy_fallback=True, variant='quick_recon'),
+            ['aws', 'linode', 'azure'])
+        self.assertEqual(
+            provider_utils.available_providers(
+                'attack_box', legacy_fallback=True, variant='kali'),
+            ['aws', 'linode'])
 
     def test_workload_config_prefers_registered_handler_then_legacy_loader(self):
         adapter = mock.Mock()
@@ -353,8 +361,14 @@ class RoutingAndTemplateTests(AzureFixture):
         with mock.patch.object(
                 azure, 'gather_azure_config', return_value={'source': 'azure'}):
             self.assertEqual(
-                provider_utils.gather_provider_config('azure', 'attack_box'),
+                provider_utils.gather_provider_config(
+                    'azure', 'attack_box', variant='quick_recon'),
                 {'source': 'azure', 'provider_manages_ssh_key': True})
+        with mock.patch.object(azure, 'gather_azure_config') as gather, \
+                self.assertRaisesRegex(ValueError, 'variant kali'):
+            provider_utils.gather_provider_config(
+                'azure', 'attack_box', variant='kali')
+        gather.assert_not_called()
         self.assertTrue(AzureAttackBoxAdapter.manages_ssh_key)
 
         managed = {'provider_manages_ssh_key': True}
@@ -474,13 +488,13 @@ class RoutingAndTemplateTests(AzureFixture):
 
     def test_deferred_module_menus_request_canonical_workload_with_fallback(self):
         cases = (
-            ('modules/attack-box/deploy_attack_box.py', 'gather_attack_box_parameters', 'attack_box'),
-            ('modules/c2/deploy_c2.py', 'gather_c2_parameters', 'c2'),
-            ('modules/redirectors/deploy_redirector.py', 'gather_redirector_parameters', 'redirector'),
-            ('modules/phishing/deploy_phishing.py', 'gather_phishing_parameters', 'phishing'),
-            ('modules/payload-server/deploy_payload.py', 'gather_payload_parameters', 'payload_server'),
+            ('modules/attack-box/deploy_attack_box.py', 'gather_attack_box_parameters', 'attack_box', 'kali'),
+            ('modules/c2/deploy_c2.py', 'gather_c2_parameters', 'c2', None),
+            ('modules/redirectors/deploy_redirector.py', 'gather_redirector_parameters', 'redirector', None),
+            ('modules/phishing/deploy_phishing.py', 'gather_phishing_parameters', 'phishing', None),
+            ('modules/payload-server/deploy_payload.py', 'gather_payload_parameters', 'payload_server', None),
         )
-        for index, (relative_path, function_name, workload) in enumerate(cases):
+        for index, (relative_path, function_name, workload, variant) in enumerate(cases):
             with self.subTest(workload=workload):
                 module_spec = importlib.util.spec_from_file_location(
                     f'deferred_module_{index}', ROOT / relative_path)
@@ -488,9 +502,11 @@ class RoutingAndTemplateTests(AzureFixture):
                 module_spec.loader.exec_module(module)
                 with mock.patch.object(module, 'clear_screen'), mock.patch.object(module, 'print_banner'), mock.patch.object(module, 'generate_deployment_id', return_value='test-id'), mock.patch.object(module, 'select_provider', return_value='aws') as select, mock.patch.object(module, 'gather_provider_config', return_value=None) as gather, contextlib.redirect_stdout(io.StringIO()):
                     self.assertIsNone(getattr(module, function_name)())
-                select.assert_called_once_with(workload, legacy_fallback=True)
-                gather.assert_called_once_with(
-                    'aws', workload, legacy_fallback=True)
+                expected = {'legacy_fallback': True}
+                if variant is not None:
+                    expected['variant'] = variant
+                select.assert_called_once_with(workload, **expected)
+                gather.assert_called_once_with('aws', workload, **expected)
 
     def test_azure_attack_box_menu_leaves_key_ownership_to_provider(self):
         module_spec = importlib.util.spec_from_file_location(
@@ -507,9 +523,10 @@ class RoutingAndTemplateTests(AzureFixture):
         with mock.patch.object(module, 'clear_screen'), mock.patch.object(
                 module, 'print_banner'), mock.patch.object(
                     module, 'generate_deployment_id', return_value='attack-test'), \
-                mock.patch.object(module, 'select_provider', return_value='azure'), \
+                mock.patch.object(
+                    module, 'select_provider', return_value='azure') as select, \
                 mock.patch.object(module, 'gather_provider_config',
-                                  return_value=provider_config), \
+                                  return_value=provider_config) as gather, \
                 mock.patch.object(module, 'get_deployment_name_with_options',
                                   return_value='qr-attack-test'), \
                 mock.patch.object(module, 'get_public_ip', return_value='8.8.8.8'), \
@@ -520,6 +537,11 @@ class RoutingAndTemplateTests(AzureFixture):
                 contextlib.redirect_stdout(io.StringIO()):
             config = module.gather_quick_recon_parameters()
         key.assert_called_once_with(config, 'qr-attack-test')
+        select.assert_called_once_with(
+            'attack_box', legacy_fallback=True, variant='quick_recon')
+        gather.assert_called_once_with(
+            'azure', 'attack_box', legacy_fallback=True,
+            variant='quick_recon')
         self.assertEqual(config['provider'], 'azure')
         self.assertEqual(config['provider_workload'], 'attack_box')
         self.assertNotIn('ssh_key_path', config)
@@ -667,15 +689,33 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertEqual(lookup[('flokinet', 'attack_box')], 'unsupported')
         self.assertEqual(lookup[('aws', 'chat')], 'legacy_fallback')
         self.assertEqual(lookup[('aws', 'infrastructure')], 'unsupported')
+        azure_attack_box = next(
+            row for row in rows
+            if row['provider'] == 'azure' and row['workload'] == 'attack_box')
+        self.assertEqual(azure_attack_box['variants'], [
+            'kali', 'parrot', 'quick_recon', 'ubuntu'])
+        self.assertEqual(
+            azure_attack_box['supported_variants'], ['quick_recon'])
+        self.assertEqual(azure_attack_box['missing_variants'], [
+            'kali', 'parrot', 'ubuntu'])
+        self.assertEqual(azure_attack_box['variant_coverage'], 'partial')
+        aws_attack_box = next(
+            row for row in rows
+            if row['provider'] == 'aws' and row['workload'] == 'attack_box')
+        self.assertEqual(aws_attack_box['variant_coverage'], 'full')
 
         module_spec = importlib.util.spec_from_file_location(
             'provider_coverage_audit',
             ROOT / 'scripts/audit_provider_coverage.py')
         module = importlib.util.module_from_spec(module_spec)
         module_spec.loader.exec_module(module)
+        error = io.StringIO()
         with contextlib.redirect_stdout(io.StringIO()), \
-                contextlib.redirect_stderr(io.StringIO()):
+                contextlib.redirect_stderr(error):
             self.assertEqual(module.main(['--require-provider', 'azure']), 1)
+            self.assertIn(
+                'partial: attack_box (missing kali, parrot, ubuntu)',
+                error.getvalue())
             self.assertEqual(module.main(['--json']), 0)
 
     def test_provider_registry_validation_rejects_route_drift(self):
@@ -714,6 +754,13 @@ class RoutingAndTemplateTests(AzureFixture):
                 mock.patch.object(registry, '_load', side_effect=load), \
                 self.assertRaisesRegex(TypeError, 'invalid adapter'):
             registry.validate_provider_registry(load_references=True)
+
+        invalid_variants = azure._replace(
+            variant_support={'attack_box': frozenset({'missing'})})
+        with mock.patch.dict(
+                registry.PROVIDER_SPECS, {'azure': invalid_variants}), \
+                self.assertRaisesRegex(ValueError, 'variant support'):
+            registry.validate_provider_registry(load_references=False)
 
     def test_workload_catalog_matches_provider_backed_controllers(self):
         expected = {

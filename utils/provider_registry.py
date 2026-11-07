@@ -64,30 +64,38 @@ class ProviderRuntime:
         raise NotImplementedError
 
 
-class WorkloadSpec(namedtuple('_WorkloadSpec', 'entrypoint legacy_fallback')):
+class WorkloadSpec(namedtuple(
+        '_WorkloadSpec', 'entrypoint legacy_fallback variants')):
     """Canonical controller ownership and preserved fallback policy."""
 
     __slots__ = ()
 
-    def __new__(cls, entrypoint, legacy_fallback):
+    def __new__(cls, entrypoint, legacy_fallback, variants=None):
         return super(WorkloadSpec, cls).__new__(
-            cls, entrypoint, legacy_fallback)
+            cls, entrypoint, legacy_fallback, frozenset(variants or ()))
 
 
 class ProviderSpec(namedtuple(
         '_ProviderSpec',
-        'directory ssh_user legacy_menu legacy_capabilities config_loader routes runtime_loader '
+        'directory ssh_user legacy_menu legacy_capabilities variant_support '
+        'config_loader routes runtime_loader '
         'environment_loader profile_loader credential_environment teardown_keys '
         'cleanup_guidance')):
     __slots__ = ()
 
     def __new__(cls, directory, ssh_user, legacy_menu=True,
-                legacy_capabilities=None, config_loader=None, routes=None,
-                runtime_loader=None, environment_loader=None, profile_loader=None,
+                legacy_capabilities=None, variant_support=None,
+                config_loader=None, routes=None, runtime_loader=None,
+                environment_loader=None, profile_loader=None,
                 credential_environment=None, teardown_keys=None,
                 cleanup_guidance=None):
+        normalized_variants = {
+            workload: frozenset(variants)
+            for workload, variants in dict(variant_support or {}).items()
+        }
         return super(ProviderSpec, cls).__new__(cls, directory, ssh_user, legacy_menu,
                                                frozenset(legacy_capabilities or ()),
+                                               normalized_variants,
                                                config_loader, dict(routes or {}),
                                                runtime_loader,
                                                environment_loader,
@@ -121,7 +129,8 @@ WORKLOAD_SPECS = {
     'infrastructure': WorkloadSpec(
         'modules/infrastructure/deploy_infrastructure.py', False),
     'attack_box': WorkloadSpec(
-        'modules/attack-box/deploy_attack_box.py', True),
+        'modules/attack-box/deploy_attack_box.py', True,
+        {'quick_recon', 'kali', 'ubuntu', 'parrot'}),
     'c2': WorkloadSpec('modules/c2/deploy_c2.py', True),
     'redirector': WorkloadSpec(
         'modules/redirectors/deploy_redirector.py', True),
@@ -195,6 +204,7 @@ PROVIDER_SPECS = {
                              routes={workload: _FLOKINET_TRANSITION for workload in
                                      LEGACY_TRANSITION_CAPABILITIES['flokinet']}),
     'azure': ProviderSpec('Azure', 'azureuser', False,
+                          variant_support={'attack_box': {'quick_recon'}},
                           config_loader='utils.azure_utils:gather_azure_config',
                           runtime_loader='utils.azure_runtime:azure_runtime',
                           routes={
@@ -235,8 +245,14 @@ class ProviderDispatcher:
             raise ValueError(f'Registered route is missing for {self.provider}/{workload}')
         return _load(reference)()
 
-    def gather_config(self, capability=None, legacy_fallback=False):
+    def gather_config(self, capability=None, legacy_fallback=False,
+                      variant=None):
         if capability is not None:
+            if not provider_supports_variant(
+                    self.provider, capability, variant):
+                raise ValueError(
+                    'No configuration route for {0}/{1} variant {2}'.format(
+                        self.provider, capability, variant))
             route = self.route(capability)
             if route is not None:
                 config = route.gather_config()
@@ -343,12 +359,13 @@ def provider_cleanup_guidance(provider, deployment_id):
     )
 
 
-def providers_for(capability=None, legacy_fallback=False):
+def providers_for(capability=None, legacy_fallback=False, variant=None):
     """Return providers that can service a workload through a new or legacy route."""
     return [key for key, spec in PROVIDER_SPECS.items()
             if (spec.legacy_menu if capability is None else
                 capability in spec.capabilities or
-                (legacy_fallback and capability in spec.legacy_capabilities))]
+                (legacy_fallback and capability in spec.legacy_capabilities))
+            and provider_supports_variant(key, capability, variant)]
 
 
 def provider_route_kind(provider, workload):
@@ -369,14 +386,58 @@ def provider_route_kind(provider, workload):
     return 'unsupported'
 
 
+def provider_supported_variants(provider, workload):
+    """Return the declared workload variants a provider can actually service."""
+    if workload not in CANONICAL_WORKLOADS:
+        raise ValueError('Unknown canonical workload: ' + str(workload))
+    if provider not in PROVIDER_SPECS:
+        raise ValueError('Unknown provider: ' + str(provider))
+    variants = WORKLOAD_SPECS[workload].variants
+    if not variants or provider_route_kind(provider, workload) == 'unsupported':
+        return frozenset()
+    return PROVIDER_SPECS[provider].variant_support.get(workload, variants)
+
+
+def provider_supports_variant(provider, workload, variant=None):
+    """Check an optional workload subtype before configuration or provisioning."""
+    if variant is None or workload is None:
+        return True
+    if workload not in CANONICAL_WORKLOADS:
+        raise ValueError('Unknown canonical workload: ' + str(workload))
+    variants = WORKLOAD_SPECS[workload].variants
+    if not variants:
+        raise ValueError('Workload does not define variants: ' + workload)
+    if variant not in variants:
+        raise ValueError(
+            'Unknown workload variant: {0}/{1}'.format(workload, variant))
+    return variant in provider_supported_variants(provider, workload)
+
+
 def provider_support_matrix():
     """Return deterministic provider/workload coverage from dispatch metadata."""
-    return [
-        {'provider': provider, 'workload': workload,
-         'route_kind': provider_route_kind(provider, workload)}
-        for provider in PROVIDER_SPECS
-        for workload in CANONICAL_WORKLOADS
-    ]
+    rows = []
+    for provider in PROVIDER_SPECS:
+        for workload in CANONICAL_WORKLOADS:
+            variants = WORKLOAD_SPECS[workload].variants
+            supported = provider_supported_variants(provider, workload)
+            if not variants:
+                coverage = 'not_applicable'
+            elif supported == variants:
+                coverage = 'full'
+            elif supported:
+                coverage = 'partial'
+            else:
+                coverage = 'none'
+            rows.append({
+                'provider': provider,
+                'workload': workload,
+                'route_kind': provider_route_kind(provider, workload),
+                'variants': sorted(variants),
+                'supported_variants': sorted(supported),
+                'missing_variants': sorted(variants - supported),
+                'variant_coverage': coverage,
+            })
+    return rows
 
 
 def validate_provider_registry(load_references=True):
@@ -402,6 +463,11 @@ def validate_provider_registry(load_references=True):
             raise TypeError('Invalid workload specification: ' + workload)
         if type(spec.legacy_fallback) is not bool:
             raise TypeError('Workload legacy_fallback must be a boolean: ' + workload)
+        if (not isinstance(spec.variants, frozenset) or
+                any(not isinstance(variant, str) or not variant or
+                    variant.strip() != variant
+                    for variant in spec.variants)):
+            raise ValueError('Invalid workload variants: ' + workload)
         if (not isinstance(spec.entrypoint, str) or not spec.entrypoint or
                 Path(spec.entrypoint).is_absolute() or '..' in Path(spec.entrypoint).parts):
             raise ValueError('Invalid workload controller entrypoint: ' + workload)
@@ -447,6 +513,21 @@ def validate_provider_registry(load_references=True):
                 for workload in spec.legacy_capabilities) or
                 (spec.legacy_capabilities and not spec.legacy_menu)):
             raise ValueError('Invalid provider legacy capabilities: ' + provider)
+        if not isinstance(spec.variant_support, dict):
+            raise ValueError('Invalid provider variant support: ' + provider)
+        for workload, variants in spec.variant_support.items():
+            if workload not in CANONICAL_WORKLOADS:
+                raise ValueError(
+                    'Unknown provider variant workload: {0}/{1}'.format(
+                        provider, workload))
+            declared = WORKLOAD_SPECS[workload].variants
+            if (not isinstance(variants, frozenset) or not variants or
+                    not variants.issubset(declared) or
+                    (workload not in spec.routes and
+                     workload not in spec.legacy_capabilities)):
+                raise ValueError(
+                    'Invalid provider variant support: {0}/{1}'.format(
+                        provider, workload))
 
         for field in reference_fields:
             reference = getattr(spec, field)
@@ -529,6 +610,16 @@ def validate_provider_registry(load_references=True):
         if (route_kind in ('native', 'transition')) != bool(route):
             raise ValueError('Provider route classification drift: {0}/{1}'.format(
                 provider, workload))
+        for variant in row['variants']:
+            available = provider in providers_for(
+                workload,
+                legacy_fallback=workload in LEGACY_FALLBACK_WORKLOADS,
+                variant=variant)
+            supported = variant in row['supported_variants']
+            if available != supported:
+                raise ValueError(
+                    'Provider variant selection disagrees with coverage: '
+                    '{0}/{1}/{2}'.format(provider, workload, variant))
 
     return {
         'providers': len(PROVIDER_SPECS),

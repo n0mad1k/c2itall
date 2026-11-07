@@ -32,17 +32,32 @@ def main(argv=None):
         print('Registry valid: {providers} providers, {workloads} workloads, '
               '{controllers} controllers, {pairs} pairs, {routes} routes'.format(
                   **validation))
-        print('{0:<10} {1:<18} {2}'.format(
-            'PROVIDER', 'WORKLOAD', 'ROUTE'))
+        print('{0:<10} {1:<18} {2:<18} {3}'.format(
+            'PROVIDER', 'WORKLOAD', 'ROUTE', 'VARIANTS'))
         for row in rows:
-            print('{provider:<10} {workload:<18} {route_kind}'.format(**row))
+            variant_summary = ('-' if not row['variants'] else
+                               '{0}/{1}'.format(
+                                   len(row['supported_variants']),
+                                   len(row['variants'])))
+            print('{provider:<10} {workload:<18} {route_kind:<18} '
+                  '{variant_summary}'.format(
+                      variant_summary=variant_summary, **row))
     if args.require_provider:
         missing = [row['workload'] for row in rows
                    if row['provider'] == args.require_provider and
                    row['route_kind'] == 'unsupported']
-        if missing:
-            print('{0} lacks: {1}'.format(
-                args.require_provider, ', '.join(missing)), file=sys.stderr)
+        partial = [row for row in rows
+                   if row['provider'] == args.require_provider and
+                   row['variant_coverage'] == 'partial']
+        if missing or partial:
+            details = []
+            if missing:
+                details.append('lacks: ' + ', '.join(missing))
+            for row in partial:
+                details.append('partial: {0} (missing {1})'.format(
+                    row['workload'], ', '.join(row['missing_variants'])))
+            print('{0} {1}'.format(
+                args.require_provider, '; '.join(details)), file=sys.stderr)
             return 1
     return 0
 

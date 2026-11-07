@@ -9,14 +9,16 @@ from .provider_registry import (
 )
 from .ssh_utils import generate_ssh_key
 
-def available_providers(capability=None, legacy_fallback=False):
+def available_providers(capability=None, legacy_fallback=False, variant=None):
     """Advertise registered handlers plus explicitly allowed legacy providers."""
-    return providers_for(capability, legacy_fallback=legacy_fallback)
+    return providers_for(
+        capability, legacy_fallback=legacy_fallback, variant=variant)
 
 
-def select_provider(capability=None, legacy_fallback=False):
+def select_provider(capability=None, legacy_fallback=False, variant=None):
     """Let the user select a cloud provider"""
-    providers = available_providers(capability, legacy_fallback=legacy_fallback)
+    providers = available_providers(
+        capability, legacy_fallback=legacy_fallback, variant=variant)
     if not providers:
         print('No provider implements this capability.')
         return None
@@ -38,11 +40,13 @@ def select_provider(capability=None, legacy_fallback=False):
         except ValueError:
             print(f"{COLORS['RED']}Please enter a valid number{COLORS['RESET']}")
 
-def gather_provider_config(provider, capability=None, legacy_fallback=False):
+def gather_provider_config(provider, capability=None, legacy_fallback=False,
+                           variant=None):
     """Gather configuration for the specified provider"""
     dispatcher = provider_dispatcher(provider)
     if dispatcher is not None:
-        return dispatcher.gather_config(capability, legacy_fallback=legacy_fallback)
+        return dispatcher.gather_config(
+            capability, legacy_fallback=legacy_fallback, variant=variant)
     print(f"{COLORS['RED']}Unknown provider: {provider}{COLORS['RESET']}")
     return None
 
