@@ -8,26 +8,12 @@ where the deployment engine may select its legacy fallback directly.
 from .provider_registry import WorkloadAdapter
 
 
-MIGRATED_CAPABILITIES = {
-    "aws": frozenset({
-        "attack_box", "c2", "payload_server", "phishing", "redirector",
-        "webrunner",
-    }),
-    "linode": frozenset({
-        "attack_box", "c2", "payload_server", "phishing", "redirector",
-        "webrunner",
-    }),
-    "flokinet": frozenset({
-        "c2", "payload_server", "phishing", "redirector", "webrunner",
-    }),
-}
-
-
 class LegacyProviderAdapter(WorkloadAdapter):
     """Explicit, one-call bridge used while a workload gains a native route."""
 
     def __init__(self, provider):
-        if provider not in MIGRATED_CAPABILITIES:
+        from .provider_registry import LEGACY_TRANSITION_CAPABILITIES
+        if provider not in LEGACY_TRANSITION_CAPABILITIES:
             raise ValueError(f"Unsupported transition provider: {provider}")
         self.provider = provider
 
@@ -85,9 +71,11 @@ class LegacyProviderAdapter(WorkloadAdapter):
         elif config.get("provider") != self.provider:
             raise ValueError("Provider route does not match deployment provider")
         if require_workload:
-            from .provider_registry import requested_workload
+            from .provider_registry import (
+                LEGACY_TRANSITION_CAPABILITIES, requested_workload,
+            )
             workload = requested_workload(config)
-            if workload not in MIGRATED_CAPABILITIES[self.provider]:
+            if workload not in LEGACY_TRANSITION_CAPABILITIES[self.provider]:
                 raise ValueError(
                     f"Transition route does not support {self.provider}/{workload}")
 

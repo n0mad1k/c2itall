@@ -87,6 +87,19 @@ class ProviderSpec(namedtuple(
 _AWS_TRANSITION = 'utils.legacy_provider_adapter:aws_adapter'
 _LINODE_TRANSITION = 'utils.legacy_provider_adapter:linode_adapter'
 _FLOKINET_TRANSITION = 'utils.legacy_provider_adapter:flokinet_adapter'
+LEGACY_TRANSITION_CAPABILITIES = {
+    'aws': frozenset({
+        'attack_box', 'c2', 'payload_server', 'phishing', 'redirector',
+        'webrunner',
+    }),
+    'linode': frozenset({
+        'attack_box', 'c2', 'payload_server', 'phishing', 'redirector',
+        'webrunner',
+    }),
+    'flokinet': frozenset({
+        'c2', 'payload_server', 'phishing', 'redirector', 'webrunner',
+    }),
+}
 
 
 PROVIDER_SPECS = {
@@ -98,24 +111,21 @@ PROVIDER_SPECS = {
                         ),
                         teardown_keys=(
                             'aws_access_key', 'aws_secret_key', 'aws_region'),
-                        routes={workload: _AWS_TRANSITION for workload in (
-                            'attack_box', 'c2', 'payload_server', 'phishing',
-                            'redirector', 'webrunner')}),
+                        routes={workload: _AWS_TRANSITION for workload in
+                                LEGACY_TRANSITION_CAPABILITIES['aws']}),
     'linode': ProviderSpec('Linode', 'root', config_loader='utils.linode_utils:gather_linode_config',
                            environment_loader='utils.linode_utils:prepare_linode_environment',
                            credential_environment=(
                                ('linode_token', 'LINODE_TOKEN'),),
                            teardown_keys=('linode_token', 'linode_region'),
-                           routes={workload: _LINODE_TRANSITION for workload in (
-                               'attack_box', 'c2', 'payload_server', 'phishing',
-                               'redirector', 'webrunner')}),
+                           routes={workload: _LINODE_TRANSITION for workload in
+                                   LEGACY_TRANSITION_CAPABILITIES['linode']}),
     'flokinet': ProviderSpec('FlokiNET', 'root', config_loader='utils.flokinet_utils:gather_flokinet_config',
                              environment_loader='utils.flokinet_utils:prepare_flokinet_environment',
                              credential_environment=(
                                  ('flokinet_api_key', 'FLOKINET_API_KEY'),),
-                             routes={workload: _FLOKINET_TRANSITION for workload in (
-                                 'c2', 'payload_server', 'phishing', 'redirector',
-                                 'webrunner')}),
+                             routes={workload: _FLOKINET_TRANSITION for workload in
+                                     LEGACY_TRANSITION_CAPABILITIES['flokinet']}),
     'azure': ProviderSpec('Azure', 'azureuser', False,
                           config_loader='utils.azure_utils:gather_azure_config',
                           runtime_loader='utils.azure_runtime:azure_runtime',

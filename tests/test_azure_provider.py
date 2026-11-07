@@ -582,6 +582,9 @@ class RoutingAndTemplateTests(AzureFixture):
         }
         for provider, workloads in expected.items():
             with self.subTest(provider=provider):
+                self.assertEqual(
+                    registry.LEGACY_TRANSITION_CAPABILITIES[provider],
+                    workloads)
                 self.assertTrue(workloads.issubset(
                     registry.PROVIDER_SPECS[provider].capabilities))
                 for workload in workloads:
@@ -604,6 +607,10 @@ class RoutingAndTemplateTests(AzureFixture):
                 cleanup_engine, 'execute_legacy_teardown', return_value=True) as cleanup:
             self.assertTrue(registry.workload_route(config).cleanup(config))
         cleanup.assert_called_once_with(config)
+
+        transition_source = (
+            ROOT / 'utils/legacy_provider_adapter.py').read_text()
+        self.assertNotIn('MIGRATED_CAPABILITIES', transition_source)
 
     def test_legacy_lifecycle_artifacts_are_owner_only_and_hide_teardown_secrets(self):
         logs = self.home / 'logs'
