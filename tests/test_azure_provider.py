@@ -519,6 +519,93 @@ class RoutingAndTemplateTests(AzureFixture):
         for extra in ({"c2_only": True}, {"attack_box_deployment": True}, {"phishing_deployment": True}, {"infrastructure_deployment": False}):
             self.assertIsNone(deployment_engine.determine_playbook({**self.config, **extra}))
 
+    def test_phantom_route_is_advertised_without_exposing_other_azure_workloads(self):
+        self.assertEqual(
+            provider_utils.available_providers('phantom', legacy_fallback=True),
+            ['aws', 'linode', 'flokinet', 'azure'])
+        self.assertEqual(
+            provider_utils.available_providers('c2', legacy_fallback=True),
+            ['aws', 'linode', 'flokinet'])
+
+    def test_azure_phantom_adapter_limits_service_ports_and_maps_outputs(self):
+        from utils.azure_phantom_adapter import AzurePhantomAdapter
+        adapter = AzurePhantomAdapter()
+        config = {
+            'provider': 'azure', 'provider_workload': 'phantom',
+            'deployment_id': 'test-azure', 'server_type': 'vpn',
+            'vpn_port': '51820', 'azure_subscription_id': smoke.SUBSCRIPTION,
+            'azure_location': 'eastus', 'azure_vm_size': smoke.SIZE,
+            'operator_ip': '8.8.8.8', 'azure_state_dir': str(self.state_dir),
+        }
+        infrastructure = adapter._infrastructure_config(config)
+        normalized = azure.validate_config(infrastructure)
+        self.assertEqual(normalized['azure_inbound_rules'], [{
+            'name': 'wireguard', 'protocol': 'Udp', 'port': '51820',
+            'source': '*'}])
+        rules = azure.render_template(infrastructure)['resources'][0][
+            'properties']['securityRules']
+        self.assertEqual(
+            [(rule['properties']['protocol'],
+              rule['properties']['destinationPortRange']) for rule in rules],
+            [('Tcp', '22'), ('Udp', '51820'), ('*', '*')])
+        self.assertEqual(rules[0]['properties']['sourceAddressPrefix'], '8.8.8.8/32')
+
+        state = dict(normalized, outputs={
+            'public_ip': {'value': '1.1.1.1'}}, status='ready')
+        with mock.patch.object(azure, 'prepare_state'), mock.patch.object(
+                azure, 'prepare_ssh_key'), mock.patch.object(
+                    azure, 'deploy_azure', return_value=True), mock.patch.object(
+                        azure, 'load_state', return_value=state):
+            self.assertTrue(adapter.deploy(config))
+        self.assertEqual(config['target_host'], '1.1.1.1')
+        self.assertEqual(config['ssh_user'], 'azureuser')
+        self.assertEqual(config['ssh_key'], str(self.key))
+
+        with mock.patch.object(azure, 'cleanup_azure', return_value=True) as cleanup:
+            self.assertTrue(adapter.cleanup(config))
+        cleanup.assert_called_once_with({
+            'deployment_id': 'test-azure',
+            'azure_state_dir': str(self.state_dir),
+            'azure_subscription_id': smoke.SUBSCRIPTION,
+            'azure_resource_group': 'c2itall-test-azure',
+        })
+
+    def test_azure_phantom_adapter_maps_every_supported_service_allowlist(self):
+        from utils.azure_phantom_adapter import _service_rules
+        expected = {
+            'vpn': {('Udp', 51820)},
+            'dns': {('Tcp', 53), ('Udp', 53), ('Tcp', 80), ('Tcp', 443)},
+            'matrix': {('Tcp', 80), ('Tcp', 443), ('Tcp', 8448)},
+            'email': {('Tcp', 80), ('Tcp', 443), ('Tcp', 25), ('Tcp', 465),
+                      ('Tcp', 587), ('Tcp', 993), ('Tcp', 4190), ('Tcp', 53),
+                      ('Udp', 53)},
+            'cloud': {('Tcp', 80), ('Tcp', 443)},
+            'vault': {('Tcp', 80), ('Tcp', 443)},
+            'media': {('Tcp', 80), ('Tcp', 443)},
+            'all_in_one': {('Tcp', 80), ('Tcp', 443)},
+        }
+        for service, ports in expected.items():
+            with self.subTest(service=service):
+                rules = _service_rules({'server_type': service})
+                self.assertEqual({(rule['protocol'], rule['port']) for rule in rules},
+                                 ports)
+                self.assertTrue(all(rule['source'] == '*' for rule in rules))
+        with self.assertRaises(ValueError):
+            _service_rules({'server_type': 'unsupported'})
+
+    def test_azure_inbound_rules_reject_unsafe_or_ambiguous_values(self):
+        invalid = (
+            'not-a-list',
+            [{'name': 'bad', 'protocol': 'Icmp', 'port': 80, 'source': '*'}],
+            [{'name': 'ssh', 'protocol': 'Tcp', 'port': 22, 'source': '*'}],
+            [{'name': 'web', 'protocol': 'Tcp', 'port': 80, 'source': '0.0.0.0/0'}],
+            [{'name': 'web', 'protocol': 'Tcp', 'port': 80, 'source': '*'},
+             {'name': 'web-2', 'protocol': 'tcp', 'port': '80', 'source': '*'}],
+        )
+        for rules in invalid:
+            with self.subTest(rules=rules), self.assertRaises(ValueError):
+                azure.validate_config({**self.config, 'azure_inbound_rules': rules})
+
     def test_shared_entry_points_dispatch_to_azure(self):
         with mock.patch.object(azure, "deploy_azure", return_value=True) as deploy:
             self.assertTrue(deployment_engine.deploy_infrastructure(self.config))

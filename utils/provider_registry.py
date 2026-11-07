@@ -8,11 +8,21 @@ from collections import namedtuple
 from importlib import import_module
 
 
-class InfrastructureAdapter:
-    """Lifecycle contract; kept importable by legacy Python controllers."""
+class WorkloadAdapter:
+    """Minimum lifecycle contract for a provider/workload implementation."""
 
     def gather_config(self):
         raise NotImplementedError
+
+    def deploy(self, config):
+        raise NotImplementedError
+
+    def cleanup(self, config):
+        raise NotImplementedError
+
+
+class InfrastructureAdapter(WorkloadAdapter):
+    """Recoverable infrastructure contract; importable by legacy controllers."""
 
     def validate_config(self, config, require_key=True):
         raise NotImplementedError
@@ -21,12 +31,6 @@ class InfrastructureAdapter:
         raise NotImplementedError
 
     def playbook(self, config):
-        raise NotImplementedError
-
-    def deploy(self, config):
-        raise NotImplementedError
-
-    def cleanup(self, config):
         raise NotImplementedError
 
     def health(self, config):
@@ -57,7 +61,10 @@ PROVIDER_SPECS = {
     'flokinet': ProviderSpec('FlokiNET', 'root', config_loader='utils.flokinet_utils:gather_flokinet_config'),
     'azure': ProviderSpec('Azure', 'azureuser', False,
                           config_loader='utils.azure_utils:gather_azure_config',
-                          routes={'infrastructure': 'utils.azure_adapter:AzureInfrastructureAdapter'}),
+                          routes={
+                              'infrastructure': 'utils.azure_adapter:AzureInfrastructureAdapter',
+                              'phantom': 'utils.azure_phantom_adapter:AzurePhantomAdapter',
+                          }),
 }
 
 

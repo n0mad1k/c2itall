@@ -23,7 +23,7 @@ CONFIG_KEYS = frozenset({
     'provider', 'deployment_id', 'deployment_type', 'infrastructure_deployment',
     'azure_subscription_id', 'azure_location', 'azure_vm_size',
     'azure_resource_group', 'operator_ip', 'ssh_key_path',
-    'ssh_private_key_path', 'ssh_key_generated',
+    'ssh_private_key_path', 'ssh_key_generated', 'azure_inbound_rules',
 })
 UNSUPPORTED_FLAGS = frozenset({'c2_only', 'deploy_c2', 'c2_framework', 'attack_box_deployment',
     'redirector_only', 'tracker_deployment', 'phishing_deployment', 'chat_deployment',
@@ -200,6 +200,32 @@ def validate_config(config, require_key=True):
     if network.version != 4 or network.prefixlen != 32 or not network.network_address.is_global:
         raise ValueError('operator_ip must be a public IPv4 /32')
     result['operator_ip'] = str(network)
+    inbound = result.get('azure_inbound_rules', [])
+    if not isinstance(inbound, list) or len(inbound) > 16:
+        raise ValueError('azure_inbound_rules must be a list of at most 16 rules')
+    normalized_rules = []
+    seen_rules = set()
+    for rule in inbound:
+        if not isinstance(rule, dict) or set(rule) != {'name', 'protocol', 'port', 'source'}:
+            raise ValueError('Invalid Azure inbound rule shape')
+        name = rule['name']
+        protocol = str(rule['protocol']).title()
+        try:
+            port = int(rule['port'])
+        except (TypeError, ValueError):
+            raise ValueError('Invalid Azure inbound rule port')
+        source = rule['source']
+        if (not isinstance(name, str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,39}', name)
+                or protocol not in ('Tcp', 'Udp') or not 1 <= port <= 65535
+                or port == 22 or source not in ('*', result['operator_ip'])):
+            raise ValueError('Invalid Azure inbound rule')
+        identity = (protocol, port, source)
+        if identity in seen_rules:
+            raise ValueError('Duplicate Azure inbound rule')
+        seen_rules.add(identity)
+        normalized_rules.append({'name': name, 'protocol': protocol,
+                                 'port': str(port), 'source': source})
+    result['azure_inbound_rules'] = normalized_rules
     public = Path(result['ssh_key_path']).expanduser().absolute()
     private = Path(result.get('ssh_private_key_path', str(public).removesuffix('.pub'))).expanduser().absolute()
     if public == private:

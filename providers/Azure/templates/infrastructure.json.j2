@@ -6,8 +6,9 @@
       "type": "Microsoft.Network/networkSecurityGroups", "apiVersion": "2024-05-01",
       "name": {{ names.nsg | tojson }}, "location": {{ azure_location | tojson }}, "tags": {{ tags | tojson }},
       "properties": {"securityRules": [
-        {"name": "operator-ssh", "properties": {"priority": 100, "direction": "Inbound", "access": "Allow", "protocol": "Tcp", "sourcePortRange": "*", "destinationPortRange": "22", "sourceAddressPrefix": {{ operator_ip | tojson }}, "destinationAddressPrefix": "*"}},
-        {"name": "deny-other-inbound", "properties": {"priority": 200, "direction": "Inbound", "access": "Deny", "protocol": "*", "sourcePortRange": "*", "destinationPortRange": "*", "sourceAddressPrefix": "*", "destinationAddressPrefix": "*"}}
+        {"name": "operator-ssh", "properties": {"priority": 100, "direction": "Inbound", "access": "Allow", "protocol": "Tcp", "sourcePortRange": "*", "destinationPortRange": "22", "sourceAddressPrefix": {{ operator_ip | tojson }}, "destinationAddressPrefix": "*"}}{% for rule in azure_inbound_rules %},
+        {"name": {{ rule.name | tojson }}, "properties": {"priority": {{ 109 + loop.index }}, "direction": "Inbound", "access": "Allow", "protocol": {{ rule.protocol | tojson }}, "sourcePortRange": "*", "destinationPortRange": {{ rule.port | tojson }}, "sourceAddressPrefix": {{ rule.source | tojson }}, "destinationAddressPrefix": "*"}}{% endfor %},
+        {"name": "deny-other-inbound", "properties": {"priority": 400, "direction": "Inbound", "access": "Deny", "protocol": "*", "sourcePortRange": "*", "destinationPortRange": "*", "sourceAddressPrefix": "*", "destinationAddressPrefix": "*"}}
       ]}
     },
     {

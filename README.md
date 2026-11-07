@@ -171,8 +171,28 @@ silently rewritten or live-tested by this change. WEBRUNNER now uses a composite
 dispatcher: an all-legacy provider selection runs its existing playbook once, and
 a compatible all-new selection uses its registered handler. Mixed new/legacy or
 incompatible handler selections stop before provisioning because splitting one
-scan lifecycle would make results and cleanup ambiguous. Phantom retains its
-separate provider lifecycle.
+scan lifecycle would make results and cleanup ambiguous.
+
+Phantom uses the same provider/workload dispatcher when c2itall launches it.
+Its legacy AWS, Linode and FlokiNET routes remain unchanged, while the registered
+Azure route provisions the VM through the recoverable Azure infrastructure
+adapter and then runs Phantom's existing hardening and service playbooks. Azure
+network rules are derived from the selected privacy service; SSH remains limited
+to the operator /32. The real-cloud validation command below deploys WireGuard,
+repeats the complete deployment against the same owned resources, verifies the
+running service and client configuration over SSH, verifies Azure VM and NSG
+state, tears down through Phantom, and requires the subscription inventory to
+return to its baseline:
+
+```bash
+python3 scripts/test_azure_phantom_live.py --activate
+```
+
+The live test uses the authenticated Azure CLI subscription
+`cc2a66d1-67c2-47ca-856f-19a4eae52cfe`, East US and `Standard_D2as_v4`. Its
+default mode is a non-mutating description; `--activate` is required to create
+the temporary VM. Evidence is retained under `logs/azure-phantom-live/`; the
+temporary resource group, generated SSH key and Phantom working files are removed.
 Provider registrations remain enabled after the test.
 
 ### Main Menu (Easiest Method)
