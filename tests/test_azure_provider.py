@@ -612,6 +612,35 @@ class RoutingAndTemplateTests(AzureFixture):
             ROOT / 'utils/legacy_provider_adapter.py').read_text()
         self.assertNotIn('MIGRATED_CAPABILITIES', transition_source)
 
+    def test_provider_coverage_audit_reports_actual_azure_gaps(self):
+        rows = registry.provider_support_matrix()
+        lookup = {(row['provider'], row['workload']): row['route_kind']
+                  for row in rows}
+        self.assertEqual(
+            {workload for provider, workload in lookup
+             if provider == 'azure' and lookup[(provider, workload)] == 'native'},
+            {'infrastructure', 'attack_box', 'phantom', 'chat'})
+        self.assertEqual(
+            {workload for provider, workload in lookup
+             if provider == 'azure' and
+             lookup[(provider, workload)] == 'unsupported'},
+            {'c2', 'redirector', 'phishing', 'payload_server', 'webrunner'})
+        self.assertEqual(lookup[('aws', 'c2')], 'transition')
+        self.assertEqual(lookup[('linode', 'attack_box')], 'transition')
+        self.assertEqual(lookup[('flokinet', 'attack_box')], 'legacy_fallback')
+        self.assertEqual(lookup[('aws', 'chat')], 'legacy_fallback')
+        self.assertEqual(lookup[('aws', 'infrastructure')], 'unsupported')
+
+        module_spec = importlib.util.spec_from_file_location(
+            'provider_coverage_audit',
+            ROOT / 'scripts/audit_provider_coverage.py')
+        module = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(module)
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(module.main(['--require-provider', 'azure']), 1)
+            self.assertEqual(module.main(['--json']), 0)
+
     def test_legacy_lifecycle_artifacts_are_owner_only_and_hide_teardown_secrets(self):
         logs = self.home / 'logs'
         logs.mkdir()

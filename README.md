@@ -185,6 +185,15 @@ a compatible all-new selection uses its registered handler. Mixed new/legacy or
 incompatible handler selections stop before provisioning because splitting one
 scan lifecycle would make results and cleanup ambiguous.
 
+The read-only coverage audit derives its result from the same registry used for
+dispatch. It distinguishes native handlers, explicit transition handlers, legacy
+fallbacks and unsupported combinations. Requiring Azure currently exits nonzero
+and lists the service routes that remain unimplemented:
+
+```bash
+python3 scripts/audit_provider_coverage.py --require-provider azure
+```
+
 Phantom uses the same provider/workload dispatcher when c2itall launches it.
 Its legacy AWS, Linode and FlokiNET routes remain unchanged, while the registered
 Azure route provisions the VM through the recoverable Azure infrastructure

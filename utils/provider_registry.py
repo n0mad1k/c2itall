@@ -100,6 +100,17 @@ LEGACY_TRANSITION_CAPABILITIES = {
         'c2', 'payload_server', 'phishing', 'redirector', 'webrunner',
     }),
 }
+CANONICAL_WORKLOADS = (
+    'infrastructure', 'attack_box', 'c2', 'redirector', 'phishing',
+    'payload_server', 'webrunner', 'phantom', 'chat',
+)
+LEGACY_FALLBACK_WORKLOADS = frozenset({
+    'attack_box', 'c2', 'redirector', 'phishing', 'payload_server',
+    'webrunner', 'phantom', 'chat',
+})
+_TRANSITION_REFERENCES = frozenset({
+    _AWS_TRANSITION, _LINODE_TRANSITION, _FLOKINET_TRANSITION,
+})
 
 
 PROVIDER_SPECS = {
@@ -246,6 +257,33 @@ def providers_for(capability=None, legacy_fallback=False):
             if (spec.legacy_menu if capability is None else
                 capability in spec.capabilities or
                 (legacy_fallback and spec.legacy_menu))]
+
+
+def provider_route_kind(provider, workload):
+    """Classify the route actually available to one canonical workload."""
+    if workload not in CANONICAL_WORKLOADS:
+        raise ValueError('Unknown canonical workload: ' + str(workload))
+    spec = PROVIDER_SPECS.get(provider)
+    if spec is None:
+        raise ValueError('Unknown provider: ' + str(provider))
+    reference = spec.routes.get(workload)
+    if reference in _TRANSITION_REFERENCES:
+        return 'transition'
+    if reference:
+        return 'native'
+    if workload in LEGACY_FALLBACK_WORKLOADS and spec.legacy_menu:
+        return 'legacy_fallback'
+    return 'unsupported'
+
+
+def provider_support_matrix():
+    """Return deterministic provider/workload coverage from dispatch metadata."""
+    return [
+        {'provider': provider, 'workload': workload,
+         'route_kind': provider_route_kind(provider, workload)}
+        for provider in PROVIDER_SPECS
+        for workload in CANONICAL_WORKLOADS
+    ]
 
 
 def infrastructure_adapter(provider):
