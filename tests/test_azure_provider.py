@@ -666,10 +666,10 @@ class RoutingAndTemplateTests(AzureFixture):
         validation = registry.validate_provider_registry(load_references=True)
         self.assertEqual(validation, {
             'providers': 4, 'workloads': 9, 'controllers': 9,
-            'pairs': 36, 'routes': 21,
+            'pairs': 36, 'routes': 21, 'staged_routes': 5,
             'counts': {
                 'native': 4, 'transition': 17,
-                'legacy_fallback': 6, 'unsupported': 9,
+                'legacy_fallback': 6, 'staged': 5, 'unsupported': 4,
             },
         })
         rows = registry.provider_support_matrix()
@@ -683,6 +683,11 @@ class RoutingAndTemplateTests(AzureFixture):
             {workload for provider, workload in lookup
              if provider == 'azure' and
              lookup[(provider, workload)] == 'unsupported'},
+            set())
+        self.assertEqual(
+            {workload for provider, workload in lookup
+             if provider == 'azure' and
+             lookup[(provider, workload)] == 'staged'},
             {'c2', 'redirector', 'phishing', 'payload_server', 'webrunner'})
         self.assertEqual(lookup[('aws', 'c2')], 'transition')
         self.assertEqual(lookup[('linode', 'attack_box')], 'transition')
@@ -713,6 +718,9 @@ class RoutingAndTemplateTests(AzureFixture):
         with contextlib.redirect_stdout(io.StringIO()), \
                 contextlib.redirect_stderr(error):
             self.assertEqual(module.main(['--require-provider', 'azure']), 1)
+            self.assertIn(
+                'staged (disabled): c2, redirector, phishing, '
+                'payload_server, webrunner', error.getvalue())
             self.assertIn(
                 'partial: attack_box (missing kali, parrot, ubuntu)',
                 error.getvalue())
@@ -761,6 +769,66 @@ class RoutingAndTemplateTests(AzureFixture):
                 registry.PROVIDER_SPECS, {'azure': invalid_variants}), \
                 self.assertRaisesRegex(ValueError, 'variant support'):
             registry.validate_provider_registry(load_references=False)
+
+        overlapping = azure._replace(
+            staged_routes=dict(azure.staged_routes, attack_box='fake:factory'))
+        with mock.patch.dict(registry.PROVIDER_SPECS, {'azure': overlapping}), \
+                self.assertRaisesRegex(ValueError, 'routes overlap'):
+            registry.validate_provider_registry(load_references=False)
+
+        staged_routes = dict(azure.staged_routes)
+        staged_c2 = staged_routes.pop('c2')
+        promoted_without_implementation = azure._replace(
+            routes=dict(azure.routes, c2=staged_c2),
+            staged_routes=staged_routes)
+        with mock.patch.dict(
+                registry.PROVIDER_SPECS,
+                {'azure': promoted_without_implementation}), \
+                self.assertRaisesRegex(TypeError, 'Active provider route is disabled'):
+            registry.validate_provider_registry(load_references=True)
+
+    def test_azure_staged_routes_prepare_but_cannot_deploy(self):
+        from utils import azure_staged_adapter, azure_utils
+
+        staged = {'c2', 'redirector', 'phishing', 'payload_server', 'webrunner'}
+        dispatcher = registry.provider_dispatcher('azure')
+        self.assertEqual(dispatcher.spec.staged_capabilities, staged)
+        for workload in staged:
+            with self.subTest(workload=workload):
+                self.assertIsNone(dispatcher.route(workload))
+                self.assertNotIn(
+                    'azure', provider_utils.available_providers(
+                        workload, legacy_fallback=True))
+                adapter = dispatcher.staged_route(workload)
+                self.assertIsInstance(
+                    adapter, azure_staged_adapter.AzureStagedWorkloadAdapter)
+                self.assertEqual(adapter.readiness['workload'], workload)
+                self.assertFalse(adapter.readiness['deployment_enabled'])
+                self.assertTrue(adapter.readiness['configuration_ready'])
+                self.assertTrue(adapter.readiness['cleanup_ready'])
+                with mock.patch.object(azure_utils, 'prepare_state') as prepare, \
+                        mock.patch.object(azure_utils, 'deploy_azure') as deploy, \
+                        self.assertRaisesRegex(RuntimeError, 'disabled'):
+                    adapter.deploy({'provider': 'azure'})
+                prepare.assert_not_called()
+                deploy.assert_not_called()
+
+        with mock.patch.object(
+                azure_utils, 'gather_azure_config',
+                return_value={'azure_location': 'eastus'}):
+            self.assertEqual(
+                dispatcher.staged_route('c2').gather_config(),
+                {'azure_location': 'eastus'})
+        cleanup = {
+            'deployment_id': 'staged-cleanup',
+            'azure_subscription_id': smoke.SUBSCRIPTION,
+            'azure_resource_group': 'c2itall-staged-cleanup',
+        }
+        with mock.patch.object(
+                azure_utils, 'cleanup_azure', return_value=True) as execute, \
+                mock.patch.object(cleanup_engine, 'archive_deployment_logs'):
+            self.assertTrue(dispatcher.staged_route('c2').cleanup(cleanup))
+        execute.assert_called_once_with(cleanup)
 
     def test_workload_catalog_matches_provider_backed_controllers(self):
         expected = {

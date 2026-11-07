@@ -13,6 +13,10 @@ from pathlib import Path
 class WorkloadAdapter:
     """Minimum lifecycle contract for a provider/workload implementation."""
 
+    # Staged adapters set this false and remain outside active dispatch. The
+    # registry validates them without making them selectable or executable.
+    deployment_enabled = True
+
     # Native handlers that create a durable, provider-owned recovery key set
     # this explicitly. Module controllers otherwise retain their established
     # legacy key generation behavior.
@@ -78,14 +82,15 @@ class WorkloadSpec(namedtuple(
 class ProviderSpec(namedtuple(
         '_ProviderSpec',
         'directory ssh_user legacy_menu legacy_capabilities variant_support '
-        'config_loader routes runtime_loader '
+        'config_loader routes staged_routes runtime_loader '
         'environment_loader profile_loader credential_environment teardown_keys '
         'cleanup_guidance')):
     __slots__ = ()
 
     def __new__(cls, directory, ssh_user, legacy_menu=True,
                 legacy_capabilities=None, variant_support=None,
-                config_loader=None, routes=None, runtime_loader=None,
+                config_loader=None, routes=None, staged_routes=None,
+                runtime_loader=None,
                 environment_loader=None, profile_loader=None,
                 credential_environment=None, teardown_keys=None,
                 cleanup_guidance=None):
@@ -97,6 +102,7 @@ class ProviderSpec(namedtuple(
                                                frozenset(legacy_capabilities or ()),
                                                normalized_variants,
                                                config_loader, dict(routes or {}),
+                                               dict(staged_routes or {}),
                                                runtime_loader,
                                                environment_loader,
                                                profile_loader,
@@ -107,6 +113,10 @@ class ProviderSpec(namedtuple(
     @property
     def capabilities(self):
         return frozenset(self.routes)
+
+    @property
+    def staged_capabilities(self):
+        return frozenset(self.staged_routes)
 
 
 _AWS_TRANSITION = 'utils.legacy_provider_adapter:aws_adapter'
@@ -212,6 +222,13 @@ PROVIDER_SPECS = {
                               'attack_box': 'utils.azure_workload_adapter:azure_attack_box_adapter',
                               'phantom': 'utils.azure_phantom_adapter:AzurePhantomAdapter',
                               'chat': 'utils.azure_phantom_adapter:AzurePhantomAdapter',
+                          },
+                          staged_routes={
+                              workload: 'utils.azure_staged_adapter:azure_{0}_staged_adapter'.format(
+                                  workload)
+                              for workload in (
+                                  'c2', 'redirector', 'phishing',
+                                  'payload_server', 'webrunner')
                           }),
 }
 
@@ -243,6 +260,17 @@ class ProviderDispatcher:
         reference = self.spec.routes[workload]
         if not reference:
             raise ValueError(f'Registered route is missing for {self.provider}/{workload}')
+        return _load(reference)()
+
+    def staged_route(self, workload):
+        """Load inert provider preparation without entering active dispatch."""
+        if workload not in self.spec.staged_routes:
+            return None
+        reference = self.spec.staged_routes[workload]
+        if not reference:
+            raise ValueError(
+                f'Registered staged route is missing for '
+                f'{self.provider}/{workload}')
         return _load(reference)()
 
     def gather_config(self, capability=None, legacy_fallback=False,
@@ -383,6 +411,8 @@ def provider_route_kind(provider, workload):
     if (workload in LEGACY_FALLBACK_WORKLOADS and
             workload in spec.legacy_capabilities):
         return 'legacy_fallback'
+    if spec.staged_routes.get(workload):
+        return 'staged'
     return 'unsupported'
 
 
@@ -393,7 +423,8 @@ def provider_supported_variants(provider, workload):
     if provider not in PROVIDER_SPECS:
         raise ValueError('Unknown provider: ' + str(provider))
     variants = WORKLOAD_SPECS[workload].variants
-    if not variants or provider_route_kind(provider, workload) == 'unsupported':
+    if (not variants or provider_route_kind(provider, workload) not in
+            ('native', 'transition', 'legacy_fallback')):
         return frozenset()
     return PROVIDER_SPECS[provider].variant_support.get(workload, variants)
 
@@ -538,6 +569,9 @@ def validate_provider_registry(load_references=True):
                 raise TypeError('Provider loader is not callable: {0}/{1}'.format(
                     provider, field))
 
+        if set(spec.routes) & set(spec.staged_routes):
+            raise ValueError('Active and staged provider routes overlap: ' + provider)
+
         for workload, reference in spec.routes.items():
             if workload not in CANONICAL_WORKLOADS:
                 raise ValueError('Unknown provider route workload: {0}/{1}'.format(
@@ -552,6 +586,33 @@ def validate_provider_registry(load_references=True):
                 if not isinstance(adapter, WorkloadAdapter):
                     raise TypeError('Provider route returned an invalid adapter: {0}/{1}'.format(
                         provider, workload))
+                if type(adapter.deployment_enabled) is not bool or not adapter.deployment_enabled:
+                    raise TypeError(
+                        'Active provider route is disabled: {0}/{1}'.format(
+                            provider, workload))
+
+        for workload, reference in spec.staged_routes.items():
+            if workload not in CANONICAL_WORKLOADS:
+                raise ValueError(
+                    'Unknown staged provider workload: {0}/{1}'.format(
+                        provider, workload))
+            _reference_parts(reference)
+            if load_references:
+                factory = _load(reference)
+                if not callable(factory):
+                    raise TypeError(
+                        'Staged provider route factory is not callable: '
+                        '{0}/{1}'.format(provider, workload))
+                adapter = factory()
+                if not isinstance(adapter, WorkloadAdapter):
+                    raise TypeError(
+                        'Staged provider route returned an invalid adapter: '
+                        '{0}/{1}'.format(provider, workload))
+                if (type(adapter.deployment_enabled) is not bool or
+                        adapter.deployment_enabled):
+                    raise TypeError(
+                        'Staged provider route must be disabled: '
+                        '{0}/{1}'.format(provider, workload))
 
         local_config_keys = set()
         local_environment_keys = set()
@@ -594,7 +655,7 @@ def validate_provider_registry(load_references=True):
                     provider, workload))
 
     counts = {kind: 0 for kind in (
-        'native', 'transition', 'legacy_fallback', 'unsupported')}
+        'native', 'transition', 'legacy_fallback', 'staged', 'unsupported')}
     rows = provider_support_matrix()
     for row in rows:
         provider = row['provider']
@@ -603,13 +664,19 @@ def validate_provider_registry(load_references=True):
         counts[route_kind] += 1
         available = provider in providers_for(
             workload, legacy_fallback=workload in LEGACY_FALLBACK_WORKLOADS)
-        if available != (route_kind != 'unsupported'):
+        if available != (route_kind in (
+                'native', 'transition', 'legacy_fallback')):
             raise ValueError('Provider selection disagrees with coverage: {0}/{1}'.format(
                 provider, workload))
         route = PROVIDER_SPECS[provider].routes.get(workload)
         if (route_kind in ('native', 'transition')) != bool(route):
             raise ValueError('Provider route classification drift: {0}/{1}'.format(
                 provider, workload))
+        staged_route = PROVIDER_SPECS[provider].staged_routes.get(workload)
+        if (route_kind == 'staged') != bool(staged_route):
+            raise ValueError(
+                'Provider staged route classification drift: {0}/{1}'.format(
+                    provider, workload))
         for variant in row['variants']:
             available = provider in providers_for(
                 workload,
@@ -627,6 +694,8 @@ def validate_provider_registry(load_references=True):
         'controllers': len(entrypoints),
         'pairs': len(rows),
         'routes': sum(len(spec.routes) for spec in PROVIDER_SPECS.values()),
+        'staged_routes': sum(
+            len(spec.staged_routes) for spec in PROVIDER_SPECS.values()),
         'counts': counts,
     }
 

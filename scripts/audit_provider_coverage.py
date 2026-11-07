@@ -30,7 +30,8 @@ def main(argv=None):
         print(json.dumps(rows, indent=2))
     else:
         print('Registry valid: {providers} providers, {workloads} workloads, '
-              '{controllers} controllers, {pairs} pairs, {routes} routes'.format(
+              '{controllers} controllers, {pairs} pairs, {routes} active routes, '
+              '{staged_routes} staged routes'.format(
                   **validation))
         print('{0:<10} {1:<18} {2:<18} {3}'.format(
             'PROVIDER', 'WORKLOAD', 'ROUTE', 'VARIANTS'))
@@ -46,13 +47,18 @@ def main(argv=None):
         missing = [row['workload'] for row in rows
                    if row['provider'] == args.require_provider and
                    row['route_kind'] == 'unsupported']
+        staged = [row['workload'] for row in rows
+                  if row['provider'] == args.require_provider and
+                  row['route_kind'] == 'staged']
         partial = [row for row in rows
                    if row['provider'] == args.require_provider and
                    row['variant_coverage'] == 'partial']
-        if missing or partial:
+        if missing or staged or partial:
             details = []
             if missing:
                 details.append('lacks: ' + ', '.join(missing))
+            if staged:
+                details.append('staged (disabled): ' + ', '.join(staged))
             for row in partial:
                 details.append('partial: {0} (missing {1})'.format(
                     row['workload'], ', '.join(row['missing_variants'])))

@@ -85,7 +85,8 @@ real deploy/repeat/SSH verification/cleanup cycle by adding `--activate`.
 Kali and full attack-box subtypes are refused because the subscription has not
 accepted the Kali Marketplace image terms; they are not silently mapped to
 Ubuntu. Azure C2, redirector, phishing, payload-server and WEBRUNNER handlers
-are not registered yet and therefore are not advertised as Azure capabilities.
+are registered only as staged, disabled preparation and therefore are not
+advertised as Azure capabilities or reachable through deployment dispatch.
 
 Use an authenticated Azure CLI session (`az login`) and supply the subscription,
 region, VM size and SSH public key explicitly. No Azure SDK package is required;
@@ -177,6 +178,15 @@ names such as `gophish_only` remain deployment details and no longer obscure the
 canonical provider workload. Phishing and payload-server execution also enters
 the dispatcher before their unchanged legacy executors.
 
+`ProviderSpec.staged_routes` holds fail-closed preparation for a future provider
+route. A staged adapter may gather provider configuration and reuse the
+ownership-validated cleanup boundary, but it is excluded from menus and active
+dispatch and its deployment method must remain disabled. Azure uses this state
+for C2, redirector, phishing, payload-server and WEBRUNNER. Activating one still
+requires a reviewed service playbook, least-privilege network contract, remote
+health verification and live repeat/teardown evidence; moving metadata alone is
+not sufficient.
+
 The neutral infrastructure module uses the adapter contract rather than Azure
 imports. An adapter supplies configuration, validation, key preparation, playbook
 selection, deployment, cleanup and durable-state discovery. New handlers are
@@ -193,9 +203,9 @@ scan lifecycle would make results and cleanup ambiguous.
 
 The read-only coverage audit derives its result from the same registry used for
 dispatch. It distinguishes native handlers, explicit transition handlers, legacy
-fallbacks, partial subtype coverage and unsupported combinations. Requiring
-Azure currently exits nonzero and lists the service routes and Attack Box
-variants that remain unimplemented:
+fallbacks, staged disabled handlers, partial subtype coverage and unsupported
+combinations. Requiring Azure currently exits nonzero and lists the staged
+service routes and Attack Box variants that remain unimplemented:
 
 ```bash
 python3 scripts/audit_provider_coverage.py --require-provider azure
