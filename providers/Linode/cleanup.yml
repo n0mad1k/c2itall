@@ -19,6 +19,7 @@
       - "{{ phishing_webserver_name | default('') }}"
       - "{{ payload_server_name | default('ps-' + deployment_id) }}"
       - "{{ payload_redirector_name | default('pr-' + deployment_id) }}"
+      - "{{ phantom_name | default('ph-' + deployment_id) }}"
     linode_known_key_labels:
       - "{{ webrunner_name | default('') }}"
       - "{{ ssh_key_name | default('') }}"

@@ -258,7 +258,8 @@ def create_teardown_vars(config):
             'mta_name', 'gophish_name', 'webserver_name',
             'phishing_redirector_name', 'phishing_webserver_name',
             'payload_server_name', 'payload_redirector_name',
-            'webrunner_name', 'ssh_key_name', 'ssh_key_path'):
+            'webrunner_name', 'phantom_name',
+            'ssh_key_name', 'ssh_key_path'):
         if config.get(key):
             teardown_vars[key] = config[key]
     

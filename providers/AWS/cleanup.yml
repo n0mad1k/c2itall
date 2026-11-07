@@ -14,10 +14,12 @@
     c2_name: "{{ c2_name | default('s-' + deployment_id) }}"
     tracker_name: "{{ tracker_name | default('t-' + deployment_id) }}"
     attack_box_name: "{{ attack_box_name | default('a-' + deployment_id) }}"
+    phantom_resource_name: "{{ phantom_name | default('ph-' + deployment_id) }}"
     aws_cleanup_key_names:
       - "c2deploy_{{ deployment_id }}"
       - "attack-box-{{ deployment_id }}"
       - "{{ webrunner_name | default('') }}"
+      - "{{ phantom_resource_name }}"
     cleanup_summary: {}
     
   tasks:
@@ -50,10 +52,18 @@
           "tag:DeploymentID": "{{ deployment_id }}"
       register: legacy_deployment_instances
 
+    - name: Find historical Phantom instances by deterministic name
+      amazon.aws.ec2_instance_info:
+        region: "{{ aws_region }}"
+        filters:
+          "tag:Name": "{{ phantom_resource_name }}"
+      register: phantom_deployment_instances
+
     - name: Combine deployment instance inventories
       set_fact:
         all_deployment_instances: >-
-          {{ (deployment_instances.instances + legacy_deployment_instances.instances)
+          {{ (deployment_instances.instances + legacy_deployment_instances.instances +
+              phantom_deployment_instances.instances)
              | unique(attribute='instance_id') | list }}
       
     - name: Set fact for instances found
@@ -101,7 +111,8 @@
         named_sgs: >-
           {{ all_sgs.security_groups | selectattr(
              'group_name', 'search', redirector_name + '-sg|' + c2_name +
-             '-sg|webrunner-' + (webrunner_name | default('__none__'))) | list }}
+             '-sg|webrunner-' + (webrunner_name | default('__none__')) +
+             '|' + phantom_resource_name) | list }}
       
     - name: Combine all security groups to delete
       set_fact:
@@ -464,6 +475,22 @@
       retries: 60
       delay: 5
 
+    - name: Verify historical Phantom instances are absent
+      amazon.aws.ec2_instance_info:
+        region: "{{ aws_region }}"
+        filters:
+          "tag:Name": "{{ phantom_resource_name }}"
+          instance-state-name:
+            - pending
+            - running
+            - shutting-down
+            - stopping
+            - stopped
+      register: remaining_phantom_instances
+      until: remaining_phantom_instances.instances | length == 0
+      retries: 60
+      delay: 5
+
     - name: Verify current-tag security groups are absent
       amazon.aws.ec2_security_group_info:
         region: "{{ aws_region }}"
@@ -481,6 +508,16 @@
           "tag:DeploymentID": "{{ deployment_id }}"
       register: remaining_legacy_sgs
       until: remaining_legacy_sgs.security_groups | length == 0
+      retries: 30
+      delay: 10
+
+    - name: Verify historical Phantom security groups are absent
+      amazon.aws.ec2_security_group_info:
+        region: "{{ aws_region }}"
+        filters:
+          group-name: "{{ phantom_resource_name }}"
+      register: remaining_phantom_sgs
+      until: remaining_phantom_sgs.security_groups | length == 0
       retries: 30
       delay: 10
 
@@ -543,6 +580,9 @@
         - "~/.ssh/c2deploy_{{ deployment_id }}.pub"
         - "~/.ssh/c2deploy_{{ attack_box_name }}"
         - "~/.ssh/c2deploy_{{ attack_box_name }}.pub"
+        - "~/.ssh/c2deploy_ph-{{ deployment_id }}"
+        - "~/.ssh/c2deploy_ph-{{ deployment_id }}.pub"
+        - "~/.ssh/c2deploy_ph-{{ deployment_id }}_known_hosts"
         - "~/.ssh/{{ redirector_name }}.pem"
         - "~/.ssh/{{ c2_name }}.pem"
         - "~/.ssh/{{ tracker_name }}.pem"

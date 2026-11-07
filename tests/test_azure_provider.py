@@ -648,15 +648,15 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertEqual([adapter.provider for _, adapter in routes], ['linode', 'aws'])
         self.assertEqual(len({type(adapter) for _, adapter in routes}), 1)
 
-    def test_non_phantom_transition_routes_call_preserved_executor_once(self):
+    def test_transition_routes_call_preserved_executor_once(self):
         from utils.legacy_provider_adapter import LegacyProviderAdapter
         expected = {
-            'aws': {'attack_box', 'c2', 'payload_server', 'phishing',
-                    'redirector', 'webrunner'},
-            'linode': {'attack_box', 'c2', 'payload_server', 'phishing',
-                       'redirector', 'webrunner'},
-            'flokinet': {'c2', 'payload_server', 'phishing', 'redirector',
-                         'webrunner'},
+            'aws': {'attack_box', 'c2', 'chat', 'payload_server', 'phishing',
+                    'phantom', 'redirector', 'webrunner'},
+            'linode': {'attack_box', 'c2', 'chat', 'payload_server',
+                       'phishing', 'phantom', 'redirector', 'webrunner'},
+            'flokinet': {'c2', 'chat', 'payload_server', 'phishing',
+                         'phantom', 'redirector', 'webrunner'},
         }
         for provider, workloads in expected.items():
             with self.subTest(provider=provider):
@@ -690,14 +690,58 @@ class RoutingAndTemplateTests(AzureFixture):
             ROOT / 'utils/legacy_provider_adapter.py').read_text()
         self.assertNotIn('MIGRATED_CAPABILITIES', transition_source)
 
+    def test_transition_bridge_normalizes_phantom_and_chat_provider_inputs(self):
+        from utils.legacy_provider_adapter import LegacyProviderAdapter
+
+        linode = {
+            'provider': 'linode', 'provider_workload': 'chat',
+            'deployment_id': 'chat-test', 'linode_token': 'token',
+            'linode_region': 'us-east',
+            'linode_instance_type': 'g6-standard-1',
+            'linode_image': 'linode/debian12',
+        }
+        execute = mock.Mock(return_value=True)
+        adapter = LegacyProviderAdapter('linode')
+        self.assertTrue(adapter.deploy_with_legacy(linode, execute))
+        execute.assert_called_once_with(linode)
+        self.assertEqual(linode['api_token'], 'token')
+        self.assertEqual(linode['region'], 'us-east')
+        self.assertEqual(linode['plan'], 'g6-standard-1')
+        self.assertEqual(linode['image'], 'linode/debian12')
+        self.assertEqual(linode['phantom_name'], 'ph-chat-test')
+
+        aws = {
+            'provider': 'aws', 'provider_workload': 'phantom',
+            'deployment_id': 'phantom-test', 'region': 'us-east-1',
+            'instance_type': 't3.small',
+        }
+        LegacyProviderAdapter('aws').deploy_with_legacy(aws, mock.Mock(
+            return_value=True))
+        self.assertEqual(aws['aws_region'], 'us-east-1')
+        self.assertEqual(aws['aws_instance_type'], 't3.small')
+
+        flokinet = {
+            'provider': 'flokinet', 'provider_workload': 'chat',
+            'deployment_id': 'floki-chat', 'c2_ip': '192.0.2.10',
+        }
+        LegacyProviderAdapter('flokinet').deploy_with_legacy(
+            flokinet, mock.Mock(return_value=True))
+        self.assertEqual(flokinet['target_host'], '192.0.2.10')
+        self.assertEqual(flokinet['ssh_user'], 'root')
+        with self.assertRaisesRegex(ValueError, 'pre-provisioned host'):
+            LegacyProviderAdapter('flokinet').deploy_with_legacy({
+                'provider': 'flokinet', 'provider_workload': 'phantom',
+                'deployment_id': 'missing-host',
+            }, mock.Mock())
+
     def test_provider_coverage_audit_reports_actual_azure_gaps(self):
         validation = registry.validate_provider_registry(load_references=True)
         self.assertEqual(validation, {
             'providers': 4, 'workloads': 9, 'controllers': 9,
-            'pairs': 36, 'routes': 21, 'staged_routes': 5,
+            'pairs': 36, 'routes': 27, 'staged_routes': 5,
             'counts': {
-                'native': 4, 'transition': 17,
-                'legacy_fallback': 6, 'staged': 5, 'unsupported': 4,
+                'native': 4, 'transition': 23,
+                'legacy_fallback': 0, 'staged': 5, 'unsupported': 4,
             },
         })
         rows = registry.provider_support_matrix()
@@ -720,7 +764,7 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertEqual(lookup[('aws', 'c2')], 'transition')
         self.assertEqual(lookup[('linode', 'attack_box')], 'transition')
         self.assertEqual(lookup[('flokinet', 'attack_box')], 'unsupported')
-        self.assertEqual(lookup[('aws', 'chat')], 'legacy_fallback')
+        self.assertEqual(lookup[('aws', 'chat')], 'transition')
         self.assertEqual(lookup[('aws', 'infrastructure')], 'unsupported')
         azure_attack_box = next(
             row for row in rows
@@ -1617,13 +1661,30 @@ class RoutingAndTemplateTests(AzureFixture):
             'linode_token': 'token', 'linode_region': 'us-east',
             'mta_name': 'mail-name', 'gophish_name': 'gophish-name',
             'webserver_name': 'web-name', 'webrunner_name': 'scan-name',
+            'phantom_name': 'ph-identity-test',
             'ssh_key_name': 'cloud-key', 'ssh_key_path': '/tmp/local-key.pub',
         }
         variables = json.loads(cleanup_engine.create_teardown_vars(config))
         for key in (
                 'mta_name', 'gophish_name', 'webserver_name',
-                'webrunner_name', 'ssh_key_name', 'ssh_key_path'):
+                'webrunner_name', 'phantom_name',
+                'ssh_key_name', 'ssh_key_path'):
             self.assertEqual(variables[key], config[key])
+
+    def test_verified_provider_cleanup_owns_phantom_resources(self):
+        aws = (ROOT / 'providers/AWS/cleanup.yml').read_text()
+        linode = (ROOT / 'providers/Linode/cleanup.yml').read_text()
+        for marker in (
+                'phantom_resource_name',
+                'Find historical Phantom instances by deterministic name',
+                'Verify historical Phantom instances are absent',
+                'Verify historical Phantom security groups are absent',
+                'c2deploy_ph-{{ deployment_id }}'):
+            self.assertIn(marker, aws)
+        self.assertIn("phantom_name | default('ph-' + deployment_id)", linode)
+        self.assertLess(
+            linode.index('Verify every owned Linode is absent'),
+            linode.index('Remove deployment state after verified cloud cleanup'))
 
 
 class ProviderContractTests(AzureFixture):

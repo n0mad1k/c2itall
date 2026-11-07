@@ -32,6 +32,7 @@ class LegacyProviderAdapter(WorkloadAdapter):
         self._validate(config)
         if not callable(legacy_deploy):
             raise TypeError("Legacy executor must be callable")
+        self._normalize_legacy_config(config)
         # Exactly one call: an error or False result is never retried elsewhere.
         return legacy_deploy(config)
 
@@ -43,6 +44,7 @@ class LegacyProviderAdapter(WorkloadAdapter):
         self._validate(config, require_workload=False)
         if not callable(legacy_cleanup):
             raise TypeError("Legacy cleanup executor must be callable")
+        self._normalize_legacy_config(config)
         # Preserve the caller's established cleanup behavior exactly once.
         return legacy_cleanup(config)
 
@@ -67,6 +69,44 @@ class LegacyProviderAdapter(WorkloadAdapter):
             if workload not in LEGACY_TRANSITION_CAPABILITIES[self.provider]:
                 raise ValueError(
                     f"Transition route does not support {self.provider}/{workload}")
+
+    def _normalize_legacy_config(self, config):
+        """Translate provider-owned names to preserved workload inputs in place."""
+        if self.provider == "linode":
+            aliases = (
+                ("linode_token", "api_token"),
+                ("linode_region", "region"),
+                ("linode_instance_type", "plan"),
+                ("linode_image", "image"),
+            )
+        elif self.provider == "aws":
+            aliases = (
+                ("aws_region", "region"),
+                ("aws_instance_type", "instance_type"),
+            )
+        else:
+            aliases = ()
+        for provider_key, legacy_key in aliases:
+            if config.get(provider_key) and not config.get(legacy_key):
+                config[legacy_key] = config[provider_key]
+            elif config.get(legacy_key) and not config.get(provider_key):
+                config[provider_key] = config[legacy_key]
+
+        from .provider_registry import requested_workload
+        if (self.provider == "flokinet" and
+                requested_workload(config) in ("phantom", "chat")):
+            config.setdefault(
+                "target_host",
+                config.get("c2_ip") or config.get("redirector_ip"))
+            config.setdefault("ssh_user", "root")
+            if not config.get("target_host"):
+                raise ValueError(
+                    "FlokiNET Phantom/chat requires a pre-provisioned host")
+
+        if requested_workload(config) in ("phantom", "chat"):
+            config.setdefault(
+                "phantom_name", "ph-" + str(config.get("deployment_id", "")))
+        return config
 
 
 def aws_adapter():

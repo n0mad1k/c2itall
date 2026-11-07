@@ -126,15 +126,16 @@ _LINODE_TRANSITION = 'utils.legacy_provider_adapter:linode_adapter'
 _FLOKINET_TRANSITION = 'utils.legacy_provider_adapter:flokinet_adapter'
 LEGACY_TRANSITION_CAPABILITIES = {
     'aws': frozenset({
-        'attack_box', 'c2', 'payload_server', 'phishing', 'redirector',
-        'webrunner',
+        'attack_box', 'c2', 'chat', 'payload_server', 'phishing', 'phantom',
+        'redirector', 'webrunner',
     }),
     'linode': frozenset({
-        'attack_box', 'c2', 'payload_server', 'phishing', 'redirector',
-        'webrunner',
+        'attack_box', 'c2', 'chat', 'payload_server', 'phishing', 'phantom',
+        'redirector', 'webrunner',
     }),
     'flokinet': frozenset({
-        'c2', 'payload_server', 'phishing', 'redirector', 'webrunner',
+        'c2', 'chat', 'payload_server', 'phishing', 'phantom', 'redirector',
+        'webrunner',
     }),
 }
 WORKLOAD_SPECS = {
