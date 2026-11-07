@@ -23,7 +23,9 @@ from test_azure_phantom_live import preflight, require
 STATE_DIR = ROOT / "deployments" / "azure"
 
 from utils import azure_utils
+from utils.deployment_engine import deploy_infrastructure
 from utils.provider_registry import infrastructure_adapter
+import teardown as standalone_teardown
 
 
 def verify_committed_source(runner):
@@ -31,6 +33,7 @@ def verify_committed_source(runner):
         "providers/Azure/infrastructure.yml",
         "providers/Azure/templates/infrastructure.json.j2",
         "scripts/test_azure_infrastructure_live.py",
+        "teardown.py",
         "tests/test_azure_provider.py",
         "utils/azure_adapter.py", "utils/azure_utils.py",
         "utils/cleanup_engine.py", "utils/deployment_engine.py",
@@ -142,7 +145,8 @@ def activate(operator_ip=None):
         config["azure_deadline"] = time.monotonic() + 1800
         azure_utils.prepare_state(config)
         require(adapter.prepare_key(config), "Azure SSH key preparation failed")
-        require(adapter.deploy(config), "Initial Azure infrastructure deployment failed")
+        require(deploy_infrastructure(config),
+                "Initial routed Azure infrastructure deployment failed")
         first = snapshot(runner, config)
         first_health = adapter.health(config)
         require(first_health.get("healthy") is True, "Initial VM health failed")
@@ -151,7 +155,8 @@ def activate(operator_ip=None):
             "health": first_health})
 
         config["azure_deadline"] = time.monotonic() + 1800
-        require(adapter.deploy(config), "Repeated Azure infrastructure deployment failed")
+        require(deploy_infrastructure(config),
+                "Repeated routed Azure infrastructure deployment failed")
         repeated = snapshot(runner, config)
         repeated_health = adapter.health(config)
         require(repeated_health.get("healthy") is True, "Repeated VM health failed")
@@ -173,7 +178,9 @@ def activate(operator_ip=None):
         try:
             state = STATE_DIR / f"{deployment_id}.json"
             if state.exists() or runner.az("group", "exists", "--name", group) is not False:
-                require(adapter.cleanup(config), "Azure infrastructure cleanup failed")
+                require(standalone_teardown.teardown_deployment(
+                    deployment_id, force=True),
+                    "Routed standalone Azure infrastructure cleanup failed")
             require(runner.az("group", "exists", "--name", group) is False,
                     "Infrastructure resource group remains after cleanup")
             runner.cleanup_subscription()
