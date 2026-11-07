@@ -636,4 +636,26 @@ def _execute_webrunner_legacy(config):
     """Run the existing composite playbook for legacy providers."""
     for provider in config['providers']:
         set_provider_environment({**config, 'provider': provider})
-    return execute_playbook('providers/webrunner.yml', config)
+    success = execute_playbook('providers/webrunner.yml', config)
+    if success:
+        if (config.get('teardown_after_scan', True) and
+                'flokinet' not in config['providers']):
+            public_key = Path(config.get('ssh_key_path', ''))
+            private_key = Path(str(public_key).removesuffix('.pub'))
+            for path in (private_key, public_key):
+                if str(path) not in ('', '.'):
+                    path.unlink(missing_ok=True)
+        return True
+    if not config.get('teardown_after_scan', True):
+        return success
+
+    # A provisioning/configuration failure can occur after a provider accepted
+    # create calls but before the final in-play teardown. Re-enter each
+    # provider's verified cleanup route with the same ownership identity.
+    from utils.cleanup_engine import execute_teardown
+    for provider in config['providers']:
+        cleanup = dict(
+            config, provider=provider, provider_workload='webrunner',
+            preserve_local_keys=True)
+        execute_teardown(cleanup)
+    return False

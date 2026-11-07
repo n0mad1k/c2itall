@@ -548,7 +548,9 @@
         - "~/.ssh/{{ tracker_name }}.pem"
         - "{{ ('~/.ssh/c2deploy_' + webrunner_name) if webrunner_name is defined else '' }}"
         - "{{ ('~/.ssh/c2deploy_' + webrunner_name + '.pub') if webrunner_name is defined else '' }}"
-      when: item | length > 0
+      when:
+        - item | length > 0
+        - not preserve_local_keys | default(false) | bool
       ignore_errors: yes
       register: deleted_ssh_files
       

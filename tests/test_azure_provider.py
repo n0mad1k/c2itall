@@ -975,6 +975,51 @@ class RoutingAndTemplateTests(AzureFixture):
             module.execute_webrunner_deployment(config)
         dispatch.assert_called_once_with(config, module._execute_webrunner_legacy)
 
+    def test_webrunner_failure_reenters_each_verified_cleanup_route(self):
+        module_spec = importlib.util.spec_from_file_location(
+            'webrunner_cleanup_test',
+            ROOT / 'modules/webrunner/deploy_webrunner.py')
+        module = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(module)
+        config = {
+            'providers': ['linode', 'aws'],
+            'provider_workload': 'webrunner',
+            'deployment_id': 'cleanup-test',
+            'webrunner_name': 'wr-cleanup-test',
+            'teardown_after_scan': True,
+            'ssh_key_path': str(self.key) + '.pub',
+        }
+        with mock.patch.object(module, 'set_provider_environment'), \
+                mock.patch.object(
+                    module, 'execute_playbook', return_value=False), \
+                mock.patch(
+                    'utils.cleanup_engine.execute_teardown',
+                    return_value=True) as cleanup:
+            self.assertFalse(module._execute_webrunner_legacy(config))
+        self.assertEqual([call.args[0]['provider']
+                          for call in cleanup.call_args_list],
+                         ['linode', 'aws'])
+        self.assertTrue(all(call.args[0]['preserve_local_keys']
+                            for call in cleanup.call_args_list))
+        self.assertTrue(self.key.exists())
+
+    def test_webrunner_removes_shared_key_only_after_verified_cloud_teardown(self):
+        module_spec = importlib.util.spec_from_file_location(
+            'webrunner_key_cleanup_test',
+            ROOT / 'modules/webrunner/deploy_webrunner.py')
+        module = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(module)
+        public = Path(str(self.key) + '.pub')
+        config = {
+            'providers': ['linode'], 'deployment_id': 'key-cleanup',
+            'teardown_after_scan': True, 'ssh_key_path': str(public),
+        }
+        with mock.patch.object(module, 'set_provider_environment'), \
+                mock.patch.object(module, 'execute_playbook', return_value=True):
+            self.assertTrue(module._execute_webrunner_legacy(config))
+        self.assertFalse(self.key.exists())
+        self.assertFalse(public.exists())
+
     def test_existing_routes_remain_and_azure_routes_only_implemented_workloads(self):
         for provider, dirname in (("aws", "AWS"), ("linode", "Linode")):
             self.assertEqual(deployment_engine.determine_playbook({"provider": provider, "c2_only": True}), f"providers/{dirname}/c2.yml")

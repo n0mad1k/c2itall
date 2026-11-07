@@ -308,6 +308,11 @@
   hosts: localhost
   connection: local
   gather_facts: false
+  vars:
+    all_node_chunks: "{{ lookup('file', node_chunks_file) | from_json }}"
+    linode_chunks: "{{ all_node_chunks | selectattr('provider', 'equalto', 'linode') | list }}"
+    aws_chunks: "{{ all_node_chunks | selectattr('provider', 'equalto', 'aws') | list }}"
+    aws_cleanup_regions: "{{ aws_chunks | map(attribute='region') | unique | list }}"
 
   tasks:
     - name: Teardown Linode nodes
@@ -316,13 +321,101 @@
         method: DELETE
         headers:
           Authorization: "Bearer {{ lookup('env', 'LINODE_TOKEN') }}"
-        status_code: [200, 204]
+        status_code: [200, 204, 404]
       loop: "{{ groups['webrunner_nodes'] | default([]) }}"
       when:
         - teardown_after_scan | default(true) | bool
         - hostvars[item]['provider'] == 'linode'
         - hostvars[item]['linode_instance_id'] is defined
-      ignore_errors: true
+
+    - name: Verify Linode nodes are absent
+      uri:
+        url: "https://api.linode.com/v4/linode/instances/{{ hostvars[item]['linode_instance_id'] }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ lookup('env', 'LINODE_TOKEN') }}"
+        status_code: [200, 404]
+      register: wr_linode_absence
+      until: wr_linode_absence.status == 404
+      retries: 36
+      delay: 5
+      loop: "{{ groups['webrunner_nodes'] | default([]) }}"
+      when:
+        - teardown_after_scan | default(true) | bool
+        - hostvars[item]['provider'] == 'linode'
+        - hostvars[item]['linode_instance_id'] is defined
+      no_log: true
+
+    - name: Inventory Linode profile keys
+      uri:
+        url: "https://api.linode.com/v4/profile/sshkeys?page_size=500"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ lookup('env', 'LINODE_TOKEN') }}"
+        return_content: true
+        status_code: 200
+      register: wr_linode_keys
+      when:
+        - teardown_after_scan | default(true) | bool
+        - linode_chunks | length > 0
+      no_log: true
+
+    - name: Refuse incomplete Linode key inventory
+      assert:
+        that:
+          - wr_linode_keys.json.pages | default(1) | int == 1
+        fail_msg: "Linode profile-key inventory is incomplete."
+      when:
+        - teardown_after_scan | default(true) | bool
+        - linode_chunks | length > 0
+
+    - name: Initialize WEBRUNNER Linode key inventory
+      set_fact:
+        wr_owned_linode_keys: []
+      when:
+        - teardown_after_scan | default(true) | bool
+        - linode_chunks | length > 0
+
+    - name: Select WEBRUNNER Linode profile keys
+      set_fact:
+        wr_owned_linode_keys: "{{ wr_owned_linode_keys + [item] }}"
+      loop: >-
+        {{ (wr_linode_keys | default({'json': {'data': []}})).json.data
+           | default([]) }}
+      loop_control:
+        label: "{{ item.label | default(item.id) }}"
+      when:
+        - teardown_after_scan | default(true) | bool
+        - linode_chunks | length > 0
+        - item.label == webrunner_name
+
+    - name: Delete WEBRUNNER Linode profile keys
+      uri:
+        url: "https://api.linode.com/v4/profile/sshkeys/{{ item.id }}"
+        method: DELETE
+        headers:
+          Authorization: "Bearer {{ lookup('env', 'LINODE_TOKEN') }}"
+        status_code: [200, 204, 404]
+      loop: "{{ wr_owned_linode_keys | default([]) }}"
+      loop_control:
+        label: "{{ item.label }}"
+      no_log: true
+
+    - name: Verify WEBRUNNER Linode profile keys are absent
+      uri:
+        url: "https://api.linode.com/v4/profile/sshkeys/{{ item.id }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ lookup('env', 'LINODE_TOKEN') }}"
+        status_code: [200, 404]
+      register: wr_linode_key_absence
+      until: wr_linode_key_absence.status == 404
+      retries: 12
+      delay: 2
+      loop: "{{ wr_owned_linode_keys | default([]) }}"
+      loop_control:
+        label: "{{ item.label }}"
+      no_log: true
 
     - name: Teardown AWS nodes
       amazon.aws.ec2_instance:
@@ -331,17 +424,74 @@
         instance_ids:
           - "{{ hostvars[item]['ec2_instance_id'] }}"
         region: "{{ hostvars[item]['ec2_region'] }}"
-        state: terminated
+        state: absent
+        wait: true
+        wait_timeout: 300
       loop: "{{ groups['webrunner_nodes'] | default([]) }}"
       when:
         - teardown_after_scan | default(true) | bool
         - hostvars[item]['provider'] == 'aws'
         - hostvars[item]['ec2_instance_id'] is defined
-      ignore_errors: true
+
+    - name: Delete AWS WEBRUNNER security groups
+      amazon.aws.ec2_security_group:
+        access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') }}"
+        secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') }}"
+        name: "webrunner-{{ webrunner_name }}"
+        region: "{{ item }}"
+        state: absent
+      loop: "{{ aws_cleanup_regions }}"
+      when:
+        - teardown_after_scan | default(true) | bool
+        - aws_chunks | length > 0
+
+    - name: Delete AWS WEBRUNNER key pairs
+      amazon.aws.ec2_key:
+        access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') }}"
+        secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') }}"
+        name: "{{ webrunner_name }}"
+        region: "{{ item }}"
+        state: absent
+      loop: "{{ aws_cleanup_regions }}"
+      when:
+        - teardown_after_scan | default(true) | bool
+        - aws_chunks | length > 0
+
+    - name: Verify AWS WEBRUNNER security groups are absent
+      amazon.aws.ec2_security_group_info:
+        access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') }}"
+        secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') }}"
+        region: "{{ item }}"
+        filters:
+          group-name: "webrunner-{{ webrunner_name }}"
+      register: wr_aws_sg_absence
+      until: wr_aws_sg_absence.security_groups | length == 0
+      retries: 30
+      delay: 10
+      loop: "{{ aws_cleanup_regions }}"
+      when:
+        - teardown_after_scan | default(true) | bool
+        - aws_chunks | length > 0
+
+    - name: Verify AWS WEBRUNNER key pairs are absent
+      amazon.aws.ec2_key_info:
+        access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') }}"
+        secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') }}"
+        region: "{{ item }}"
+        names:
+          - "{{ webrunner_name }}"
+      register: wr_aws_key_absence
+      until: wr_aws_key_absence.keypairs | length == 0
+      retries: 12
+      delay: 5
+      loop: "{{ aws_cleanup_regions }}"
+      when:
+        - teardown_after_scan | default(true) | bool
+        - aws_chunks | length > 0
 
     - name: Teardown complete
       debug:
-        msg: "All WEBRUNNER scan nodes destroyed."
+        msg: "All WEBRUNNER scan nodes and provider auxiliaries are absent."
       when:
         - teardown_after_scan | default(true) | bool
         - groups['webrunner_nodes'] is defined

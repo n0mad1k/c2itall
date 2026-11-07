@@ -77,6 +77,20 @@ class ProviderPlaybookSyntaxTests(unittest.TestCase):
         self.assertIn('deployment_id: "{{ deployment_id }}"', attack_box)
         self.assertIn('deployment_id: "{{ deployment_id }}"', webrunner)
 
+    def test_webrunner_teardown_verifies_nodes_and_auxiliaries(self):
+        playbook = (ROOT / "providers/webrunner.yml").read_text()
+        for marker in (
+                "Verify Linode nodes are absent",
+                "Verify WEBRUNNER Linode profile keys are absent",
+                "Delete AWS WEBRUNNER security groups",
+                "Delete AWS WEBRUNNER key pairs",
+                "Verify AWS WEBRUNNER security groups are absent",
+                "Verify AWS WEBRUNNER key pairs are absent",
+        ):
+            self.assertIn(marker, playbook)
+        teardown = playbook[playbook.index("WEBRUNNER — Teardown scan nodes"):]
+        self.assertNotIn("ignore_errors", teardown)
+
 
 if __name__ == "__main__":
     unittest.main()

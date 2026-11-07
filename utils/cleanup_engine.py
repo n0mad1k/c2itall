@@ -263,6 +263,8 @@ def create_teardown_vars(config):
             teardown_vars[key] = config[key]
     
     teardown_vars.update(provider_teardown_vars(config))
+    if type(config.get('preserve_local_keys')) is bool:
+        teardown_vars['preserve_local_keys'] = config['preserve_local_keys']
     
     return json.dumps(teardown_vars)
 
