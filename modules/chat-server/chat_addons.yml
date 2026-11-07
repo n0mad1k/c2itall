@@ -1,0 +1,138 @@
+---
+# Chat-only layer on top of Phantom's Matrix + Element deployment.
+
+- name: Configure team-chat private networking and bot runtime
+  hosts: all
+  become: true
+  vars:
+    chat_tailscale_auth_key: "{{ tailscale_auth_key | default('') }}"
+    chat_bot_support: "{{ enable_bot_support | default(false) }}"
+    chat_hostname: "chat-{{ deployment_id }}"
+    chat_tailscale_distribution: "{{ ansible_distribution | lower }}"
+    chat_tailscale_release: "{{ ansible_distribution_release }}"
+
+  tasks:
+    - name: Install Tailscale repository key
+      get_url:
+        url: "https://pkgs.tailscale.com/stable/{{ chat_tailscale_distribution }}/{{ chat_tailscale_release }}.noarmor.gpg"
+        dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
+        mode: "0644"
+
+    - name: Install Tailscale repository
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/{{ chat_tailscale_distribution }} {{ chat_tailscale_release }} main"
+        filename: tailscale
+        state: present
+
+    - name: Install Tailscale
+      apt:
+        name: tailscale
+        state: present
+        update_cache: true
+
+    - name: Allow direct Tailscale UDP
+      ufw:
+        rule: allow
+        port: "41641"
+        proto: udp
+
+    - name: Enable and start tailscaled
+      service:
+        name: tailscaled
+        state: started
+        enabled: true
+
+    - name: Read Tailscale state
+      command: tailscale status --json
+      register: chat_tailscale_status
+      changed_when: false
+      failed_when: false
+
+    - name: Authenticate Tailscale when a key was supplied
+      command:
+        argv:
+          - tailscale
+          - up
+          - "--auth-key={{ chat_tailscale_auth_key }}"
+          - "--hostname={{ chat_hostname }}"
+          - --ssh
+          - --accept-dns=false
+      when:
+        - chat_tailscale_auth_key | length > 0
+        - chat_tailscale_status.rc != 0 or
+          (chat_tailscale_status.stdout | from_json).BackendState != 'Running'
+      no_log: true
+
+    - name: Install Matrix bot runtime prerequisites
+      apt:
+        name:
+          - python3-venv
+          - python3-pip
+        state: present
+      when: chat_bot_support | bool
+
+    - name: Create Matrix bot directory
+      file:
+        path: /opt/matrix-bots
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: chat_bot_support | bool
+
+    - name: Create Matrix bot virtual environment
+      command: python3 -m venv /opt/matrix-bots/venv
+      args:
+        creates: /opt/matrix-bots/venv/bin/python
+      when: chat_bot_support | bool
+
+    - name: Install matrix-nio bot library
+      command:
+        argv:
+          - /opt/matrix-bots/venv/bin/pip
+          - install
+          - --disable-pip-version-check
+          - matrix-nio
+      args:
+        creates: /opt/matrix-bots/venv/lib/.matrix-nio-installed
+      register: chat_matrix_nio_install
+      when: chat_bot_support | bool
+
+    - name: Mark matrix-nio installation
+      file:
+        path: /opt/matrix-bots/venv/lib/.matrix-nio-installed
+        state: touch
+        mode: "0600"
+      when:
+        - chat_bot_support | bool
+        - chat_matrix_nio_install is changed
+
+    - name: Install Matrix bot systemd template
+      copy:
+        dest: /etc/systemd/system/matrix-bot@.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Matrix bot %i
+          After=network-online.target matrix-synapse.service
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          User=root
+          WorkingDirectory=/opt/matrix-bots
+          ExecStart=/opt/matrix-bots/venv/bin/python /opt/matrix-bots/%i.py
+          Restart=on-failure
+          RestartSec=5
+          NoNewPrivileges=true
+          PrivateTmp=true
+
+          [Install]
+          WantedBy=multi-user.target
+      when: chat_bot_support | bool
+      notify: reload systemd
+
+  handlers:
+    - name: reload systemd
+      systemd:
+        daemon_reload: true

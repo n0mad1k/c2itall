@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Real Azure Phantom test: deploy, repeat, verify WireGuard, and clean up."""
+"""Real Azure Phantom/chat test: deploy, repeat, verify service, and clean up."""
 
 import argparse
 import contextlib
+import importlib.util
 import json
 import os
 from pathlib import Path
+import secrets
 import shutil
 import signal
 import sys
@@ -21,6 +23,7 @@ from deploy_azure_smoke import (IMAGE, LOCATION, SIZE, SUBSCRIPTION, Runner,
 ROOT = Path(__file__).resolve().parents[1]
 PHANTOM_ROOT = ROOT / "ghost_protocol" / "phantom"
 STATE_DIR = ROOT / "deployments" / "azure"
+SERVICES = ("vpn", "matrix")
 
 
 class LiveTestError(RuntimeError):
@@ -35,6 +38,8 @@ def require(condition, message):
 def verify_committed_source(runner):
     parent_paths = (
         "README.md", "providers/Azure/templates/infrastructure.json.j2",
+        "modules/chat-server/deploy_chat.py",
+        "modules/chat-server/chat_addons.yml",
         "scripts/test_azure_phantom_live.py", "tests/test_azure_provider.py",
         "utils/azure_phantom_adapter.py", "utils/azure_utils.py",
         "utils/provider_registry.py",
@@ -43,6 +48,11 @@ def verify_committed_source(runner):
         runner.run(["git", "diff", "--quiet", "HEAD", "--", path])
     for path in ("phantom/phantom.py", "phantom/test_phantom.py",
                  "phantom/playbooks/common/base_hardening.yml",
+                 "phantom/playbooks/matrix/main.yml",
+                 "phantom/playbooks/matrix/tasks/synapse.yml",
+                 "phantom/playbooks/matrix/tasks/element.yml",
+                 "phantom/playbooks/matrix/tasks/nginx.yml",
+                 "phantom/playbooks/matrix/templates/homeserver.yaml.j2",
                  "phantom/playbooks/vpn/tasks/install.yml",
                  "phantom/playbooks/vpn/tasks/configure.yml"):
         runner.run(["git", "-C", str(ROOT / "ghost_protocol"), "diff", "--quiet",
@@ -85,6 +95,18 @@ def preflight(runner):
     runner.az("vm", "image", "show", "--location", LOCATION, "--urn", IMAGE)
 
 
+def expected_allow_rules(config):
+    operator = public_ipv4(config["operator_ip"]) + "/32"
+    service = config["server_type"]
+    if service == "vpn":
+        return {("tcp", "22", operator), ("udp", "51820", "*")}
+    if service == "matrix":
+        return {("tcp", "22", operator), ("tcp", "80", "*"),
+                ("tcp", "443", "*"), ("tcp", "8448", "*"),
+                ("udp", "41641", "*")}
+    raise LiveTestError(f"No expected Azure allowlist for {service}")
+
+
 def resource_snapshot(runner, config):
     group = config["azure_resource_group"]
     vms = runner.az("vm", "list", "--resource-group", group)
@@ -117,8 +139,7 @@ def resource_snapshot(runner, config):
                rule["sourceAddressPrefix"])
               for rule in rules
               if rule["direction"] == "Inbound" and rule["access"] == "Allow"}
-    expected = {("tcp", "22", public_ipv4(config["operator_ip"]) + "/32"),
-                ("udp", "51820", "*")}
+    expected = expected_allow_rules(config)
     require(allows == expected, "Azure NSG does not match the Phantom VPN allowlist")
     require(any(rule["direction"] == "Inbound" and rule["access"] == "Deny"
                 and rule.get("sourceAddressPrefix") == "*"
@@ -163,14 +184,126 @@ def verify_wireguard(runner, config):
             "ssh_password_authentication": False}
 
 
-def verify_wireguard_log_redaction(phantom, deployment_id):
+def verify_matrix(runner, config):
+    address = config["target_host"]
+    domain = config["domain"]
+    admin = f"@{config['matrix_admin_user']}:{config['matrix_server_name']}"
+    python_check = (
+        "import sqlite3,sys;"
+        "db=sqlite3.connect('/var/lib/matrix-synapse/homeserver.db');"
+        f"row=db.execute(\"select count(*) from users where name='{admin}'\").fetchone();"
+        "sys.exit(0 if row and row[0] == 1 else 1)"
+    )
+    command = (
+        "set -eu; "
+        "test \"$(systemctl is-active matrix-synapse)\" = active; "
+        "test \"$(systemctl is-enabled matrix-synapse)\" = enabled; "
+        "test \"$(systemctl is-active nginx)\" = active; "
+        "test \"$(systemctl is-active tailscaled)\" = active; "
+        "test \"$(systemctl is-enabled tailscaled)\" = enabled; "
+        "sudo -n test -s /var/www/element/index.html; "
+        f"sudo -n test -s /etc/ssl/certs/{domain}-selfsigned.crt; "
+        "sudo -n test -s /etc/systemd/system/matrix-bot@.service; "
+        "sudo -n /opt/matrix-bots/venv/bin/python -c 'import nio'; "
+        f"sudo -n python3 -c {json.dumps(python_check)}; "
+        "sudo -n /usr/sbin/sshd -T | grep -q '^passwordauthentication no$'"
+    )
+    ssh = [
+        "ssh", "-F", "/dev/null", "-i", config["ssh_key"],
+        "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes",
+        "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "GlobalKnownHostsFile=/dev/null",
+        "-o", f"UserKnownHostsFile={runner.evidence / 'known_hosts'}",
+        f"azureuser@{address}", command,
+    ]
+    runner.run(ssh, timeout=60)
+    versions = runner.run([
+        "curl", "-k", "--fail", "--silent", "--show-error", "--max-time", "15",
+        "--resolve", f"{domain}:443:{address}",
+        f"https://{domain}/_matrix/client/versions",
+    ])
+    parsed = json.loads(versions)
+    require(isinstance(parsed.get("versions"), list) and parsed["versions"],
+            "Matrix client versions endpoint returned invalid JSON")
+    element_status = runner.run([
+        "curl", "-k", "--silent", "--show-error", "--max-time", "15",
+        "--output", "/dev/null", "--write-out", "%{http_code}",
+        "--resolve", f"{domain}:443:{address}", f"https://{domain}/",
+    ])
+    require(element_status == "200", "Element Web did not return HTTP 200")
+    federation = runner.run([
+        "curl", "-k", "--fail", "--silent", "--show-error", "--max-time", "15",
+        "--resolve", f"{domain}:8448:{address}",
+        f"https://{domain}:8448/_matrix/federation/v1/version",
+    ])
+    require(isinstance(json.loads(federation).get("server"), dict),
+            "Matrix federation endpoint returned invalid JSON")
+    return {"synapse_active": True, "synapse_enabled": True,
+            "nginx_active": True, "element_http_status": 200,
+            "client_api": True, "federation_api": True,
+            "admin_user": True, "self_signed_tls": True,
+            "tailscaled_active": True, "tailscaled_enabled": True,
+            "bot_runtime": True, "bot_unit_template": True,
+            "ssh_password_authentication": False}
+
+
+def verify_service(runner, config):
+    if config["server_type"] == "vpn":
+        return verify_wireguard(runner, config)
+    if config["server_type"] == "matrix":
+        return verify_matrix(runner, config)
+    raise LiveTestError(f"No live service verifier for {config['server_type']}")
+
+
+def verify_service_log_redaction(phantom, deployment_id, config):
     log = phantom.PHANTOM_LOGS / f"deployment_{deployment_id}.log"
     require(log.is_file(), "Phantom deployment log is missing")
     content = log.read_text(errors="replace")
-    forbidden = ("PrivateKey =", "PresharedKey =")
+    forbidden = ["PrivateKey =", "PresharedKey ="]
+    for key in ("matrix_admin_password", "matrix_signing_key",
+                "matrix_form_secret", "matrix_macaroon_secret",
+                "tailscale_auth_key"):
+        if config.get(key):
+            forbidden.append(str(config[key]))
     require(not any(value in content for value in forbidden),
-            "Phantom deployment log contains WireGuard key material")
-    return {"wireguard_key_material_absent": True}
+            "Phantom deployment log contains service key material")
+    return {"service_key_material_absent": True}
+
+
+def service_config(service):
+    if service == "vpn":
+        return {
+            "provider_workload": "phantom", "vpn_port": 51820,
+            "vpn_client_count": 1, "vpn_dns": "1.1.1.1",
+            "vpn_subnet": "10.66.66.0/24", "vpn_allowed_ips": "0.0.0.0/0",
+        }
+    if service == "matrix":
+        return {
+            "provider_workload": "chat", "domain": "matrix.test",
+            "matrix_server_name": "matrix.test", "matrix_admin_user": "liveadmin",
+            "matrix_admin_password": secrets.token_urlsafe(24),
+            "matrix_registration": False, "matrix_element_web": True,
+            "matrix_signing_key": secrets.token_hex(32),
+            "matrix_form_secret": secrets.token_hex(32),
+            "matrix_macaroon_secret": secrets.token_hex(32),
+            "tailscale_auth_key": "", "enable_bot_support": True,
+        }
+    raise LiveTestError(f"Unsupported live service: {service}")
+
+
+def load_chat_module():
+    path = ROOT / "modules" / "chat-server" / "deploy_chat.py"
+    spec = importlib.util.spec_from_file_location("azure_live_chat", path)
+    require(spec is not None and spec.loader is not None, "Could not load chat module")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def deploy_service(service, phantom, config):
+    if service == "matrix":
+        return load_chat_module().deploy_chat(config)
+    return phantom.deploy(service, config)
 
 
 def clean_phantom_files(phantom, deployment_id):
@@ -190,9 +323,9 @@ def clean_phantom_files(phantom, deployment_id):
             path.unlink()
 
 
-def activate(operator_ip=None):
+def activate(service="vpn", operator_ip=None):
     runner = Runner(ROOT)
-    deployment_id = f"phaz-{uuid.uuid4().hex[:12]}"
+    deployment_id = f"phaz-{service}-{uuid.uuid4().hex[:8]}"
     runner.evidence = ROOT / "logs" / "azure-phantom-live" / deployment_id
     runner.evidence.mkdir(parents=True, mode=0o700)
     group = f"c2itall-{deployment_id}"
@@ -202,11 +335,9 @@ def activate(operator_ip=None):
         "deployment_id": deployment_id, "azure_resource_group": group,
         "azure_subscription_id": SUBSCRIPTION, "azure_location": LOCATION,
         "azure_vm_size": SIZE, "azure_state_dir": str(STATE_DIR),
-        "operator_ip": "", "server_type": "vpn", "vpn_port": 51820,
-        "vpn_client_count": 1, "vpn_dns": "1.1.1.1",
-        "vpn_subnet": "10.66.66.0/24", "vpn_allowed_ips": "0.0.0.0/0",
-        "ssh_after_deploy": False,
+        "operator_ip": "", "server_type": service, "ssh_after_deploy": False,
     }
+    config.update(service_config(service))
     phantom = None
     live_passed = cleanup_passed = False
     failure = None
@@ -236,18 +367,20 @@ def activate(operator_ip=None):
 
         config["azure_deadline"] = time.monotonic() + 1800
         with mock.patch("builtins.input", return_value="y"):
-            require(phantom.deploy("vpn", config), "Initial Phantom deployment failed")
+            require(deploy_service(service, phantom, config),
+                    f"Initial Phantom {service} deployment failed")
         first = resource_snapshot(runner, config)
-        first_service = verify_wireguard(runner, config)
+        first_service = verify_service(runner, config)
         runner.record("first-deployment.json", {"azure": first,
                                                  "service": first_service})
 
         config["azure_deadline"] = time.monotonic() + 1800
         with mock.patch("builtins.input", return_value="y"):
-            require(phantom.deploy("vpn", config), "Repeated Phantom deployment failed")
+            require(deploy_service(service, phantom, config),
+                    f"Repeated Phantom {service} deployment failed")
         repeated = resource_snapshot(runner, config)
-        repeated_service = verify_wireguard(runner, config)
-        redaction = verify_wireguard_log_redaction(phantom, deployment_id)
+        repeated_service = verify_service(runner, config)
+        redaction = verify_service_log_redaction(phantom, deployment_id, config)
         require(first["vm_id"].lower() == repeated["vm_id"].lower()
                 and first["resource_ids"] == repeated["resource_ids"],
                 "Repeated Phantom deployment changed Azure resource identity")
@@ -297,12 +430,12 @@ def activate(operator_ip=None):
     runner.record("result.json", {
         "passed": passed, "live_workflow_passed": live_passed,
         "cleanup_passed": cleanup_passed, "failure": failure,
-        "deployment_id": deployment_id, "resource_group": group,
+        "deployment_id": deployment_id, "resource_group": group, "service": service,
     })
     print(f"Evidence: {runner.evidence}")
     if passed:
-        print("Azure Phantom live workflow passed; WireGuard was verified after initial "
-              "and repeated deployment, and the subscription baseline was restored.")
+        print(f"Azure Phantom {service} live workflow passed after initial and repeated "
+              "deployment; the subscription baseline was restored.")
     return 0 if passed else 1
 
 
@@ -310,15 +443,18 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--activate", action="store_true",
                         help="create the temporary Azure VM and run the full workflow")
+    parser.add_argument("--service", choices=SERVICES, default="vpn",
+                        help="safe Phantom service/top-level entry point to validate")
     parser.add_argument("--operator-ip",
                         help="workstation public IPv4; otherwise resolve with api.ipify.org")
     args = parser.parse_args(argv)
     if not args.activate:
         print(f"DRY RUN: no cloud mutations. Target: {SUBSCRIPTION} / {LOCATION} / {SIZE}")
-        print("Activation performs real Phantom provisioning, hardening, WireGuard setup, "
+        print(f"Service: {args.service}")
+        print("Activation performs real Phantom provisioning, hardening, service setup, "
               "repeat deployment, SSH/Azure validation, teardown, and inventory restoration.")
         return 0
-    return activate(args.operator_ip)
+    return activate(args.service, args.operator_ip)
 
 
 if __name__ == "__main__":

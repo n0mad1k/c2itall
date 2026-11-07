@@ -25,8 +25,12 @@ def _service_rules(config):
             *_WEB_RULES,
         ]
     if service == 'matrix':
-        return [*_WEB_RULES, {'name': 'matrix-federation', 'protocol': 'Tcp',
-                              'port': 8448, 'source': '*'}]
+        rules = [*_WEB_RULES, {'name': 'matrix-federation', 'protocol': 'Tcp',
+                               'port': 8448, 'source': '*'}]
+        if config.get('provider_workload') == 'chat':
+            rules.append({'name': 'tailscale-direct', 'protocol': 'Udp',
+                          'port': 41641, 'source': '*'})
+        return rules
     if service == 'email':
         return [
             *_WEB_RULES,

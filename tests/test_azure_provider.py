@@ -526,6 +526,44 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertEqual(
             provider_utils.available_providers('c2', legacy_fallback=True),
             ['aws', 'linode', 'flokinet'])
+        self.assertEqual(
+            provider_utils.available_providers('chat', legacy_fallback=True),
+            ['aws', 'linode', 'flokinet', 'azure'])
+        from utils.azure_phantom_adapter import _service_rules
+        self.assertEqual(
+            {(rule['protocol'], rule['port']) for rule in _service_rules({
+                'server_type': 'matrix', 'provider_workload': 'chat'})},
+            {('Tcp', 80), ('Tcp', 443), ('Tcp', 8448), ('Udp', 41641)})
+
+    def test_deferred_chat_module_uses_shared_provider_route_and_phantom(self):
+        module_spec = importlib.util.spec_from_file_location(
+            'deferred_chat_module', ROOT / 'modules/chat-server/deploy_chat.py')
+        module = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(module)
+        matrix = mock.Mock()
+        matrix.gather_config.side_effect = lambda config: dict(config, domain='matrix.test')
+        with mock.patch.object(module, 'clear_screen'), mock.patch.object(
+                module, 'print_banner'), mock.patch.object(
+                    module, 'select_provider', return_value='azure') as select, mock.patch.object(
+                        module, 'gather_provider_config', return_value={'azure_location': 'eastus'}) as gather, mock.patch.object(
+                            module, 'generate_deployment_id', return_value='chat-test'), mock.patch.object(
+                                module, '_load_matrix_config', return_value=matrix), mock.patch.object(
+                                    module.getpass, 'getpass', return_value=''), mock.patch(
+                                        'builtins.input', return_value='n'):
+            config = module.gather_chat_parameters()
+        select.assert_called_once_with('chat', legacy_fallback=True)
+        gather.assert_called_once_with('azure', 'chat', legacy_fallback=True)
+        self.assertEqual(config['provider_workload'], 'chat')
+        self.assertEqual(config['domain'], 'matrix.test')
+
+        phantom = mock.Mock()
+        phantom.deploy.return_value = True
+        phantom.run_playbook.return_value = True
+        with mock.patch.object(module, '_load_phantom', return_value=phantom):
+            self.assertTrue(module.deploy_chat(config))
+        phantom.deploy.assert_called_once_with('matrix', config)
+        phantom.run_playbook.assert_called_once_with(module.ADDONS_PLAYBOOK, config)
+        phantom.save_deploy_info.assert_called_once_with(config)
 
     def test_azure_phantom_adapter_limits_service_ports_and_maps_outputs(self):
         from utils.azure_phantom_adapter import AzurePhantomAdapter

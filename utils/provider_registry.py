@@ -64,6 +64,7 @@ PROVIDER_SPECS = {
                           routes={
                               'infrastructure': 'utils.azure_adapter:AzureInfrastructureAdapter',
                               'phantom': 'utils.azure_phantom_adapter:AzurePhantomAdapter',
+                              'chat': 'utils.azure_phantom_adapter:AzurePhantomAdapter',
                           }),
 }
 

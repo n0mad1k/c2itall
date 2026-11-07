@@ -195,6 +195,16 @@ the temporary VM. Evidence is retained under `logs/azure-phantom-live/`; the
 temporary resource group, generated SSH key and Phantom working files are removed.
 Provider registrations remain enabled after the test.
 
+The formerly missing **Deploy Chat Server** entry now keeps its distinct purpose:
+it reuses Phantom's Matrix + Element core, then adds Tailscale private networking
+and optional `matrix-nio` bot runtime/systemd scaffolding. It enters through the
+canonical `chat` provider route. Azure uses the registered recoverable adapter;
+AWS, Linode and FlokiNET retain Phantom's existing provider lifecycle as the
+legacy fallback. A blank Tailscale key installs and starts `tailscaled` for later
+manual authentication; a supplied key is handled with Ansible output suppression.
+Deployment summaries redact passwords, auth keys and generated Matrix secrets;
+owner-only deployment information remains available for recovery.
+
 ### Main Menu (Easiest Method)
 
 Simply run:
