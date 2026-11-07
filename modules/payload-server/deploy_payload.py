@@ -298,7 +298,15 @@ def execute_ansible_deployment(config):
 
     from utils.deployment_engine import execute_playbook, set_provider_environment
     set_provider_environment(config)
-    return execute_playbook(playbook_path, config)
+    success = execute_playbook(playbook_path, config)
+    if success:
+        return True
+    from utils.cleanup_engine import execute_teardown
+    if not execute_teardown(config):
+        print(
+            f"{COLORS['RED']}Payload deployment cleanup was not verified; "
+            f"retain recovery data.{COLORS['RESET']}")
+    return False
 
 if __name__ == "__main__":
     payload_menu()

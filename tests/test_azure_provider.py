@@ -597,6 +597,19 @@ class RoutingAndTemplateTests(AzureFixture):
         execute.assert_called_once()
         self.assertEqual(execute.call_args.args[1], config)
 
+        with mock.patch.object(module.os.path, 'exists', return_value=True), \
+                mock.patch.object(
+                    deployment_engine, 'set_provider_environment'), \
+                mock.patch.object(
+                    deployment_engine, 'execute_playbook',
+                    return_value=False), \
+                mock.patch.object(
+                    cleanup_engine, 'execute_teardown',
+                    return_value=False) as cleanup, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(module.execute_ansible_deployment(config))
+        cleanup.assert_called_once_with(config)
+
     def test_phishing_executor_uses_shared_runtime_and_cleans_partial_failure(self):
         module_spec = importlib.util.spec_from_file_location(
             'phishing_runtime_test',
@@ -642,6 +655,24 @@ class RoutingAndTemplateTests(AzureFixture):
         executor = source[source.index('def execute_component_deployment'):]
         self.assertNotIn('subprocess.run', executor)
         self.assertNotIn('NamedTemporaryFile', executor)
+
+    def test_failed_transition_playbook_enters_verified_cleanup_once(self):
+        config = {
+            'provider': 'aws', 'provider_workload': 'c2',
+            'deployment_id': 'failed-transition', 'c2_only': True,
+        }
+        with mock.patch.object(
+                deployment_engine, 'set_provider_environment') as environment, \
+                mock.patch.object(
+                    deployment_engine, 'execute_playbook',
+                    return_value=False) as execute, \
+                mock.patch.object(
+                    cleanup_engine, 'execute_teardown',
+                    return_value=False) as cleanup:
+            self.assertFalse(deployment_engine.deploy_infrastructure(config))
+        environment.assert_called_once_with(config)
+        execute.assert_called_once_with('providers/AWS/c2.yml', config)
+        cleanup.assert_called_once_with(config)
 
     def test_composite_dispatch_uses_one_lifecycle_and_refuses_partial_fallback(self):
         config = {'providers': ['linode', 'aws'],

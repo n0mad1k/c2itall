@@ -109,8 +109,18 @@ def _deploy_infrastructure_legacy(config):
     # Set provider-specific environment variables
     set_provider_environment(config)
 
-    # Execute the deployment
-    return execute_playbook(playbook, config)
+    # Execute the deployment. A failed provider playbook may have accepted
+    # create calls before returning nonzero, so enter the same verified
+    # cleanup route before reporting failure.
+    success = execute_playbook(playbook, config)
+    if success:
+        return True
+    from utils.cleanup_engine import execute_teardown
+    logging.warning('Deployment failed; attempting verified provider cleanup')
+    if not execute_teardown(config):
+        logging.error(
+            'Failed deployment cleanup was not verified; retain recovery data')
+    return False
 
 
 def determine_playbook(config):
