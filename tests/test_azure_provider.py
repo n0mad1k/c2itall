@@ -860,6 +860,12 @@ class RoutingAndTemplateTests(AzureFixture):
             self.assertTrue(adapter.cleanup(config))
         archive.assert_called_once_with('test-azure')
 
+    def test_quick_recon_uses_supported_ansible_fact_access(self):
+        source = (ROOT / 'modules/attack-box/tasks/configure_quick_recon.yml').read_text()
+        self.assertNotIn('ansible_date_time', source)
+        self.assertNotIn('ansible_default_ipv4', source)
+        self.assertIn("ansible_facts['date_time']['epoch']", source)
+
     def test_azure_phantom_adapter_maps_every_supported_service_allowlist(self):
         from utils.azure_phantom_adapter import _service_rules
         expected = {

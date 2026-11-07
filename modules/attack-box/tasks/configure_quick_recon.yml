@@ -4,7 +4,7 @@
 
 - name: Record configuration start time
   set_fact:
-    config_start_time: "{{ ansible_date_time.epoch }}"
+    config_start_time: "{{ ansible_facts['date_time']['epoch'] }}"
 
 - name: Display quick recon box configuration info
   debug:
@@ -160,13 +160,13 @@
   ansible.builtin.copy:
     content: |
       # Quick Recon VPN Client Config
-      # Server: {{ ansible_default_ipv4.address }}
-      # Generated: {{ ansible_date_time.iso8601 }}
+      # Server: {{ ansible_facts['default_ipv4']['address'] }}
+      # Generated: {{ ansible_facts['date_time']['iso8601'] }}
       
       client
       dev tun
       proto udp
-      remote {{ ansible_default_ipv4.address }} 1194
+      remote {{ ansible_facts['default_ipv4']['address'] }} 1194
       resolv-retry infinite
       nobind
       persist-key
