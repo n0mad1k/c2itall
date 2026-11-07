@@ -4,7 +4,14 @@ FlokiNET provider utilities for C2ingRed deployment system
 """
 
 import logging
+import os
 from .common import COLORS, load_vars_file, validate_ip_address
+
+
+def prepare_flokinet_environment(config, teardown=False):
+    """Preserve FlokiNET's deployment-only environment behavior."""
+    if not teardown and config.get('flokinet_api_key'):
+        os.environ['FLOKINET_API_KEY'] = config['flokinet_api_key']
 
 def get_flokinet_credentials(provider_vars=None):
     """Get FlokiNET server IPs from user or vars file"""

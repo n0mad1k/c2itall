@@ -978,6 +978,48 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertEqual(serialized['azure_template_file'],
                          '/tmp/template.json')
 
+    def test_provider_environment_setup_is_registry_routed(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            aws = {
+                'provider': 'aws', 'aws_access_key': 'access',
+                'aws_secret_key': 'secret', 'aws_region': 'us-east-1',
+            }
+            deployment_engine.set_provider_environment(aws)
+            self.assertEqual(os.environ['AWS_ACCESS_KEY_ID'], 'access')
+            self.assertEqual(os.environ['AWS_SECRET_ACCESS_KEY'], 'secret')
+            self.assertEqual(os.environ['AWS_DEFAULT_REGION'], 'us-east-1')
+
+            linode = {'provider': 'linode', 'linode_token': 'linode-token'}
+            cleanup_engine.set_provider_environment_for_teardown(linode)
+            self.assertEqual(os.environ['LINODE_TOKEN'], 'linode-token')
+
+            flokinet = {
+                'provider': 'flokinet', 'flokinet_api_key': 'floki-key'}
+            deployment_engine.set_provider_environment(flokinet)
+            self.assertEqual(os.environ['FLOKINET_API_KEY'], 'floki-key')
+
+            before = dict(os.environ)
+            deployment_engine.set_provider_environment({'provider': 'azure'})
+            self.assertEqual(dict(os.environ), before)
+
+        from utils import linode_utils
+        fallback = {'provider': 'linode'}
+        with mock.patch.object(
+                linode_utils, 'load_vars_file',
+                return_value={'linode_token': 'vars-token'}), \
+                mock.patch.dict(os.environ, {}, clear=True):
+            cleanup_engine.set_provider_environment_for_teardown(fallback)
+            self.assertEqual(fallback['linode_token'], 'vars-token')
+            self.assertEqual(os.environ['LINODE_TOKEN'], 'vars-token')
+
+        import inspect
+        for function in (
+                deployment_engine.set_provider_environment,
+                cleanup_engine.set_provider_environment_for_teardown):
+            source = inspect.getsource(function)
+            self.assertIn('prepare_provider_environment(', source)
+            self.assertNotIn('provider ==', source)
+
 
 class ProviderContractTests(AzureFixture):
     def test_health_reads_owned_vm_without_mutating_state(self):

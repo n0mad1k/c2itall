@@ -8,6 +8,32 @@ import logging
 import subprocess
 from .common import COLORS, load_vars_file
 
+
+def prepare_linode_environment(config, teardown=False):
+    """Preserve deployment and teardown token fallback order for Linode."""
+    token = config.get('linode_token', '')
+    if not token and teardown:
+        try:
+            provider_vars = load_vars_file('linode')
+            token = provider_vars.get('linode_token', '') if provider_vars else ''
+            if not token:
+                logging.warning(
+                    'Linode token not found in vars file - cleanup may fail')
+        except Exception as exc:
+            logging.warning('Failed to load Linode token from vars file: %s', exc)
+    elif not token:
+        try:
+            token = subprocess.check_output(
+                [os.path.expanduser('~/.local/bin/creds'), 'get',
+                 'LINODE_TOKEN', 'homelab'],
+                text=True, stderr=subprocess.DEVNULL,
+            ).strip()
+        except Exception as exc:
+            logging.warning('Failed to load Linode token from Infisical: %s', exc)
+    if token:
+        os.environ['LINODE_TOKEN'] = token
+        config['linode_token'] = token
+
 def get_linode_credentials(provider_vars=None):
     """Get Linode API token — Infisical first, vars.yaml fallback, then prompt."""
     default_token = ''

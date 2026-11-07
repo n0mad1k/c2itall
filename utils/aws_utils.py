@@ -8,6 +8,16 @@ import subprocess
 import logging
 from .common import COLORS, load_vars_file
 
+
+def prepare_aws_environment(config, teardown=False):
+    """Preserve the legacy AWS controller environment contract."""
+    if config.get('aws_access_key'):
+        os.environ['AWS_ACCESS_KEY_ID'] = config['aws_access_key']
+    if config.get('aws_secret_key'):
+        os.environ['AWS_SECRET_ACCESS_KEY'] = config['aws_secret_key']
+    if not teardown and config.get('aws_region'):
+        os.environ['AWS_DEFAULT_REGION'] = config['aws_region']
+
 def get_aws_credentials(provider_vars=None):
     """Get AWS credentials — Infisical first, vars.yaml fallback, then prompt."""
     key = ''

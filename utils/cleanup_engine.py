@@ -16,7 +16,11 @@ import tempfile
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from utils.common import COLORS, PROVIDER_DIRS, confirm_action
-from utils.provider_registry import infrastructure_adapter, workload_route, uses_legacy_routes, list_infrastructure_states, load_infrastructure_state
+from utils.provider_registry import (
+    infrastructure_adapter, list_infrastructure_states,
+    load_infrastructure_state, prepare_provider_environment,
+    uses_legacy_routes, workload_route,
+)
 
 def teardown_by_deployment_id(deployment_id):
     """Teardown infrastructure by deployment ID"""
@@ -184,30 +188,8 @@ def execute_legacy_teardown(config):
         return False
 
 def set_provider_environment_for_teardown(config):
-    """Set provider-specific environment variables for teardown"""
-    provider = config.get('provider')
-    
-    if provider == "aws":
-        if config.get('aws_access_key'):
-            os.environ['AWS_ACCESS_KEY_ID'] = config['aws_access_key']
-        if config.get('aws_secret_key'):
-            os.environ['AWS_SECRET_ACCESS_KEY'] = config['aws_secret_key']
-    elif provider == "linode":
-        # Try to get token from config first, then from vars file
-        if config.get('linode_token'):
-            os.environ['LINODE_TOKEN'] = config['linode_token']
-        else:
-            # Load token from provider vars file
-            try:
-                from utils.common import load_vars_file, PROVIDER_DIRS
-                vars_data = load_vars_file(provider)
-                if vars_data and vars_data.get('linode_token'):
-                    os.environ['LINODE_TOKEN'] = vars_data['linode_token']
-                    config['linode_token'] = vars_data['linode_token']  # Add to config for later use
-                else:
-                    logging.warning("Linode token not found in vars file - cleanup may fail")
-            except Exception as e:
-                logging.warning(f"Failed to load Linode token from vars file: {e}")
+    """Compatibility shim for registry-routed teardown environment setup."""
+    return prepare_provider_environment(config, teardown=True)
 
 def run_teardown_playbook(playbook, config):
     """Run the teardown Ansible playbook"""

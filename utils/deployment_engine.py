@@ -14,8 +14,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from utils.common import COLORS, PROVIDER_DIRS
 from utils.provider_registry import (
-    composite_workload_routes, provider_runtime, workload_route,
-    uses_legacy_routes,
+    composite_workload_routes, prepare_provider_environment,
+    provider_runtime, workload_route, uses_legacy_routes,
 )
 
 _SECRET_KEYS = frozenset({
@@ -169,41 +169,8 @@ def determine_legacy_playbook(config):
 
 
 def set_provider_environment(config):
-    """
-    Set provider-specific environment variables for deployment.
-
-    Args:
-        config: Deployment configuration dictionary
-    """
-    provider = config.get('provider')
-
-    if provider == "aws":
-        if config.get('aws_access_key'):
-            os.environ['AWS_ACCESS_KEY_ID'] = config['aws_access_key']
-        if config.get('aws_secret_key'):
-            os.environ['AWS_SECRET_ACCESS_KEY'] = config['aws_secret_key']
-        if config.get('aws_region'):
-            os.environ['AWS_DEFAULT_REGION'] = config['aws_region']
-
-    elif provider == "linode":
-        if config.get('linode_token'):
-            os.environ['LINODE_TOKEN'] = config['linode_token']
-        else:
-            # Pull from Infisical at runtime
-            try:
-                token = subprocess.check_output(
-                    [os.path.expanduser('~/.local/bin/creds'), 'get', 'LINODE_TOKEN', 'homelab'],
-                    text=True, stderr=subprocess.DEVNULL,
-                ).strip()
-                if token:
-                    os.environ['LINODE_TOKEN'] = token
-                    config['linode_token'] = token
-            except Exception as e:
-                logging.warning(f"Failed to load Linode token from Infisical: {e}")
-
-    elif provider == "flokinet":
-        if config.get('flokinet_api_key'):
-            os.environ['FLOKINET_API_KEY'] = config['flokinet_api_key']
+    """Compatibility shim for registry-routed provider environment setup."""
+    return prepare_provider_environment(config, teardown=False)
 
 
 def execute_playbook(playbook, config):

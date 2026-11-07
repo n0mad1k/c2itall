@@ -60,14 +60,16 @@ class ProviderRuntime:
 
 class ProviderSpec(namedtuple(
         '_ProviderSpec',
-        'directory ssh_user legacy_menu config_loader routes runtime_loader')):
+        'directory ssh_user legacy_menu config_loader routes runtime_loader '
+        'environment_loader')):
     __slots__ = ()
 
     def __new__(cls, directory, ssh_user, legacy_menu=True, config_loader=None,
-                routes=None, runtime_loader=None):
+                routes=None, runtime_loader=None, environment_loader=None):
         return super(ProviderSpec, cls).__new__(cls, directory, ssh_user, legacy_menu,
                                                config_loader, dict(routes or {}),
-                                               runtime_loader)
+                                               runtime_loader,
+                                               environment_loader)
 
     @property
     def capabilities(self):
@@ -81,14 +83,17 @@ _FLOKINET_TRANSITION = 'utils.legacy_provider_adapter:flokinet_adapter'
 
 PROVIDER_SPECS = {
     'aws': ProviderSpec('AWS', 'kali', config_loader='utils.aws_utils:gather_aws_config',
+                        environment_loader='utils.aws_utils:prepare_aws_environment',
                         routes={workload: _AWS_TRANSITION for workload in (
                             'attack_box', 'c2', 'payload_server', 'phishing',
                             'redirector', 'webrunner')}),
     'linode': ProviderSpec('Linode', 'root', config_loader='utils.linode_utils:gather_linode_config',
+                           environment_loader='utils.linode_utils:prepare_linode_environment',
                            routes={workload: _LINODE_TRANSITION for workload in (
                                'attack_box', 'c2', 'payload_server', 'phishing',
                                'redirector', 'webrunner')}),
     'flokinet': ProviderSpec('FlokiNET', 'root', config_loader='utils.flokinet_utils:gather_flokinet_config',
+                             environment_loader='utils.flokinet_utils:prepare_flokinet_environment',
                              routes={workload: _FLOKINET_TRANSITION for workload in (
                                  'c2', 'payload_server', 'phishing', 'redirector',
                                  'webrunner')}),
@@ -160,6 +165,17 @@ def provider_runtime(provider):
     if not isinstance(runtime, ProviderRuntime):
         raise TypeError(f'Invalid provider runtime for {provider}')
     return runtime
+
+
+def prepare_provider_environment(config, teardown=False):
+    """Delegate controller credential setup to provider-owned utility code."""
+    spec = PROVIDER_SPECS.get(config.get('provider'))
+    if spec is None or not spec.environment_loader:
+        return None
+    prepare = _load(spec.environment_loader)
+    if not callable(prepare):
+        raise TypeError('Provider environment loader must be callable')
+    return prepare(config, teardown=teardown)
 
 
 def providers_for(capability=None, legacy_fallback=False):
