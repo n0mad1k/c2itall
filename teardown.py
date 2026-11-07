@@ -41,36 +41,84 @@ def main():
     print(f"{COLORS['BLUE']}================================{COLORS['RESET']}")
     
     if args.list:
-        list_deployments()
+        return 0 if list_deployments() else 1
     elif args.all:
-        teardown_all_deployments(force=args.force)
+        return 0 if teardown_all_deployments(force=args.force) else 1
     elif args.deployment_id:
         return 0 if teardown_deployment(args.deployment_id, force=args.force) else 1
     elif args.select:
-        select_and_teardown_deployment()
+        return 0 if select_and_teardown_deployment() else 1
     else:
         interactive_mode()
+
+def discover_deployments():
+    """Combine recovery state and legacy logs before any destructive action.
+
+    Adapter state is authoritative for matching provider/ID records. Conflicting
+    IDs and unreadable records abort discovery instead of hiding deployments.
+    """
+    from utils.provider_registry import list_infrastructure_states, uses_legacy_routes
+    try:
+        deployments = []
+        by_id = {}
+        adapter_ids = set()
+        for config in list_infrastructure_states():
+            deployment_id = config.get('deployment_id')
+            if not deployment_id or deployment_id in by_id:
+                raise ValueError('Missing or ambiguous adapter deployment ID')
+            by_id[deployment_id] = config
+            adapter_ids.add(deployment_id)
+            deployments.append(config)
+        for info_file in glob.glob("logs/deployment_info_*.txt"):
+            config = parse_deployment_info(info_file)
+            if not config or not config.get('deployment_id') or not config.get('provider'):
+                raise ValueError('Cannot identify deployment in ' + info_file)
+            deployment_id = config['deployment_id']
+            if deployment_id in by_id:
+                if (deployment_id in adapter_ids and
+                        config['provider'] == by_id[deployment_id]['provider']):
+                    continue
+                raise ValueError('Ambiguous deployment ID: ' + deployment_id)
+            if not uses_legacy_routes(config['provider']):
+                raise ValueError('Missing adapter recovery state for ' + deployment_id)
+            by_id[deployment_id] = config
+            deployments.append(config)
+        return deployments, adapter_ids
+    except (OSError, ValueError, KeyError) as error:
+        print(f"{COLORS['RED']}Cannot discover deployments: {error}{COLORS['RESET']}")
+        return None
+
+
+def teardown_adapter_state(state, force=False):
+    """Keep adapter cleanup pinned to its discovered state, even if logs change."""
+    print(f"Provider: {state['provider']}")
+    if not force and input('Proceed with infrastructure teardown? (yes/no): ').strip().lower() != 'yes':
+        print('Teardown cancelled')
+        return False
+    from utils.provider_registry import infrastructure_adapter
+    try:
+        adapter = infrastructure_adapter(state['provider'])
+        if adapter is None:
+            raise ValueError('Infrastructure adapter is unavailable')
+        # The adapter owns exact key cleanup and state archival. Never follow it
+        # with legacy prefix-based key deletion or fall back after failure.
+        return adapter.cleanup(state)
+    except (OSError, ValueError, KeyError, RuntimeError) as error:
+        print(f"{COLORS['RED']}Infrastructure cleanup failed: {error}{COLORS['RESET']}")
+        return False
+
 
 def list_deployments():
     """List all available deployments"""
     print(f"\n{COLORS['CYAN']}Available Deployments:{COLORS['RESET']}")
     
-    # Find deployment info files
-    info_files = glob.glob("logs/deployment_info_*.txt")
-    
-    if not info_files:
-        print(f"{COLORS['GREEN']}No deployments found{COLORS['RESET']}")
-        return
-    
-    deployments = []
-    for info_file in info_files:
-        config = parse_deployment_info(info_file)
-        if config:
-            deployments.append(config)
-    
+    discovered = discover_deployments()
+    if discovered is None:
+        return False
+    deployments, adapter_ids = discovered
     if not deployments:
-        print(f"{COLORS['YELLOW']}Found info files but could not parse deployment data{COLORS['RESET']}")
-        return
+        print(f"{COLORS['GREEN']}No deployments found{COLORS['RESET']}")
+        return True
     
     print(f"Found {len(deployments)} deployments:\n")
     
@@ -100,6 +148,7 @@ def list_deployments():
             print(f"   Instances: {', '.join(instances)}")
         
         print()
+    return True
 
 def interactive_mode():
     """Interactive teardown mode"""
@@ -137,15 +186,8 @@ def teardown_deployment(deployment_id, force=False):
         print(f"{COLORS['RED']}Cannot read infrastructure recovery state: {error}{COLORS['RESET']}")
         return False
     if state is not None:
-        print(f"Provider: {state['provider']}")
-        if not force and input('Proceed with infrastructure teardown? (yes/no): ').strip().lower() != 'yes':
-            print('Teardown cancelled')
-            return False
-        from utils.cleanup_engine import execute_teardown as teardown_infrastructure
-        # The adapter owns exact key cleanup and state archival. Do not follow it
-        # with the legacy prefix-based deletion helpers.
-        return teardown_infrastructure(state)
-    
+        return teardown_adapter_state(state, force=force)
+
     # Find deployment info
     info_files = glob.glob(f"logs/deployment_info_{deployment_id}*.txt")
     
@@ -208,39 +250,39 @@ def teardown_deployment(deployment_id, force=False):
     return success
 
 def teardown_all_deployments(force=False):
-    """Teardown all deployments"""
-    print(f"\n{COLORS['RED']}⚠️  WARNING: This will teardown ALL deployments!{COLORS['RESET']}")
-    
+    """Teardown discovered adapter deployments and existing legacy deployments."""
+    discovered = discover_deployments()
+    if discovered is None:
+        return False
+    deployments, adapter_ids = discovered
+    if not deployments:
+        print(f"{COLORS['GREEN']}No deployments found{COLORS['RESET']}")
+        return True
+    print(f"Found {len(deployments)} deployments to teardown")
+    for config in deployments:
+        print(f"  {config['provider']}: {config['deployment_id']}")
     if not force:
         confirm = input(f"{COLORS['YELLOW']}Type 'DESTROY' to confirm: {COLORS['RESET']}")
         if confirm != "DESTROY":
             print(f"{COLORS['GREEN']}Operation cancelled{COLORS['RESET']}")
-            return
-    
-    info_files = glob.glob("logs/deployment_info_*.txt")
-    
-    if not info_files:
-        print(f"{COLORS['GREEN']}No deployments found{COLORS['RESET']}")
-        return
-    
-    print(f"Found {len(info_files)} deployments to teardown")
-    
+            return False
     success_count = 0
-    for info_file in info_files:
-        config = parse_deployment_info(info_file)
-        if config:
-            deployment_id = config.get('deployment_id', 'unknown')
-            print(f"\n{COLORS['CYAN']}Tearing down: {deployment_id}{COLORS['RESET']}")
-            
-            if execute_teardown(config):
-                success_count += 1
+    for config in deployments:
+        deployment_id = config['deployment_id']
+        print(f"\n{COLORS['CYAN']}Tearing down: {deployment_id}{COLORS['RESET']}")
+        if deployment_id in adapter_ids:
+            success = teardown_adapter_state(config, force=True)
+        else:
+            success = execute_teardown(config)
+            if success:
                 cleanup_ssh_keys(deployment_id)
                 archive_logs(deployment_id)
-                print(f"{COLORS['GREEN']}✓ {deployment_id} torn down{COLORS['RESET']}")
-            else:
-                print(f"{COLORS['RED']}✗ {deployment_id} teardown failed{COLORS['RESET']}")
-    
-    print(f"\n{COLORS['BLUE']}Summary: {success_count}/{len(info_files)} deployments torn down{COLORS['RESET']}")
+        if success:
+            success_count += 1
+        else:
+            print(f"{COLORS['RED']}{deployment_id} teardown failed{COLORS['RESET']}")
+    print(f"\n{COLORS['BLUE']}Summary: {success_count}/{len(deployments)} deployments torn down{COLORS['RESET']}")
+    return success_count == len(deployments)
 
 def parse_deployment_info(info_file):
     """Parse deployment info file"""
@@ -471,22 +513,13 @@ def select_and_teardown_deployment():
     """Interactive deployment selection for teardown"""
     print(f"\n{COLORS['CYAN']}Select Deployment to Teardown:{COLORS['RESET']}")
     
-    # Find deployment info files
-    info_files = glob.glob("logs/deployment_info_*.txt")
-    
-    if not info_files:
-        print(f"{COLORS['GREEN']}No deployments found{COLORS['RESET']}")
-        return
-    
-    deployments = []
-    for info_file in info_files:
-        config = parse_deployment_info(info_file)
-        if config:
-            deployments.append(config)
-    
+    discovered = discover_deployments()
+    if discovered is None:
+        return False
+    deployments, adapter_ids = discovered
     if not deployments:
-        print(f"{COLORS['YELLOW']}Found info files but could not parse deployment data{COLORS['RESET']}")
-        return
+        print(f"{COLORS['GREEN']}No deployments found{COLORS['RESET']}")
+        return True
     
     print(f"\nFound {len(deployments)} deployments:")
     print("=" * 40)
@@ -523,7 +556,7 @@ def select_and_teardown_deployment():
             
             if selection.lower() == 'q':
                 print(f"{COLORS['GREEN']}Selection cancelled{COLORS['RESET']}")
-                return
+                return False
             
             selection_num = int(selection)
             if 1 <= selection_num <= len(deployments):
@@ -535,10 +568,11 @@ def select_and_teardown_deployment():
                 # Confirm selection and proceed with teardown
                 confirm = input(f"Proceed with teardown of {deployment_id}? (yes/no): ").strip().lower()
                 if confirm == 'yes':
-                    teardown_deployment(deployment_id)
-                else:
-                    print(f"{COLORS['GREEN']}Teardown cancelled{COLORS['RESET']}")
-                return
+                    if deployment_id in adapter_ids:
+                        return teardown_adapter_state(selected_deployment, force=True)
+                    return teardown_deployment(deployment_id)
+                print(f"{COLORS['GREEN']}Teardown cancelled{COLORS['RESET']}")
+                return False
             else:
                 print(f"{COLORS['RED']}Please enter a number between 1 and {len(deployments)}{COLORS['RESET']}")
         except ValueError:

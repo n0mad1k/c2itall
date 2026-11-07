@@ -414,7 +414,7 @@ class ProviderContractTests(AzureFixture):
     def test_standalone_teardown_prefers_adapter_state_without_legacy_key_cleanup(self):
         import teardown as standalone
         state = self.prepare()
-        with mock.patch.object(cleanup_engine, 'execute_teardown', return_value=True) as execute, mock.patch.object(standalone, 'cleanup_ssh_keys') as keys, mock.patch.object(standalone, 'archive_logs') as archive, contextlib.redirect_stdout(io.StringIO()):
+        with mock.patch.object(azure, 'cleanup_azure', return_value=True) as execute, mock.patch.object(standalone, 'cleanup_ssh_keys') as keys, mock.patch.object(standalone, 'archive_logs') as archive, contextlib.redirect_stdout(io.StringIO()):
             self.assertTrue(standalone.teardown_deployment(state['deployment_id'], force=True))
             self.assertEqual(execute.call_args.args[0]['provider'], 'azure')
             keys.assert_not_called()
@@ -429,7 +429,7 @@ class ProviderContractTests(AzureFixture):
     def test_standalone_teardown_confirmation_and_failure_exit_status(self):
         import teardown as standalone
         state = self.prepare()
-        with mock.patch('builtins.input', return_value='no'), mock.patch.object(cleanup_engine, 'execute_teardown') as execute, contextlib.redirect_stdout(io.StringIO()):
+        with mock.patch('builtins.input', return_value='no'), mock.patch.object(azure, 'cleanup_azure') as execute, contextlib.redirect_stdout(io.StringIO()):
             self.assertFalse(standalone.teardown_deployment(state['deployment_id']))
             execute.assert_not_called()
         with mock.patch.object(sys, 'argv', ['teardown.py', '--deployment-id', 'test-azure', '--force']), mock.patch.object(standalone, 'teardown_deployment', return_value=False), contextlib.redirect_stdout(io.StringIO()):
@@ -440,6 +440,87 @@ class ProviderContractTests(AzureFixture):
         with mock.patch.object(registry, 'load_infrastructure_state', return_value=None), mock.patch.object(standalone.glob, 'glob', return_value=[]) as logs, mock.patch.object(standalone, 'list_deployments'), contextlib.redirect_stdout(io.StringIO()):
             self.assertFalse(standalone.teardown_deployment('Old_ID', force=True))
             logs.assert_called_once_with('logs/deployment_info_Old_ID*.txt')
+
+    def test_standalone_discovery_merges_state_and_logs_with_adapter_priority(self):
+        import teardown as standalone
+        state = self.prepare()
+        legacy = {'provider': 'aws', 'deployment_id': 'legacy-1'}
+        with mock.patch.object(standalone.glob, 'glob', return_value=['azure.txt', 'legacy.txt']), mock.patch.object(standalone, 'parse_deployment_info', side_effect=[{'provider': 'azure', 'deployment_id': state['deployment_id']}, legacy]):
+            deployments, adapter_ids = standalone.discover_deployments()
+            self.assertEqual(deployments, [state, legacy])
+            self.assertEqual(adapter_ids, {state['deployment_id']})
+        output = io.StringIO()
+        with mock.patch.object(standalone.glob, 'glob', return_value=[]), contextlib.redirect_stdout(output):
+            self.assertTrue(standalone.list_deployments())
+        self.assertIn(state['deployment_id'], output.getvalue())
+        self.assertIn('azure', output.getvalue())
+
+    def test_standalone_discovery_refuses_ambiguous_and_unreadable_records(self):
+        import teardown as standalone
+        state = self.prepare()
+        cases = [None, {}, {'provider': 'aws', 'deployment_id': state['deployment_id']}]
+        for record in cases:
+            with self.subTest(record=record), mock.patch.object(standalone.glob, 'glob', return_value=['bad.txt']), mock.patch.object(standalone, 'parse_deployment_info', return_value=record), mock.patch.object(azure, 'cleanup_azure') as adapter, mock.patch.object(standalone, 'execute_teardown') as legacy, contextlib.redirect_stdout(io.StringIO()):
+                self.assertFalse(standalone.teardown_all_deployments(force=True))
+                adapter.assert_not_called()
+                legacy.assert_not_called()
+        with mock.patch.object(registry, 'list_infrastructure_states', return_value=[state, state]), contextlib.redirect_stdout(io.StringIO()):
+            self.assertIsNone(standalone.discover_deployments())
+        with mock.patch.object(registry, 'list_infrastructure_states', side_effect=ValueError('bad state')), mock.patch.object(standalone.glob, 'glob') as logs, contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(standalone.teardown_all_deployments(force=True))
+            logs.assert_not_called()
+
+    def test_standalone_batch_preserves_legacy_cleanup_and_never_retries_failed_adapter(self):
+        import teardown as standalone
+        state = self.prepare()
+        legacy = {'provider': 'aws', 'deployment_id': 'legacy-1'}
+        for adapter_ok in (True, False):
+            with self.subTest(adapter_ok=adapter_ok), mock.patch.object(standalone.glob, 'glob', return_value=['legacy.txt']), mock.patch.object(standalone, 'parse_deployment_info', return_value=legacy), mock.patch.object(azure, 'cleanup_azure', return_value=adapter_ok) as adapter, mock.patch.object(standalone, 'execute_teardown', return_value=True) as execute, mock.patch.object(standalone, 'cleanup_ssh_keys') as keys, mock.patch.object(standalone, 'archive_logs') as archive, contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(standalone.teardown_all_deployments(force=True), adapter_ok)
+                adapter.assert_called_once_with(state)
+                execute.assert_called_once_with(legacy)
+                keys.assert_called_once_with('legacy-1')
+                archive.assert_called_once_with('legacy-1')
+
+    def test_standalone_batch_cancellation_and_missing_adapter_prevent_legacy_cleanup(self):
+        import teardown as standalone
+        state = self.prepare()
+        with mock.patch.object(standalone.glob, 'glob', return_value=[]), mock.patch('builtins.input', return_value='no'), mock.patch.object(azure, 'cleanup_azure') as adapter, contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(standalone.teardown_all_deployments())
+            adapter.assert_not_called()
+        with mock.patch.object(registry, 'infrastructure_adapter', return_value=None), mock.patch.object(standalone, 'execute_teardown') as legacy, contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(standalone.teardown_adapter_state(state, force=True))
+            legacy.assert_not_called()
+
+    def test_standalone_selection_uses_discovered_adapter_state(self):
+        import teardown as standalone
+        state = self.prepare()
+        with mock.patch.object(standalone.glob, 'glob', return_value=[]), mock.patch('builtins.input', side_effect=['1', 'yes']), mock.patch.object(azure, 'cleanup_azure', return_value=True) as adapter, mock.patch.object(standalone, 'teardown_deployment') as by_id, contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(standalone.select_and_teardown_deployment())
+            adapter.assert_called_once_with(state)
+            by_id.assert_not_called()
+
+    def test_standalone_discovery_refuses_azure_logs_without_recovery_state(self):
+        import teardown as standalone
+        log = {'provider': 'azure', 'deployment_id': 'missing-state'}
+        with mock.patch.object(standalone.glob, 'glob', return_value=['stale.txt']), mock.patch.object(standalone, 'parse_deployment_info', return_value=log), mock.patch.object(standalone, 'execute_teardown') as legacy, contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(standalone.teardown_all_deployments(force=True))
+            legacy.assert_not_called()
+
+    def test_standalone_batch_records_adapter_exception_and_continues_other_cleanup(self):
+        import teardown as standalone
+        self.prepare()
+        legacy = {'provider': 'aws', 'deployment_id': 'legacy-1'}
+        with mock.patch.object(standalone.glob, 'glob', return_value=['legacy.txt']), mock.patch.object(standalone, 'parse_deployment_info', return_value=legacy), mock.patch.object(azure, 'cleanup_azure', side_effect=RuntimeError('unavailable')), mock.patch.object(standalone, 'execute_teardown', return_value=True) as execute, mock.patch.object(standalone, 'cleanup_ssh_keys'), mock.patch.object(standalone, 'archive_logs'), contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(standalone.teardown_all_deployments(force=True))
+            execute.assert_called_once_with(legacy)
+
+    def test_standalone_cli_propagates_discovery_and_cleanup_failures(self):
+        import teardown as standalone
+        for flag, function in [('--list', 'list_deployments'), ('--all', 'teardown_all_deployments'), ('--select', 'select_and_teardown_deployment')]:
+            for success in (True, False):
+                with self.subTest(flag=flag, success=success), mock.patch.object(sys, 'argv', ['teardown.py', flag]), mock.patch.object(standalone, function, return_value=success), contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(standalone.main(), 0 if success else 1)
 
     def test_legacy_imports_do_not_load_azure_adapter_or_runtime(self):
         result = subprocess.run([sys.executable, '-B', '-c',

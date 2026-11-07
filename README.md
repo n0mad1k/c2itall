@@ -95,8 +95,11 @@ for recovery; successful state is retained in `deployments/azure/archive/`.
 Standalone recovery by ID is also supported through
 `python3 teardown.py --deployment-id <deployment_id>` (add `--force` to skip its
 confirmation). It prefers adapter state and uses legacy lookup only when no
-adapter state exists. Other standalone teardown modes retain their legacy scope;
-use the shared Cleanup menu or infrastructure `--teardown-all` for combined cleanup.
+adapter state exists. Standalone `--list`, `--select`, and `--all` also discover
+adapter deployments alongside legacy logs. Matching adapter records take priority;
+unreadable records or conflicting deployment IDs abort discovery before deletion.
+Failed adapter cleanup never retries through legacy cleanup. Batch cleanup reports
+failure through a nonzero exit status if any deployment fails.
 
 Preview the reviewed live smoke with `python3 deploy.py --deploy --azure-smoke --dry-run`.
 Run `python3 scripts/deploy_azure_smoke.py --prepare` for the reviewed commit, push,
