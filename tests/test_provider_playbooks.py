@@ -8,7 +8,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PROVIDER_DIRS = ("AWS", "Linode", "FlokiNET")
+PLAYBOOK_ROOTS = ("providers", "modules", "ghost_protocol")
 HOSTS_PATTERN = re.compile(r"^\s*-?\s*hosts:", re.MULTILINE)
 
 
@@ -18,8 +18,11 @@ class ProviderPlaybookSyntaxTests(unittest.TestCase):
         self.assertIsNotNone(ansible_playbook, "ansible-playbook is required")
 
         playbooks = []
-        for provider in PROVIDER_DIRS:
-            for path in sorted((ROOT / "providers" / provider).glob("*.yml")):
+        for root in PLAYBOOK_ROOTS:
+            for path in sorted((ROOT / root).rglob("*.yml")):
+                if HOSTS_PATTERN.search(path.read_text()):
+                    playbooks.append(path)
+            for path in sorted((ROOT / root).rglob("*.yaml")):
                 if HOSTS_PATTERN.search(path.read_text()):
                     playbooks.append(path)
 
