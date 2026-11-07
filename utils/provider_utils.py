@@ -4,7 +4,9 @@ Provider selection and configuration utilities
 """
 
 from .common import COLORS, PROVIDERS
-from .provider_registry import providers_for, provider_dispatcher
+from .provider_registry import (
+    provider_dispatcher, providers_for, workload_route,
+)
 from .ssh_utils import generate_ssh_key
 
 def available_providers(capability=None, legacy_fallback=False):
@@ -62,3 +64,11 @@ def prepare_module_ssh_key(config, key_name):
         return False, None
     config['ssh_key_path'] = private_key + '.pub'
     return True, private_key
+
+
+def apply_provider_profile(config, profile, value):
+    """Apply workload tuning through its selected provider adapter."""
+    adapter = workload_route(config)
+    if adapter is not None:
+        adapter.apply_profile(config, profile, value)
+    return config

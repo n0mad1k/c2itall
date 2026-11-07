@@ -389,6 +389,34 @@ class RoutingAndTemplateTests(AzureFixture):
             self.assertIn('prepare_module_ssh_key(', source)
             self.assertNotIn('from utils.ssh_utils import generate_ssh_key', source)
 
+    def test_attack_box_sizing_is_applied_through_provider_adapter(self):
+        linode = {
+            'provider': 'linode', 'provider_workload': 'attack_box',
+            'deployment_id': 'profile-test',
+        }
+        expected = {
+            'small': 'g6-standard-2', 'medium': 'g6-standard-4',
+            'large': 'g6-standard-8', 'xlarge': 'g6-standard-16',
+        }
+        for profile, instance_type in expected.items():
+            with self.subTest(profile=profile):
+                provider_utils.apply_provider_profile(
+                    linode, 'instance_size', profile)
+                self.assertEqual(linode['linode_instance_type'], instance_type)
+
+        for provider in ('aws', 'azure'):
+            config = {
+                'provider': provider, 'provider_workload': 'attack_box',
+                'deployment_id': 'profile-test',
+            }
+            provider_utils.apply_provider_profile(
+                config, 'instance_size', 'small')
+            self.assertNotIn('linode_instance_type', config)
+
+        source = (ROOT / 'modules/attack-box/deploy_attack_box.py').read_text()
+        self.assertNotIn('provider == "linode"', source)
+        self.assertEqual(source.count('apply_provider_profile('), 2)
+
     def test_canonical_workload_dispatch_never_retries_failed_handler(self):
         config = {'provider': 'azure', 'provider_workload': 'phishing',
                   'deployment_type': 'gophish_only'}

@@ -26,6 +26,10 @@ class WorkloadAdapter:
     def cleanup(self, config):
         raise NotImplementedError
 
+    def apply_profile(self, config, profile, value):
+        """Apply an optional provider-specific workload tuning profile."""
+        return config
+
 
 class InfrastructureAdapter(WorkloadAdapter):
     """Recoverable infrastructure contract; importable by legacy controllers."""

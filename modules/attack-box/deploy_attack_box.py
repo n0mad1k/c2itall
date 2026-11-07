@@ -18,7 +18,8 @@ from utils.common import (
     archive_old_logs
 )
 from utils.provider_utils import (
-    select_provider, gather_provider_config, prepare_module_ssh_key,
+    apply_provider_profile, select_provider, gather_provider_config,
+    prepare_module_ssh_key,
 )
 from utils.name_generator import generate_attack_box_name
 from utils.naming_utils import get_deployment_name_with_options, show_naming_relationship
@@ -111,19 +112,10 @@ def gather_attack_box_parameters(attack_box_type="kali"):
     
     size_choice = input(f"Select instance size [2]: ").strip() or "2"
     size_mapping = {
-        "1": {"type": "g6-standard-2", "name": "small"},
-        "2": {"type": "g6-standard-4", "name": "medium"}, 
-        "3": {"type": "g6-standard-8", "name": "large"},
-        "4": {"type": "g6-standard-16", "name": "xlarge"}
+        "1": "small", "2": "medium", "3": "large", "4": "xlarge",
     }
-    
-    if size_choice in size_mapping:
-        config['instance_size'] = size_mapping[size_choice]['name']
-        if provider == "linode":
-            config['linode_instance_type'] = size_mapping[size_choice]['type']
-    else:
-        config['instance_size'] = "medium"
-        config['linode_instance_type'] = "g6-standard-4"
+    config['instance_size'] = size_mapping.get(size_choice, "medium")
+    apply_provider_profile(config, 'instance_size', config['instance_size'])
     
     key_ready, ssh_key_path = prepare_module_ssh_key(
         config, config['attack_box_name'])
@@ -305,8 +297,7 @@ def gather_quick_recon_parameters():
     # Force small instance for speed and cost
     print(f"\n{COLORS['GREEN']}Instance: Small (2 CPU, 4GB RAM) - Optimized for recon{COLORS['RESET']}")
     config['instance_size'] = "small"
-    if provider == "linode":
-        config['linode_instance_type'] = "g6-standard-2"
+    apply_provider_profile(config, 'instance_size', config['instance_size'])
     
     key_ready, ssh_key_path = prepare_module_ssh_key(
         config, config['attack_box_name'])
