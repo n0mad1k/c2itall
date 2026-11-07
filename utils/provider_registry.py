@@ -84,7 +84,7 @@ class ProviderSpec(namedtuple(
         'directory ssh_user legacy_menu legacy_capabilities variant_support '
         'config_loader routes staged_routes runtime_loader '
         'environment_loader profile_loader credential_environment teardown_keys '
-        'cleanup_guidance')):
+        'cleanup_automated cleanup_guidance')):
     __slots__ = ()
 
     def __new__(cls, directory, ssh_user, legacy_menu=True,
@@ -93,6 +93,7 @@ class ProviderSpec(namedtuple(
                 runtime_loader=None,
                 environment_loader=None, profile_loader=None,
                 credential_environment=None, teardown_keys=None,
+                cleanup_automated=True,
                 cleanup_guidance=None):
         normalized_variants = {
             workload: frozenset(variants)
@@ -108,6 +109,7 @@ class ProviderSpec(namedtuple(
                                                profile_loader,
                                                tuple(credential_environment or ()),
                                                tuple(teardown_keys or ()),
+                                               cleanup_automated,
                                                tuple(cleanup_guidance or ()))
 
     @property
@@ -206,6 +208,7 @@ PROVIDER_SPECS = {
                              environment_loader='utils.flokinet_utils:prepare_flokinet_environment',
                              credential_environment=(
                                  ('flokinet_api_key', 'FLOKINET_API_KEY'),),
+                             cleanup_automated=False,
                              cleanup_guidance=(
                                  'Open the FlokiNET control panel',
                                  'Check for servers containing: {deployment_id}',
@@ -385,6 +388,12 @@ def provider_cleanup_guidance(provider, deployment_id):
         item.format(deployment_id=deployment_id)
         for item in spec.cleanup_guidance
     )
+
+
+def provider_cleanup_is_automated(provider):
+    """Report whether legacy cleanup can prove provider-side deletion."""
+    spec = PROVIDER_SPECS.get(provider)
+    return bool(spec and spec.cleanup_automated)
 
 
 def providers_for(capability=None, legacy_fallback=False, variant=None):
@@ -633,6 +642,8 @@ def validate_provider_registry(load_references=True):
         if (any(not isinstance(key, str) or not key for key in spec.teardown_keys) or
                 len(set(spec.teardown_keys)) != len(spec.teardown_keys)):
             raise ValueError('Invalid provider teardown keys: ' + provider)
+        if type(spec.cleanup_automated) is not bool:
+            raise TypeError('Provider cleanup_automated must be a boolean: ' + provider)
         for guidance in spec.cleanup_guidance:
             if not isinstance(guidance, str) or not guidance:
                 raise ValueError('Invalid provider cleanup guidance: ' + provider)

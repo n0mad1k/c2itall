@@ -19,8 +19,9 @@ from utils.common import COLORS, PROVIDER_DIRS, confirm_action
 from utils.provider_registry import (
     infrastructure_adapter, list_infrastructure_states,
     load_infrastructure_state, prepare_provider_environment,
-    provider_cleanup_guidance, provider_teardown_vars, requested_workload,
-    uses_legacy_routes, workload_route,
+    provider_cleanup_guidance, provider_cleanup_is_automated,
+    provider_teardown_vars, requested_workload, uses_legacy_routes,
+    workload_route,
 )
 
 def teardown_by_deployment_id(deployment_id):
@@ -150,6 +151,8 @@ def execute_legacy_teardown(config):
     if not provider or not deployment_id:
         print(f"{COLORS['RED']}Missing provider or deployment ID{COLORS['RESET']}")
         return False
+    if not provider_cleanup_is_automated(provider):
+        return manual_cleanup_guidance(config)
     
     print(f"{COLORS['BLUE']}Executing teardown for {provider} deployment {deployment_id}...{COLORS['RESET']}")
     
@@ -164,7 +167,8 @@ def execute_legacy_teardown(config):
         # Get correct provider directory
         provider_dir = PROVIDER_DIRS.get(provider, provider.capitalize())
         
-        # Execute teardown playbook
+        # Execute teardown playbook. Provider playbooks must return nonzero
+        # unless their final inventory proves owned resources are absent.
         playbook = f"providers/{provider_dir}/cleanup.yml"
         
         if not os.path.exists(playbook):

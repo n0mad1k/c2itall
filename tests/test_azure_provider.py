@@ -1521,6 +1521,23 @@ class RoutingAndTemplateTests(AzureFixture):
             'smtp_auth_pass': 'smtp-secret',
         })
 
+    def test_manual_only_provider_cleanup_never_reports_success(self):
+        self.assertTrue(registry.provider_cleanup_is_automated('aws'))
+        self.assertTrue(registry.provider_cleanup_is_automated('linode'))
+        self.assertFalse(registry.provider_cleanup_is_automated('flokinet'))
+        config = {
+            'provider': 'flokinet', 'provider_workload': 'c2',
+            'deployment_id': 'manual-cleanup',
+        }
+        with mock.patch.object(
+                cleanup_engine, 'run_teardown_playbook') as playbook, \
+                mock.patch.object(
+                    cleanup_engine, 'manual_cleanup_guidance',
+                    return_value=False) as guidance:
+            self.assertFalse(cleanup_engine.execute_legacy_teardown(config))
+        playbook.assert_not_called()
+        guidance.assert_called_once_with(config)
+
 
 class ProviderContractTests(AzureFixture):
     def test_health_reads_owned_vm_without_mutating_state(self):
