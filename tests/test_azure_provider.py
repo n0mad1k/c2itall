@@ -1538,6 +1538,20 @@ class RoutingAndTemplateTests(AzureFixture):
         playbook.assert_not_called()
         guidance.assert_called_once_with(config)
 
+    def test_cleanup_preserves_all_registered_resource_identities(self):
+        config = {
+            'provider': 'linode', 'deployment_id': 'identity-test',
+            'linode_token': 'token', 'linode_region': 'us-east',
+            'mta_name': 'mail-name', 'gophish_name': 'gophish-name',
+            'webserver_name': 'web-name', 'webrunner_name': 'scan-name',
+            'ssh_key_name': 'cloud-key', 'ssh_key_path': '/tmp/local-key.pub',
+        }
+        variables = json.loads(cleanup_engine.create_teardown_vars(config))
+        for key in (
+                'mta_name', 'gophish_name', 'webserver_name',
+                'webrunner_name', 'ssh_key_name', 'ssh_key_path'):
+            self.assertEqual(variables[key], config[key])
+
 
 class ProviderContractTests(AzureFixture):
     def test_health_reads_owned_vm_without_mutating_state(self):

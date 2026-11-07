@@ -42,6 +42,19 @@ class ProviderPlaybookSyntaxTests(unittest.TestCase):
                     result.stdout + result.stderr,
                 )
 
+    def test_linode_cleanup_requires_provider_side_absence(self):
+        cleanup = (ROOT / "providers/Linode/cleanup.yml").read_text()
+        for marker in (
+                "Inventory Linodes before cleanup",
+                "Delete deployment-owned Linodes by immutable ID",
+                "Verify every owned Linode is absent",
+                "Inventory Linode profile SSH keys",
+                "Verify every owned Linode SSH key is absent",
+                "status_code: [200, 404]",
+        ):
+            self.assertIn(marker, cleanup)
+        self.assertNotIn("ignore_errors", cleanup)
+
 
 if __name__ == "__main__":
     unittest.main()

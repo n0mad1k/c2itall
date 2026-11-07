@@ -251,15 +251,16 @@ def create_teardown_vars(config):
         'operation': 'teardown'
     }
     
-    # Add instance names for proper cleanup
-    if config.get('redirector_name'):
-        teardown_vars['redirector_name'] = config['redirector_name']
-    if config.get('c2_name'):
-        teardown_vars['c2_name'] = config['c2_name']
-    if config.get('tracker_name'):
-        teardown_vars['tracker_name'] = config['tracker_name']
-    if config.get('attack_box_name'):
-        teardown_vars['attack_box_name'] = config['attack_box_name']
+    # Preserve every non-secret resource identity needed by provider cleanup.
+    # Missing values keep the playbooks' deterministic deployment-ID defaults.
+    for key in (
+            'redirector_name', 'c2_name', 'tracker_name', 'attack_box_name',
+            'mta_name', 'gophish_name', 'webserver_name',
+            'phishing_redirector_name', 'phishing_webserver_name',
+            'payload_server_name', 'payload_redirector_name',
+            'webrunner_name', 'ssh_key_name', 'ssh_key_path'):
+        if config.get(key):
+            teardown_vars[key] = config[key]
     
     teardown_vars.update(provider_teardown_vars(config))
     
