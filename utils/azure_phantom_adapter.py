@@ -15,6 +15,24 @@ _WEB_RULES = (
 
 def _service_rules(config):
     service = config.get('server_type')
+    if service == 'all_in_one':
+        selected = config.get('services')
+        allowed = {'matrix', 'vpn', 'dns', 'cloud', 'vault', 'media'}
+        if (not isinstance(selected, (list, tuple)) or not selected or
+                any(component not in allowed for component in selected)):
+            raise ValueError('Azure all-in-one requires supported selected services')
+        rules = []
+        seen = set()
+        for component in selected:
+            component_config = dict(config, server_type=component,
+                                    provider_workload='phantom')
+            for rule in _service_rules(component_config):
+                identity = (rule['protocol'].lower(), int(rule['port']),
+                            rule['source'])
+                if identity not in seen:
+                    seen.add(identity)
+                    rules.append(rule)
+        return rules
     if service == 'vpn':
         return [{'name': 'wireguard', 'protocol': 'Udp',
                  'port': int(config.get('vpn_port', 51820)), 'source': '*'}]
@@ -51,7 +69,7 @@ def _service_rules(config):
             {'name': 'mail-dns-tcp', 'protocol': 'Tcp', 'port': 53, 'source': '*'},
             {'name': 'mail-dns-udp', 'protocol': 'Udp', 'port': 53, 'source': '*'},
         ]
-    if service in ('cloud', 'vault', 'media', 'all_in_one'):
+    if service in ('cloud', 'vault', 'media'):
         return list(_WEB_RULES)
     raise ValueError('Unsupported Phantom service for Azure')
 

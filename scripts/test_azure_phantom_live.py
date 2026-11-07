@@ -23,7 +23,8 @@ from deploy_azure_smoke import (IMAGE, LOCATION, SIZE, SUBSCRIPTION, Runner,
 ROOT = Path(__file__).resolve().parents[1]
 PHANTOM_ROOT = ROOT / "ghost_protocol" / "phantom"
 STATE_DIR = ROOT / "deployments" / "azure"
-SERVICES = ("vpn", "matrix")
+SERVICES = ("vpn", "matrix", "dns", "cloud", "vault", "media", "email",
+            "all_in_one")
 
 
 class LiveTestError(RuntimeError):
@@ -47,14 +48,11 @@ def verify_committed_source(runner):
     for path in parent_paths:
         runner.run(["git", "diff", "--quiet", "HEAD", "--", path])
     for path in ("phantom/phantom.py", "phantom/test_phantom.py",
-                 "phantom/playbooks/common/base_hardening.yml",
-                 "phantom/playbooks/matrix/main.yml",
-                 "phantom/playbooks/matrix/tasks/synapse.yml",
-                 "phantom/playbooks/matrix/tasks/element.yml",
-                 "phantom/playbooks/matrix/tasks/nginx.yml",
-                 "phantom/playbooks/matrix/templates/homeserver.yaml.j2",
-                 "phantom/playbooks/vpn/tasks/install.yml",
-                 "phantom/playbooks/vpn/tasks/configure.yml"):
+                 "phantom/modules", "phantom/playbooks/common",
+                 "phantom/playbooks/matrix", "phantom/playbooks/vpn",
+                 "phantom/playbooks/dns", "phantom/playbooks/cloud",
+                 "phantom/playbooks/vault", "phantom/playbooks/media",
+                 "phantom/playbooks/email", "phantom/playbooks/all_in_one"):
         runner.run(["git", "-C", str(ROOT / "ghost_protocol"), "diff", "--quiet",
                     "HEAD", "--", path])
     return {
@@ -98,12 +96,34 @@ def preflight(runner):
 def expected_allow_rules(config):
     operator = public_ipv4(config["operator_ip"]) + "/32"
     service = config["server_type"]
+    if service == "all_in_one":
+        rules = {("tcp", "22", operator)}
+        for component in config["services"]:
+            component_config = dict(config, server_type=component,
+                                    provider_workload="phantom")
+            rules.update(expected_allow_rules(component_config))
+        return rules
     if service == "vpn":
         return {("tcp", "22", operator), ("udp", "51820", "*")}
+    if service == "dns":
+        return {("tcp", "22", operator), ("tcp", "53", "*"),
+                ("udp", "53", "*"), ("tcp", "80", "*"),
+                ("tcp", "443", "*")}
     if service == "matrix":
+        rules = {("tcp", "22", operator), ("tcp", "80", "*"),
+                 ("tcp", "443", "*"), ("tcp", "8448", "*")}
+        if config.get("provider_workload") == "chat":
+            rules.add(("udp", "41641", "*"))
+        return rules
+    if service == "email":
         return {("tcp", "22", operator), ("tcp", "80", "*"),
-                ("tcp", "443", "*"), ("tcp", "8448", "*"),
-                ("udp", "41641", "*")}
+                ("tcp", "443", "*"), ("tcp", "25", "*"),
+                ("tcp", "465", "*"), ("tcp", "587", "*"),
+                ("tcp", "993", "*"), ("tcp", "4190", "*"),
+                ("tcp", "53", "*"), ("udp", "53", "*")}
+    if service in ("cloud", "vault", "media"):
+        return {("tcp", "22", operator), ("tcp", "80", "*"),
+                ("tcp", "443", "*")}
     raise LiveTestError(f"No expected Azure allowlist for {service}")
 
 
@@ -141,7 +161,7 @@ def resource_snapshot(runner, config):
               for rule in rules
               if rule["direction"] == "Inbound" and rule["access"] == "Allow"}
     expected = expected_allow_rules(config)
-    require(allows == expected, "Azure NSG does not match the Phantom VPN allowlist")
+    require(allows == expected, "Azure NSG does not match the Phantom service allowlist")
     require(any(rule["direction"] == "Inbound" and rule["access"] == "Deny"
                 and rule.get("sourceAddressPrefix") == "*"
                 and rule.get("destinationPortRange") == "*"
@@ -152,6 +172,31 @@ def resource_snapshot(runner, config):
     return {"vm_id": vm["id"], "public_ip": address,
             "resource_ids": sorted(resource["id"].lower() for resource in resources),
             "allow_rules": sorted([list(rule) for rule in allows])}
+
+
+def run_ssh(runner, config, command, timeout=120):
+    runner.run([
+        "ssh", "-F", "/dev/null", "-i", config["ssh_key"],
+        "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes",
+        "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "GlobalKnownHostsFile=/dev/null",
+        "-o", f"UserKnownHostsFile={runner.evidence / 'known_hosts'}",
+        f"azureuser@{config['target_host']}", command,
+    ], timeout=timeout)
+
+
+def service_domain(config, service):
+    return config.get("service_domains", {}).get(service, config.get("domain", ""))
+
+
+def https_get(runner, config, service, path):
+    domain = service_domain(config, service)
+    require(domain, f"{service} live verification requires a domain")
+    return runner.run([
+        "curl", "-k", "--fail", "--silent", "--show-error", "--max-time", "20",
+        "--resolve", f"{domain}:443:{config['target_host']}",
+        f"https://{domain}{path}",
+    ])
 
 
 def verify_wireguard(runner, config):
@@ -248,11 +293,147 @@ def verify_matrix(runner, config):
             "ssh_password_authentication": False}
 
 
+def verify_dns(runner, config):
+    command = (
+        "set -eu; "
+        "test \"$(systemctl is-active pihole-FTL)\" = active; "
+        "test \"$(systemctl is-enabled pihole-FTL)\" = enabled; "
+        "sudo -n test -s /etc/pihole/.phantom_password; "
+        "test \"$(sudo -n stat -c %a /etc/pihole/.phantom_password)\" = 600; "
+        "sudo -n pihole status >/dev/null; "
+        "sudo -n ss -lntu | grep -Eq '[:.]53[[:space:]]'; "
+        "sudo -n /usr/sbin/sshd -T | grep -q '^passwordauthentication no$'"
+    )
+    run_ssh(runner, config, command)
+    dns_probe = (
+        "import socket,struct,sys;"
+        "host=sys.argv[1];"
+        "q=b'\\x12\\x34\\x01\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00'"
+        "+b'\\x07example\\x03com\\x00\\x00\\x01\\x00\\x01';"
+        "s=socket.create_connection((host,53),10);"
+        "s.sendall(struct.pack('!H',len(q))+q);"
+        "n=struct.unpack('!H',s.recv(2))[0];"
+        "data=b'';"
+        "\nwhile len(data)<n:\n data+=s.recv(n-len(data))\n"
+        "assert data[:2]==b'\\x12\\x34' and data[2]&128 and data[3]&15==0"
+    )
+    runner.run([sys.executable, "-c", dns_probe, config["target_host"]], timeout=30)
+    return {"pihole_active": True, "pihole_enabled": True,
+            "dns_tcp_public": True, "admin_password_owner_only": True,
+            "ssh_password_authentication": False}
+
+
+def verify_cloud(runner, config):
+    command = (
+        "set -eu; "
+        "php_ver=$(php -r 'echo PHP_MAJOR_VERSION.\".\".PHP_MINOR_VERSION;'); "
+        "test \"$(systemctl is-active mariadb)\" = active; "
+        "test \"$(systemctl is-enabled mariadb)\" = enabled; "
+        "test \"$(systemctl is-active redis-server)\" = active; "
+        "test \"$(systemctl is-enabled redis-server)\" = enabled; "
+        "test \"$(systemctl is-active php${php_ver}-fpm)\" = active; "
+        "test \"$(systemctl is-active nginx)\" = active; "
+        "test \"$(systemctl is-active nextcloud-cron.timer)\" = active; "
+        "test \"$(systemctl is-enabled nextcloud-cron.timer)\" = enabled; "
+        "sudo -n test -s /var/www/nextcloud/.admin_password; "
+        "test \"$(sudo -n stat -c %a /var/www/nextcloud/.admin_password)\" = 600; "
+        "sudo -n -u www-data php /var/www/nextcloud/occ status --output=json "
+        "| grep -Eq '\"installed\"[[:space:]]*:[[:space:]]*true'; "
+        "sudo -n /usr/sbin/sshd -T | grep -q '^passwordauthentication no$'"
+    )
+    run_ssh(runner, config, command)
+    status = json.loads(https_get(runner, config, "cloud", "/status.php"))
+    require(status.get("installed") is True, "Nextcloud status endpoint is not installed")
+    return {"nextcloud_installed": True, "mariadb_active": True,
+            "redis_active": True, "php_fpm_active": True, "nginx_active": True,
+            "cron_timer_active": True, "https_status": True,
+            "ssh_password_authentication": False}
+
+
+def verify_vault(runner, config):
+    command = (
+        "set -eu; "
+        "test \"$(systemctl is-active vaultwarden)\" = active; "
+        "test \"$(systemctl is-enabled vaultwarden)\" = enabled; "
+        "test \"$(systemctl is-active nginx)\" = active; "
+        "sudo -n test -s /opt/vaultwarden/.env; "
+        "test \"$(sudo -n stat -c %a /opt/vaultwarden/.env)\" = 600; "
+        "curl --fail --silent --show-error http://127.0.0.1:8081/alive >/dev/null; "
+        "sudo -n /usr/sbin/sshd -T | grep -q '^passwordauthentication no$'"
+    )
+    run_ssh(runner, config, command)
+    require(https_get(runner, config, "vault", "/alive"),
+            "Vaultwarden HTTPS health endpoint returned no body")
+    return {"vaultwarden_active": True, "vaultwarden_enabled": True,
+            "nginx_active": True, "environment_owner_only": True,
+            "https_health": True, "ssh_password_authentication": False}
+
+
+def verify_media(runner, config):
+    command = (
+        "set -eu; "
+        "test \"$(systemctl is-active jellyfin)\" = active; "
+        "test \"$(systemctl is-enabled jellyfin)\" = enabled; "
+        "test \"$(systemctl is-active nginx)\" = active; "
+        "sudo -n test -d /srv/media; "
+        "curl --fail --silent --show-error "
+        "http://127.0.0.1:8096/System/Info/Public >/dev/null; "
+        "sudo -n /usr/sbin/sshd -T | grep -q '^passwordauthentication no$'"
+    )
+    run_ssh(runner, config, command)
+    status = json.loads(https_get(runner, config, "media", "/System/Info/Public"))
+    require(status.get("Version"), "Jellyfin public status endpoint is invalid")
+    return {"jellyfin_active": True, "jellyfin_enabled": True,
+            "nginx_active": True, "media_library_present": True,
+            "https_status": True, "ssh_password_authentication": False}
+
+
+def verify_email(runner, config):
+    command = (
+        "set -eu; "
+        "sudo -n test -s /etc/mailinabox.conf; "
+        "sudo -n test -s /root/.miab_admin_password; "
+        "test \"$(sudo -n stat -c %a /root/.miab_admin_password)\" = 600; "
+        "test \"$(systemctl is-active postfix)\" = active; "
+        "test \"$(systemctl is-active dovecot)\" = active; "
+        "test \"$(systemctl is-active nginx)\" = active; "
+        "sudo -n ss -lnt | grep -Eq '[:.]25[[:space:]]'; "
+        "sudo -n ss -lnt | grep -Eq '[:.]993[[:space:]]'; "
+        "sudo -n /usr/sbin/sshd -T | grep -q '^passwordauthentication no$'"
+    )
+    run_ssh(runner, config, command)
+    tcp_probe = (
+        "import socket,sys;"
+        "host=sys.argv[1];"
+        "ports=(25,443,993);"
+        "\nfor port in ports:\n"
+        " s=socket.create_connection((host,port),10); s.close()\n"
+    )
+    runner.run([sys.executable, "-c", tcp_probe, config["target_host"]], timeout=45)
+    return {"mailinabox_configured": True, "postfix_active": True,
+            "dovecot_active": True, "nginx_active": True,
+            "public_mail_ports": True, "admin_password_owner_only": True,
+            "ssh_password_authentication": False}
+
+
 def verify_service(runner, config):
     if config["server_type"] == "vpn":
         return verify_wireguard(runner, config)
     if config["server_type"] == "matrix":
         return verify_matrix(runner, config)
+    if config["server_type"] == "dns":
+        return verify_dns(runner, config)
+    if config["server_type"] == "cloud":
+        return verify_cloud(runner, config)
+    if config["server_type"] == "vault":
+        return verify_vault(runner, config)
+    if config["server_type"] == "media":
+        return verify_media(runner, config)
+    if config["server_type"] == "email":
+        return verify_email(runner, config)
+    if config["server_type"] == "all_in_one":
+        return {"wireguard": verify_wireguard(runner, config),
+                "vaultwarden": verify_vault(runner, config)}
     raise LiveTestError(f"No live service verifier for {config['server_type']}")
 
 
@@ -263,7 +444,7 @@ def verify_service_log_redaction(phantom, deployment_id, config):
     forbidden = ["PrivateKey =", "PresharedKey ="]
     for key in ("matrix_admin_password", "matrix_signing_key",
                 "matrix_form_secret", "matrix_macaroon_secret",
-                "tailscale_auth_key"):
+                "tailscale_auth_key", "vault_admin_token"):
         if config.get(key):
             forbidden.append(str(config[key]))
     require(not any(value in content for value in forbidden),
@@ -288,6 +469,45 @@ def service_config(service):
             "matrix_form_secret": secrets.token_hex(32),
             "matrix_macaroon_secret": secrets.token_hex(32),
             "tailscale_auth_key": "", "enable_bot_support": True,
+        }
+    if service == "dns":
+        return {
+            "provider_workload": "phantom", "dns_upstream": "9.9.9.9;149.112.112.112",
+            "dns_upstream_name": "Quad9", "dns_domain": "",
+            "dns_blocklist": "minimal",
+        }
+    if service == "cloud":
+        return {
+            "provider_workload": "phantom", "domain": "cloud.test",
+            "cloud_admin_user": "liveadmin", "cloud_storage_gb": "10",
+        }
+    if service == "vault":
+        return {
+            "provider_workload": "phantom", "domain": "vault.test",
+            "vault_admin_token": secrets.token_urlsafe(32),
+            "vault_signups_allowed": False,
+        }
+    if service == "media":
+        return {
+            "provider_workload": "phantom", "domain": "media.test",
+            "media_library_path": "/srv/media",
+        }
+    if service == "email":
+        return {
+            "provider_workload": "phantom", "domain": "mail.test",
+            "email_first_user": "admin@mail.test",
+        }
+    if service == "all_in_one":
+        return {
+            "provider_workload": "phantom", "domain": "all.test",
+            "services": ["vpn", "vault"],
+            "service_domains": {"vpn": "all.test", "vault": "vault.all.test"},
+            "all_in_one": True, "certbot_email": "", "certbot_enabled": False,
+            "vpn_port": 51820, "vpn_client_count": 1,
+            "vpn_dns": "1.1.1.1", "vpn_subnet": "10.66.66.0/24",
+            "vpn_allowed_ips": "0.0.0.0/0",
+            "vault_admin_token": secrets.token_urlsafe(32),
+            "vault_signups_allowed": False,
         }
     raise LiveTestError(f"Unsupported live service: {service}")
 

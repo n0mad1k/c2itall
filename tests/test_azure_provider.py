@@ -1443,7 +1443,6 @@ class RoutingAndTemplateTests(AzureFixture):
             'cloud': {('Tcp', 80), ('Tcp', 443)},
             'vault': {('Tcp', 80), ('Tcp', 443)},
             'media': {('Tcp', 80), ('Tcp', 443)},
-            'all_in_one': {('Tcp', 80), ('Tcp', 443)},
             'tak': {('Tcp', 8089), ('Tcp', 8443), ('Tcp', 8446), ('Udp', 41641)},
         }
         for service, ports in expected.items():
@@ -1452,8 +1451,60 @@ class RoutingAndTemplateTests(AzureFixture):
                 self.assertEqual({(rule['protocol'], rule['port']) for rule in rules},
                                  ports)
                 self.assertTrue(all(rule['source'] == '*' for rule in rules))
+        all_in_one = _service_rules({
+            'server_type': 'all_in_one', 'services': ['vpn', 'vault']})
+        self.assertEqual(
+            {(rule['protocol'], rule['port']) for rule in all_in_one},
+            {('Udp', 51820), ('Tcp', 80), ('Tcp', 443)})
+        self.assertEqual(len(all_in_one), 3)
+        with self.assertRaisesRegex(ValueError, 'selected services'):
+            _service_rules({'server_type': 'all_in_one', 'services': []})
+        with self.assertRaisesRegex(ValueError, 'selected services'):
+            _service_rules({'server_type': 'all_in_one', 'services': ['email']})
         with self.assertRaises(ValueError):
             _service_rules({'server_type': 'unsupported'})
+
+    def test_phantom_live_harness_covers_every_privacy_service(self):
+        module_spec = importlib.util.spec_from_file_location(
+            'azure_phantom_live_harness',
+            ROOT / 'scripts/test_azure_phantom_live.py')
+        module = importlib.util.module_from_spec(module_spec)
+        with mock.patch.object(sys, 'path', [str(ROOT / 'scripts'), *sys.path]):
+            module_spec.loader.exec_module(module)
+        expected = {
+            'vpn', 'matrix', 'dns', 'cloud', 'vault', 'media', 'email',
+            'all_in_one'}
+        self.assertEqual(set(module.SERVICES), expected)
+        for service in sorted(expected):
+            with self.subTest(service=service):
+                config = {
+                    'server_type': service, 'operator_ip': '8.8.8.8',
+                    **module.service_config(service),
+                }
+                self.assertTrue(module.expected_allow_rules(config))
+        composite = module.service_config('all_in_one')
+        self.assertEqual(composite['services'], ['vpn', 'vault'])
+        self.assertEqual(composite['service_domains']['vault'], 'vault.all.test')
+
+        class CaptureRunner:
+            evidence = Path('/tmp')
+
+            def __init__(self):
+                self.calls = []
+
+            def run(self, argv, **kwargs):
+                self.calls.append(argv)
+                return ''
+
+        for verifier in (module.verify_dns, module.verify_email):
+            runner = CaptureRunner()
+            service = 'dns' if verifier is module.verify_dns else 'email'
+            config = {'target_host': '203.0.113.10', 'ssh_key': '/tmp/key',
+                      **module.service_config(service)}
+            verifier(runner, config)
+            probe = runner.calls[-1]
+            self.assertEqual(probe[0], sys.executable)
+            compile(probe[2], '<live-probe>', 'exec')
 
     def test_azure_inbound_rules_reject_unsafe_or_ambiguous_values(self):
         invalid = (
