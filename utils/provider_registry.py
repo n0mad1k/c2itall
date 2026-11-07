@@ -11,6 +11,11 @@ from importlib import import_module
 class WorkloadAdapter:
     """Minimum lifecycle contract for a provider/workload implementation."""
 
+    # Native handlers that create a durable, provider-owned recovery key set
+    # this explicitly. Module controllers otherwise retain their established
+    # legacy key generation behavior.
+    manages_ssh_key = False
+
     def gather_config(self):
         raise NotImplementedError
 
@@ -108,7 +113,18 @@ class ProviderDispatcher:
         if capability is not None:
             route = self.route(capability)
             if route is not None:
-                return route.gather_config()
+                config = route.gather_config()
+                if not isinstance(config, dict):
+                    raise TypeError(
+                        f'Configuration route returned invalid data for '
+                        f'{self.provider}/{capability}')
+                manages_ssh_key = getattr(route, 'manages_ssh_key', False)
+                if type(manages_ssh_key) is not bool:
+                    raise TypeError('Adapter manages_ssh_key capability must be a boolean')
+                if manages_ssh_key:
+                    config = dict(config)
+                    config['provider_manages_ssh_key'] = True
+                return config
             if not (legacy_fallback and self.spec.legacy_menu):
                 raise ValueError(f'No configuration route for {self.provider}/{capability}')
         if not self.spec.config_loader:

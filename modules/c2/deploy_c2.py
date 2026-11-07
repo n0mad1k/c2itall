@@ -15,8 +15,9 @@ from utils.common import (
     setup_logging, get_public_ip, confirm_action, wait_for_input,
     archive_old_logs
 )
-from utils.provider_utils import select_provider, gather_provider_config
-from utils.ssh_utils import generate_ssh_key
+from utils.provider_utils import (
+    select_provider, gather_provider_config, prepare_module_ssh_key,
+)
 from utils.naming_utils import get_deployment_name_with_options
 
 def gather_c2_parameters():
@@ -102,11 +103,10 @@ def gather_c2_parameters():
     config['operator_ip'] = operator_ip
     
     # SSH key generation
-    ssh_key_path = generate_ssh_key(config['deployment_id'])
-    if not ssh_key_path:
+    key_ready, _ = prepare_module_ssh_key(config, config['deployment_id'])
+    if not key_ready:
         print(f"{COLORS['RED']}Failed to generate SSH key{COLORS['RESET']}")
         return None
-    config['ssh_key_path'] = f"{ssh_key_path}.pub"
     
     # SMTP Configuration for email services
     print(f"\n{COLORS['BLUE']}SMTP Configuration{COLORS['RESET']}")

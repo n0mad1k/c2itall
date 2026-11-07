@@ -16,13 +16,10 @@ class AzureAttackBoxAdapter(WorkloadAdapter):
     """Provision and configure the supported Azure attack-box workload."""
 
     workload = 'attack_box'
+    manages_ssh_key = True
 
     def gather_config(self):
-        config = azure_utils.gather_azure_config()
-        # The adapter persists intent before creating its canonical deployment
-        # key, so the module must not create an unrelated legacy key first.
-        config['provider_manages_ssh_key'] = True
-        return config
+        return azure_utils.gather_azure_config()
 
     def playbook(self, config):
         return str(azure_utils.ROOT / 'providers' / 'Azure' / 'attack_box.yml')

@@ -5,6 +5,7 @@ Provider selection and configuration utilities
 
 from .common import COLORS, PROVIDERS
 from .provider_registry import providers_for, provider_dispatcher
+from .ssh_utils import generate_ssh_key
 
 def available_providers(capability=None, legacy_fallback=False):
     """Advertise registered handlers plus explicitly allowed legacy providers."""
@@ -42,3 +43,22 @@ def gather_provider_config(provider, capability=None, legacy_fallback=False):
         return dispatcher.gather_config(capability, legacy_fallback=legacy_fallback)
     print(f"{COLORS['RED']}Unknown provider: {provider}{COLORS['RESET']}")
     return None
+
+
+def prepare_module_ssh_key(config, key_name):
+    """Prepare a legacy module key unless the native route owns recovery keys.
+
+    Returns ``(ready, private_key_path)``. A successful provider-owned key
+    yields ``(True, None)`` because it is created only after durable deployment
+    intent has been persisted by that adapter.
+    """
+    provider_managed = config.get('provider_manages_ssh_key', False)
+    if type(provider_managed) is not bool:
+        raise ValueError('provider_manages_ssh_key must be a boolean')
+    if provider_managed:
+        return True, None
+    private_key = generate_ssh_key(key_name)
+    if not private_key:
+        return False, None
+    config['ssh_key_path'] = private_key + '.pub'
+    return True, private_key

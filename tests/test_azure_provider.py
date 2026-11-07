@@ -323,6 +323,7 @@ class RoutingAndTemplateTests(AzureFixture):
 
     def test_workload_config_prefers_registered_handler_then_legacy_loader(self):
         adapter = mock.Mock()
+        adapter.manages_ssh_key = False
         adapter.gather_config.return_value = {'source': 'new'}
         factory = mock.Mock(return_value=adapter)
         azure_spec = registry.PROVIDER_SPECS['azure']._replace(
@@ -345,6 +346,48 @@ class RoutingAndTemplateTests(AzureFixture):
 
         with self.assertRaisesRegex(ValueError, 'No configuration route'):
             provider_utils.gather_provider_config('azure', 'c2', legacy_fallback=True)
+
+    def test_adapter_key_ownership_is_explicit_and_shared_by_modules(self):
+        from utils.azure_workload_adapter import AzureAttackBoxAdapter
+
+        with mock.patch.object(
+                azure, 'gather_azure_config', return_value={'source': 'azure'}):
+            self.assertEqual(
+                provider_utils.gather_provider_config('azure', 'attack_box'),
+                {'source': 'azure', 'provider_manages_ssh_key': True})
+        self.assertTrue(AzureAttackBoxAdapter.manages_ssh_key)
+
+        managed = {'provider_manages_ssh_key': True}
+        with mock.patch.object(provider_utils, 'generate_ssh_key') as generate:
+            self.assertEqual(
+                provider_utils.prepare_module_ssh_key(managed, 'managed'),
+                (True, None))
+        generate.assert_not_called()
+        self.assertNotIn('ssh_key_path', managed)
+
+        legacy = {}
+        with mock.patch.object(
+                provider_utils, 'generate_ssh_key', return_value='/tmp/legacy-key'):
+            self.assertEqual(
+                provider_utils.prepare_module_ssh_key(legacy, 'legacy'),
+                (True, '/tmp/legacy-key'))
+        self.assertEqual(legacy['ssh_key_path'], '/tmp/legacy-key.pub')
+        with self.assertRaisesRegex(ValueError, 'must be a boolean'):
+            provider_utils.prepare_module_ssh_key(
+                {'provider_manages_ssh_key': 'yes'}, 'invalid')
+
+        controllers = (
+            'modules/attack-box/deploy_attack_box.py',
+            'modules/c2/deploy_c2.py',
+            'modules/redirectors/deploy_redirector.py',
+            'modules/phishing/deploy_phishing.py',
+            'modules/payload-server/deploy_payload.py',
+            'modules/webrunner/deploy_webrunner.py',
+        )
+        for controller in controllers:
+            source = (ROOT / controller).read_text()
+            self.assertIn('prepare_module_ssh_key(', source)
+            self.assertNotIn('from utils.ssh_utils import generate_ssh_key', source)
 
     def test_canonical_workload_dispatch_never_retries_failed_handler(self):
         config = {'provider': 'azure', 'provider_workload': 'phishing',
@@ -414,11 +457,13 @@ class RoutingAndTemplateTests(AzureFixture):
                 mock.patch.object(module, 'get_deployment_name_with_options',
                                   return_value='qr-attack-test'), \
                 mock.patch.object(module, 'get_public_ip', return_value='8.8.8.8'), \
-                mock.patch.object(module, 'generate_ssh_key') as key, \
+                mock.patch.object(
+                    module, 'prepare_module_ssh_key',
+                    wraps=module.prepare_module_ssh_key) as key, \
                 mock.patch('builtins.input', side_effect=['n', 'n', 'n']), \
                 contextlib.redirect_stdout(io.StringIO()):
             config = module.gather_quick_recon_parameters()
-        key.assert_not_called()
+        key.assert_called_once_with(config, 'qr-attack-test')
         self.assertEqual(config['provider'], 'azure')
         self.assertEqual(config['provider_workload'], 'attack_box')
         self.assertNotIn('ssh_key_path', config)

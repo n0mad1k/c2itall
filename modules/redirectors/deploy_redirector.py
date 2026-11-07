@@ -14,8 +14,9 @@ from utils.common import (
     COLORS, clear_screen, print_banner, generate_deployment_id, 
     setup_logging, get_public_ip, confirm_action, wait_for_input
 )
-from utils.provider_utils import select_provider, gather_provider_config
-from utils.ssh_utils import generate_ssh_key
+from utils.provider_utils import (
+    select_provider, gather_provider_config, prepare_module_ssh_key,
+)
 
 def gather_redirector_parameters():
     """Collect parameters specific to redirector deployments"""
@@ -99,11 +100,10 @@ def gather_redirector_parameters():
     config['operator_ip'] = operator_ip
     
     # SSH key generation
-    ssh_key_path = generate_ssh_key(config['deployment_id'])
-    if not ssh_key_path:
+    key_ready, _ = prepare_module_ssh_key(config, config['deployment_id'])
+    if not key_ready:
         print(f"{COLORS['RED']}Failed to generate SSH key{COLORS['RESET']}")
         return None
-    config['ssh_key_path'] = f"{ssh_key_path}.pub"
     
     # Post-deployment options
     config['ssh_after_deploy'] = confirm_action("SSH into instance after deployment?", default=True)

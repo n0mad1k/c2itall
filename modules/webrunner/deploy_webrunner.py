@@ -18,8 +18,9 @@ from utils.common import (
     COLORS, clear_screen, print_banner, generate_deployment_id,
     setup_logging, get_public_ip, confirm_action, wait_for_input,
 )
-from utils.provider_utils import available_providers, gather_provider_config
-from utils.ssh_utils import generate_ssh_key
+from utils.provider_utils import (
+    available_providers, gather_provider_config, prepare_module_ssh_key,
+)
 from utils.naming_utils import show_naming_relationship
 from utils.deployment_engine import (
     dispatch_composite_workload, execute_playbook, set_provider_environment,
@@ -361,13 +362,14 @@ def gather_webrunner_parameters() -> dict | None:
     config['webrunner_name'] = f"wr-{config['deployment_id']}"
 
     # SSH key
-    ssh_key_path = generate_ssh_key(config['webrunner_name'])
-    if not ssh_key_path:
+    key_ready, ssh_key_path = prepare_module_ssh_key(
+        config, config['webrunner_name'])
+    if not key_ready:
         print(f"{COLORS['RED']}Failed to generate SSH key.{COLORS['RESET']}")
         return None
-    config['ssh_key_path'] = f"{ssh_key_path}.pub"
-    config['ssh_key_name'] = os.path.basename(ssh_key_path)
-    print(f"{COLORS['GREEN']}SSH key generated: {ssh_key_path}{COLORS['RESET']}")
+    if ssh_key_path:
+        config['ssh_key_name'] = os.path.basename(ssh_key_path)
+        print(f"{COLORS['GREEN']}SSH key generated: {ssh_key_path}{COLORS['RESET']}")
 
     # Country / CIDR selection
     country_codes, exclude_map = _select_countries()

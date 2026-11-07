@@ -17,8 +17,9 @@ from utils.common import (
     setup_logging, get_public_ip, confirm_action, wait_for_input,
     archive_old_logs
 )
-from utils.provider_utils import select_provider, gather_provider_config
-from utils.ssh_utils import generate_ssh_key
+from utils.provider_utils import (
+    select_provider, gather_provider_config, prepare_module_ssh_key,
+)
 from utils.name_generator import generate_attack_box_name
 from utils.naming_utils import get_deployment_name_with_options, show_naming_relationship
 
@@ -124,16 +125,13 @@ def gather_attack_box_parameters(attack_box_type="kali"):
         config['instance_size'] = "medium"
         config['linode_instance_type'] = "g6-standard-4"
     
-    # Native providers may persist intent before creating their own canonical
-    # recovery key. Legacy providers retain the existing module-owned key path.
-    if not config.get('provider_manages_ssh_key'):
-        ssh_key_path = generate_ssh_key(config['attack_box_name'])
-        if ssh_key_path:
-            config['ssh_key_path'] = ssh_key_path + ".pub"
-            print(f"{COLORS['GREEN']}SSH key generated: {ssh_key_path}{COLORS['RESET']}")
-        else:
-            print(f"{COLORS['RED']}Failed to generate SSH key{COLORS['RESET']}")
-            return None
+    key_ready, ssh_key_path = prepare_module_ssh_key(
+        config, config['attack_box_name'])
+    if not key_ready:
+        print(f"{COLORS['RED']}Failed to generate SSH key{COLORS['RESET']}")
+        return None
+    if ssh_key_path:
+        print(f"{COLORS['GREEN']}SSH key generated: {ssh_key_path}{COLORS['RESET']}")
     
     # Additional tools selection
     print(f"\n{COLORS['BLUE']}Additional Tools & Features:{COLORS['RESET']}")
@@ -310,15 +308,13 @@ def gather_quick_recon_parameters():
     if provider == "linode":
         config['linode_instance_type'] = "g6-standard-2"
     
-    # SSH key generation (unless the selected native provider owns the key).
-    if not config.get('provider_manages_ssh_key'):
-        ssh_key_path = generate_ssh_key(config['attack_box_name'])
-        if ssh_key_path:
-            config['ssh_key_path'] = ssh_key_path + ".pub"
-            print(f"{COLORS['GREEN']}SSH key generated: {ssh_key_path}{COLORS['RESET']}")
-        else:
-            print(f"{COLORS['RED']}Failed to generate SSH key{COLORS['RESET']}")
-            return None
+    key_ready, ssh_key_path = prepare_module_ssh_key(
+        config, config['attack_box_name'])
+    if not key_ready:
+        print(f"{COLORS['RED']}Failed to generate SSH key{COLORS['RESET']}")
+        return None
+    if ssh_key_path:
+        print(f"{COLORS['GREEN']}SSH key generated: {ssh_key_path}{COLORS['RESET']}")
     
     # Minimal OPSEC configuration
     print(f"\n{COLORS['BLUE']}Quick OPSEC Configuration:{COLORS['RESET']}")
