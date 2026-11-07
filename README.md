@@ -201,6 +201,17 @@ a compatible all-new selection uses its registered handler. Mixed new/legacy or
 incompatible handler selections stop before provisioning because splitting one
 scan lifecycle would make results and cleanup ambiguous.
 
+The one-node Linode WEBRUNNER lifecycle harness is preview-only unless explicitly
+activated. Activation requires the operator's public IPv4, checks credentials
+before generating local inputs, refuses a deployment identity that already owns
+resources, and independently inventories and deletes test-owned Linodes and
+profile SSH keys before it can report success:
+
+```bash
+python3 smoke_test_webrunner.py
+python3 smoke_test_webrunner.py --activate --operator-ip YOUR_PUBLIC_IPV4
+```
+
 The read-only coverage audit derives its result from the same registry used for
 dispatch. It distinguishes native handlers, explicit transition handlers, legacy
 fallbacks, staged disabled handlers, partial subtype coverage and unsupported
