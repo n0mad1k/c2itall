@@ -175,7 +175,7 @@ def resource_snapshot(runner, config):
 
 
 def run_ssh(runner, config, command, timeout=120):
-    runner.run([
+    return runner.run([
         "ssh", "-F", "/dev/null", "-i", config["ssh_key"],
         "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes",
         "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=accept-new",
@@ -294,17 +294,24 @@ def verify_matrix(runner, config):
 
 
 def verify_dns(runner, config):
-    command = (
-        "set -eu; "
-        "test \"$(systemctl is-active pihole-FTL)\" = active; "
-        "test \"$(systemctl is-enabled pihole-FTL)\" = enabled; "
-        "sudo -n test -s /etc/pihole/.phantom_password; "
-        "test \"$(sudo -n stat -c %a /etc/pihole/.phantom_password)\" = 600; "
-        "sudo -n pihole status >/dev/null; "
-        "sudo -n ss -lntu | grep -Eq '[:.]53[[:space:]]'; "
-        "sudo -n /usr/sbin/sshd -T | grep -q '^passwordauthentication no$'"
-    )
-    run_ssh(runner, config, command)
+    active = run_ssh(runner, config, "systemctl is-active pihole-FTL")
+    require(active == "active", f"Pi-hole FTL is not active: {active}")
+    enabled = run_ssh(runner, config, "systemctl is-enabled pihole-FTL")
+    require(enabled == "enabled", f"Pi-hole FTL is not enabled: {enabled}")
+    password_mode = run_ssh(
+        runner, config,
+        "sudo -n test -s /etc/pihole/.phantom_password && "
+        "sudo -n stat -c %a /etc/pihole/.phantom_password")
+    require(password_mode == "600",
+            f"Pi-hole password mode is not owner-only: {password_mode}")
+    run_ssh(runner, config, "sudo -n pihole status")
+    sockets = run_ssh(runner, config, "sudo -n ss -lntuH")
+    require(any(token.endswith(":53") for line in sockets.splitlines()
+                for token in line.split()), "Pi-hole is not listening on port 53")
+    ssh_password = run_ssh(
+        runner, config,
+        "sudo -n /usr/sbin/sshd -T | sed -n 's/^passwordauthentication //p'")
+    require(ssh_password == "no", "SSH password authentication remains enabled")
     dns_probe = (
         "import socket,struct,sys;"
         "host=sys.argv[1];"

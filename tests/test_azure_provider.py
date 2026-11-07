@@ -1496,6 +1496,18 @@ class RoutingAndTemplateTests(AzureFixture):
 
             def run(self, argv, **kwargs):
                 self.calls.append(argv)
+                if argv[0] == 'ssh':
+                    command = argv[-1]
+                    if 'systemctl is-active pihole-FTL' in command:
+                        return 'active'
+                    if 'systemctl is-enabled pihole-FTL' in command:
+                        return 'enabled'
+                    if 'stat -c %a' in command:
+                        return '600'
+                    if 'ss -lntuH' in command:
+                        return 'udp UNCONN 0 0 0.0.0.0:53 0.0.0.0:*'
+                    if 'passwordauthentication' in command:
+                        return 'no'
                 return ''
 
         for verifier in (module.verify_dns, module.verify_email):
