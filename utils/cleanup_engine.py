@@ -10,6 +10,7 @@ import logging
 import json
 import glob
 import re
+import tempfile
 
 # Add project root to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -210,11 +211,17 @@ def set_provider_environment_for_teardown(config):
 
 def run_teardown_playbook(playbook, config):
     """Run the teardown Ansible playbook"""
+    variables_path = None
     try:
+        fd, variables_path = tempfile.mkstemp(
+            suffix='.json', prefix='c2itall_teardown_')
+        os.chmod(variables_path, 0o600)
+        with os.fdopen(fd, 'w') as variables:
+            variables.write(create_teardown_vars(config))
         cmd = [
             'ansible-playbook',
             playbook,
-            '--extra-vars', create_teardown_vars(config)
+            '--extra-vars', '@' + variables_path,
         ]
         
         if config.get('debug'):
@@ -241,6 +248,9 @@ def run_teardown_playbook(playbook, config):
     except Exception as e:
         logging.error(f"Error executing teardown playbook: {e}")
         return False
+    finally:
+        if variables_path and os.path.exists(variables_path):
+            os.unlink(variables_path)
 
 def create_teardown_vars(config):
     """Create Ansible extra vars for teardown"""

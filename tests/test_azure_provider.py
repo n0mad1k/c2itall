@@ -499,6 +499,42 @@ class RoutingAndTemplateTests(AzureFixture):
             self.assertTrue(registry.workload_route(config).cleanup(config))
         cleanup.assert_called_once_with(config)
 
+    def test_legacy_lifecycle_artifacts_are_owner_only_and_hide_teardown_secrets(self):
+        logs = self.home / 'logs'
+        logs.mkdir()
+        config = {
+            'provider': 'aws', 'provider_workload': 'c2',
+            'deployment_id': 'secure-lifecycle', 'deployment_type': 'c2',
+            'aws_access_key': 'access', 'aws_secret_key': 'secret',
+        }
+        previous = Path.cwd()
+        try:
+            os.chdir(self.home)
+            deployment_engine.save_deployment_info(config)
+        finally:
+            os.chdir(previous)
+        info = logs / 'deployment_info_secure-lifecycle.txt'
+        self.assertEqual(info.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn('secret', info.read_text())
+
+        captured = {}
+
+        def run(argv, **kwargs):
+            variables = argv[argv.index('--extra-vars') + 1]
+            self.assertTrue(variables.startswith('@'))
+            path = Path(variables[1:])
+            captured['path'] = path
+            captured['mode'] = path.stat().st_mode & 0o777
+            captured['data'] = json.loads(path.read_text())
+            self.assertNotIn('secret', ' '.join(argv))
+            return subprocess.CompletedProcess(argv, 0, '', '')
+
+        with mock.patch.object(cleanup_engine.subprocess, 'run', side_effect=run):
+            self.assertTrue(cleanup_engine.run_teardown_playbook('cleanup.yml', config))
+        self.assertEqual(captured['mode'], 0o600)
+        self.assertEqual(captured['data']['aws_secret_key'], 'secret')
+        self.assertFalse(captured['path'].exists())
+
     def test_webrunner_uses_registry_order_and_composite_dispatch(self):
         module_spec = importlib.util.spec_from_file_location(
             'webrunner_dispatch_test',
