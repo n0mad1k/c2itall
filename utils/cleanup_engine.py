@@ -129,6 +129,12 @@ def execute_teardown(config):
         adapter = infrastructure_adapter(provider)
     if adapter is not None:
         return adapter.cleanup(config)
+    return execute_legacy_teardown(config)
+
+
+def execute_legacy_teardown(config):
+    """Run preserved cleanup without re-entering the provider registry."""
+    provider = config.get('provider')
     deployment_id = config.get('deployment_id')
     
     if not provider or not deployment_id:

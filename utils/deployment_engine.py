@@ -24,11 +24,18 @@ _SECRET_KEYS = frozenset({
 })
 
 
+def _is_legacy_bridge(adapter):
+    """Recognize an explicit bridge without treating dynamic mocks as bridges."""
+    return callable(getattr(type(adapter), 'deploy_with_legacy', None))
+
+
 def dispatch_workload(config, legacy_deploy):
     """Prefer a registered workload handler and otherwise call legacy code once."""
     provider = config.get('provider')
     adapter = workload_route(config)
     if adapter is not None:
+        if _is_legacy_bridge(adapter):
+            return adapter.deploy_with_legacy(config, legacy_deploy)
         return adapter.deploy(config)
     if uses_legacy_routes(provider):
         return legacy_deploy(config)
@@ -53,7 +60,10 @@ def dispatch_composite_workload(config, legacy_deploy):
     if len(adapter_types) != 1:
         logging.error('Composite workload providers use incompatible handlers')
         return False
-    return registered[0][1].deploy(config)
+    adapter = registered[0][1]
+    if _is_legacy_bridge(adapter):
+        return adapter.deploy_with_legacy(config, legacy_deploy)
+    return adapter.deploy(config)
 
 
 def deploy_infrastructure(config):
@@ -73,15 +83,14 @@ def deploy_infrastructure(config):
         logging.error("Missing provider or deployment ID in configuration")
         return False
 
-    adapter = workload_route(config)
-    if adapter is not None:
-        return adapter.deploy(config)
-    if not uses_legacy_routes(provider):
-        logging.error('Provider has no route for this workload')
-        return False
+    return dispatch_workload(config, _deploy_infrastructure_legacy)
+
+
+def _deploy_infrastructure_legacy(config):
+    """Execute the preserved provider playbook after dispatcher selection."""
 
     # Determine which playbook to use
-    playbook = determine_playbook(config)
+    playbook = determine_legacy_playbook(config)
 
     if not playbook:
         logging.error("Could not determine appropriate playbook for deployment")
@@ -113,10 +122,16 @@ def determine_playbook(config):
     """
     provider = config.get('provider')
     adapter = workload_route(config)
-    if adapter is not None:
+    if adapter is not None and not _is_legacy_bridge(adapter):
         return adapter.playbook(config)
     if not uses_legacy_routes(provider):
         return None
+    return determine_legacy_playbook(config)
+
+
+def determine_legacy_playbook(config):
+    """Resolve an existing playbook without re-entering provider dispatch."""
+    provider = config.get('provider')
     provider_dir = PROVIDER_DIRS.get(provider, provider.capitalize())
     base_path = f"providers/{provider_dir}"
 

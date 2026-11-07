@@ -55,10 +55,24 @@ class ProviderSpec(namedtuple('_ProviderSpec', 'directory ssh_user legacy_menu c
         return frozenset(self.routes)
 
 
+_AWS_TRANSITION = 'utils.legacy_provider_adapter:aws_adapter'
+_LINODE_TRANSITION = 'utils.legacy_provider_adapter:linode_adapter'
+_FLOKINET_TRANSITION = 'utils.legacy_provider_adapter:flokinet_adapter'
+
+
 PROVIDER_SPECS = {
-    'aws': ProviderSpec('AWS', 'kali', config_loader='utils.aws_utils:gather_aws_config'),
-    'linode': ProviderSpec('Linode', 'root', config_loader='utils.linode_utils:gather_linode_config'),
-    'flokinet': ProviderSpec('FlokiNET', 'root', config_loader='utils.flokinet_utils:gather_flokinet_config'),
+    'aws': ProviderSpec('AWS', 'kali', config_loader='utils.aws_utils:gather_aws_config',
+                        routes={workload: _AWS_TRANSITION for workload in (
+                            'attack_box', 'c2', 'payload_server', 'phishing',
+                            'redirector', 'webrunner')}),
+    'linode': ProviderSpec('Linode', 'root', config_loader='utils.linode_utils:gather_linode_config',
+                           routes={workload: _LINODE_TRANSITION for workload in (
+                               'attack_box', 'c2', 'payload_server', 'phishing',
+                               'redirector', 'webrunner')}),
+    'flokinet': ProviderSpec('FlokiNET', 'root', config_loader='utils.flokinet_utils:gather_flokinet_config',
+                             routes={workload: _FLOKINET_TRANSITION for workload in (
+                                 'c2', 'payload_server', 'phishing', 'redirector',
+                                 'webrunner')}),
     'azure': ProviderSpec('Azure', 'azureuser', False,
                           config_loader='utils.azure_utils:gather_azure_config',
                           routes={

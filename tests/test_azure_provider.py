@@ -331,13 +331,14 @@ class RoutingAndTemplateTests(AzureFixture):
                 {'source': 'new'})
             adapter.gather_config.assert_called_once_with()
 
-        legacy_loader = mock.Mock(return_value={'source': 'legacy'})
-        with mock.patch.object(registry, '_load', return_value=legacy_loader):
+        from utils import aws_utils
+        with mock.patch.object(
+                aws_utils, 'gather_aws_config', return_value={'source': 'transition'}) as loader:
             self.assertEqual(
                 provider_utils.gather_provider_config(
                     'aws', 'c2', legacy_fallback=True),
-                {'source': 'legacy'})
-            legacy_loader.assert_called_once_with()
+                {'source': 'transition'})
+            loader.assert_called_once_with()
 
         with self.assertRaisesRegex(ValueError, 'No configuration route'):
             provider_utils.gather_provider_config('azure', 'c2', legacy_fallback=True)
@@ -456,11 +457,47 @@ class RoutingAndTemplateTests(AzureFixture):
             with self.subTest(providers=providers), self.assertRaises(ValueError):
                 registry.composite_workload_routes({
                     'providers': providers, 'provider_workload': 'webrunner'})
-        self.assertEqual(
-            registry.composite_workload_routes({
-                'providers': ['linode', 'aws'],
-                'provider_workload': 'webrunner'}),
-            [('linode', None), ('aws', None)])
+        routes = registry.composite_workload_routes({
+            'providers': ['linode', 'aws'],
+            'provider_workload': 'webrunner'})
+        self.assertEqual([provider for provider, _ in routes], ['linode', 'aws'])
+        self.assertEqual([adapter.provider for _, adapter in routes], ['linode', 'aws'])
+        self.assertEqual(len({type(adapter) for _, adapter in routes}), 1)
+
+    def test_non_phantom_transition_routes_call_preserved_executor_once(self):
+        from utils.legacy_provider_adapter import LegacyProviderAdapter
+        expected = {
+            'aws': {'attack_box', 'c2', 'payload_server', 'phishing',
+                    'redirector', 'webrunner'},
+            'linode': {'attack_box', 'c2', 'payload_server', 'phishing',
+                       'redirector', 'webrunner'},
+            'flokinet': {'c2', 'payload_server', 'phishing', 'redirector',
+                         'webrunner'},
+        }
+        for provider, workloads in expected.items():
+            with self.subTest(provider=provider):
+                self.assertTrue(workloads.issubset(
+                    registry.PROVIDER_SPECS[provider].capabilities))
+                for workload in workloads:
+                    adapter = registry.provider_dispatcher(provider).route(workload)
+                    self.assertIsInstance(adapter, LegacyProviderAdapter)
+                    self.assertEqual(adapter.provider, provider)
+
+        config = {'provider': 'aws', 'provider_workload': 'c2',
+                  'deployment_id': 'transition-test'}
+        legacy = mock.Mock(return_value=False)
+        self.assertFalse(deployment_engine.dispatch_workload(config, legacy))
+        legacy.assert_called_once_with(config)
+        legacy.reset_mock(side_effect=True)
+        legacy.side_effect = RuntimeError('preserved executor failed')
+        with self.assertRaisesRegex(RuntimeError, 'preserved executor failed'):
+            deployment_engine.dispatch_workload(config, legacy)
+        legacy.assert_called_once_with(config)
+
+        with mock.patch.object(
+                cleanup_engine, 'execute_legacy_teardown', return_value=True) as cleanup:
+            self.assertTrue(registry.workload_route(config).cleanup(config))
+        cleanup.assert_called_once_with(config)
 
     def test_webrunner_uses_registry_order_and_composite_dispatch(self):
         module_spec = importlib.util.spec_from_file_location(
