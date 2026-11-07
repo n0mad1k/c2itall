@@ -42,7 +42,9 @@ def verify_committed_source(runner):
     for path in parent_paths:
         runner.run(["git", "diff", "--quiet", "HEAD", "--", path])
     for path in ("phantom/phantom.py", "phantom/test_phantom.py",
-                 "phantom/playbooks/common/base_hardening.yml"):
+                 "phantom/playbooks/common/base_hardening.yml",
+                 "phantom/playbooks/vpn/tasks/install.yml",
+                 "phantom/playbooks/vpn/tasks/configure.yml"):
         runner.run(["git", "-C", str(ROOT / "ghost_protocol"), "diff", "--quiet",
                     "HEAD", "--", path])
     return {
@@ -161,6 +163,16 @@ def verify_wireguard(runner, config):
             "ssh_password_authentication": False}
 
 
+def verify_wireguard_log_redaction(phantom, deployment_id):
+    log = phantom.PHANTOM_LOGS / f"deployment_{deployment_id}.log"
+    require(log.is_file(), "Phantom deployment log is missing")
+    content = log.read_text(errors="replace")
+    forbidden = ("PrivateKey =", "PresharedKey =")
+    require(not any(value in content for value in forbidden),
+            "Phantom deployment log contains WireGuard key material")
+    return {"wireguard_key_material_absent": True}
+
+
 def clean_phantom_files(phantom, deployment_id):
     work = phantom.WORK_DIR / deployment_id
     if work.exists():
@@ -235,11 +247,13 @@ def activate(operator_ip=None):
             require(phantom.deploy("vpn", config), "Repeated Phantom deployment failed")
         repeated = resource_snapshot(runner, config)
         repeated_service = verify_wireguard(runner, config)
+        redaction = verify_wireguard_log_redaction(phantom, deployment_id)
         require(first["vm_id"].lower() == repeated["vm_id"].lower()
                 and first["resource_ids"] == repeated["resource_ids"],
                 "Repeated Phantom deployment changed Azure resource identity")
         runner.record("repeat-deployment.json", {"azure": repeated,
                                                   "service": repeated_service,
+                                                  "log_redaction": redaction,
                                                   "resource_identity_preserved": True})
         live_passed = True
     except BaseException as error:
