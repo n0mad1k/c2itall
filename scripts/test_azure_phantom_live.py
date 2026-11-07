@@ -41,7 +41,8 @@ def verify_committed_source(runner):
     )
     for path in parent_paths:
         runner.run(["git", "diff", "--quiet", "HEAD", "--", path])
-    for path in ("phantom/phantom.py", "phantom/test_phantom.py"):
+    for path in ("phantom/phantom.py", "phantom/test_phantom.py",
+                 "phantom/playbooks/common/base_hardening.yml"):
         runner.run(["git", "-C", str(ROOT / "ghost_protocol"), "diff", "--quiet",
                     "HEAD", "--", path])
     return {
