@@ -13,7 +13,9 @@ import json
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from utils.common import COLORS, PROVIDER_DIRS
-from utils.provider_registry import workload_route, uses_legacy_routes
+from utils.provider_registry import (
+    composite_workload_routes, workload_route, uses_legacy_routes,
+)
 
 _SECRET_KEYS = frozenset({
     'linode_token', 'aws_access_key', 'aws_secret_key', 'flokinet_api_key',
@@ -32,6 +34,26 @@ def dispatch_workload(config, legacy_deploy):
         return legacy_deploy(config)
     logging.error('Provider has no route for this workload')
     return False
+
+
+def dispatch_composite_workload(config, legacy_deploy):
+    """Dispatch one multi-provider lifecycle without unsafe partial fallback."""
+    routes = composite_workload_routes(config)
+    registered = [(provider, adapter) for provider, adapter in routes
+                  if adapter is not None]
+    if not registered:
+        if all(uses_legacy_routes(provider) for provider, _ in routes):
+            return legacy_deploy(config)
+        logging.error('Composite workload includes a provider without a route')
+        return False
+    if len(registered) != len(routes):
+        logging.error('Composite workload cannot mix new and legacy provider routes')
+        return False
+    adapter_types = {type(adapter) for _, adapter in registered}
+    if len(adapter_types) != 1:
+        logging.error('Composite workload providers use incompatible handlers')
+        return False
+    return registered[0][1].deploy(config)
 
 
 def deploy_infrastructure(config):

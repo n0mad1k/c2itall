@@ -7,6 +7,10 @@ import json
 import os
 import sys
 
+if any(arg in ('-h', '--help') for arg in sys.argv[1:]):
+    print(__doc__.strip())
+    sys.exit(0)
+
 sys.path.insert(0, os.path.dirname(__file__))
 
 from utils.common import generate_deployment_id, setup_logging

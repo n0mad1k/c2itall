@@ -167,9 +167,12 @@ registered in `ProviderSpec.routes`; adding a provider or workload does not
 require adding another provider switch to that module. Azure implements the
 infrastructure handler today. AWS, Linode and FlokiNET retain their existing
 workload implementations through the compatibility fallback; they have not been
-silently rewritten or live-tested by this change. Phantom and WEBRUNNER remain on
-their existing paths because their separate and multi-provider lifecycles require
-different adapter contracts.
+silently rewritten or live-tested by this change. WEBRUNNER now uses a composite
+dispatcher: an all-legacy provider selection runs its existing playbook once, and
+a compatible all-new selection uses its registered handler. Mixed new/legacy or
+incompatible handler selections stop before provisioning because splitting one
+scan lifecycle would make results and cleanup ambiguous. Phantom retains its
+separate provider lifecycle.
 Provider registrations remain enabled after the test.
 
 ### Main Menu (Easiest Method)

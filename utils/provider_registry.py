@@ -118,6 +118,24 @@ def workload_route(config):
     return None
 
 
+def composite_workload_routes(config):
+    """Resolve every provider participating in one composite workload."""
+    providers = config.get('providers')
+    if not isinstance(providers, (list, tuple)) or not providers:
+        raise ValueError('Composite workload requires at least one provider')
+    workload = requested_workload(config)
+    routes = []
+    seen = set()
+    for provider in providers:
+        if not isinstance(provider, str) or not provider or provider in seen:
+            raise ValueError('Composite workload providers must be unique names')
+        seen.add(provider)
+        dispatcher = provider_dispatcher(provider)
+        routes.append((provider, dispatcher.route(workload)
+                       if dispatcher is not None else None))
+    return routes
+
+
 def requested_workload(config):
     """Recognize the existing selectors without changing legacy precedence."""
     if isinstance(config.get('provider_workload'), str) and config['provider_workload']:

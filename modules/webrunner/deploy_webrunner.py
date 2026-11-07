@@ -18,10 +18,12 @@ from utils.common import (
     COLORS, clear_screen, print_banner, generate_deployment_id,
     setup_logging, get_public_ip, confirm_action, wait_for_input,
 )
-from utils.provider_utils import gather_provider_config
+from utils.provider_utils import available_providers, gather_provider_config
 from utils.ssh_utils import generate_ssh_key
 from utils.naming_utils import show_naming_relationship
-from utils.deployment_engine import execute_playbook, set_provider_environment
+from utils.deployment_engine import (
+    dispatch_composite_workload, execute_playbook, set_provider_environment,
+)
 from utils.chunk_utils import get_country_cidrs, chunk_cidrs, ip_count
 from utils.provider_rates import (
     PRESETS, SCAN_MODES, DEFAULT_INSTANCE,
@@ -30,8 +32,9 @@ from utils.provider_rates import (
 
 WEBRUNNER_INPUTS = Path(__file__).parent / 'inputs'
 
-SUPPORTED_PROVIDERS = ['linode', 'aws', 'flokinet']
-PROVIDER_LABELS = {'linode': 'Linode', 'aws': 'AWS', 'flokinet': 'FlokiNET'}
+PROVIDER_LABELS = {
+    'linode': 'Linode', 'aws': 'AWS', 'flokinet': 'FlokiNET', 'azure': 'Azure',
+}
 
 
 # ── menu ──────────────────────────────────────────────────────────────────────
@@ -45,22 +48,29 @@ def webrunner_menu():
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _select_providers() -> list[str]:
+    available = available_providers('webrunner', legacy_fallback=True)
+    preferred = ('linode', 'aws', 'flokinet')
+    providers = ([provider for provider in preferred if provider in available] +
+                 [provider for provider in available if provider not in preferred])
+    if not providers:
+        print(f"{COLORS['RED']}No providers support WEBRUNNER.{COLORS['RESET']}")
+        return []
     print(f"\n{COLORS['BLUE']}Provider Selection (multi-select):{COLORS['RESET']}")
-    for i, key in enumerate(SUPPORTED_PROVIDERS, 1):
-        print(f"  {i}) {PROVIDER_LABELS[key]}")
+    for i, key in enumerate(providers, 1):
+        print(f"  {i}) {PROVIDER_LABELS.get(key, key.capitalize())}")
 
     raw = input("Select providers (e.g. 1 or 1,2) [1]: ").strip() or "1"
     selected = []
     for part in raw.split(','):
         try:
             idx = int(part.strip()) - 1
-            if 0 <= idx < len(SUPPORTED_PROVIDERS):
-                key = SUPPORTED_PROVIDERS[idx]
+            if 0 <= idx < len(providers):
+                key = providers[idx]
                 if key not in selected:
                     selected.append(key)
         except ValueError:
             pass
-    return selected or ['linode']
+    return selected or [providers[0]]
 
 
 def _select_countries() -> tuple[list[str], dict[str, list]]:
@@ -329,10 +339,13 @@ def gather_webrunner_parameters() -> dict | None:
 
     # Provider selection — multi-select, each provider prompts for creds + region
     providers = _select_providers()
+    if not providers:
+        return None
     config['providers'] = providers
 
     for provider in providers:
-        provider_config = gather_provider_config(provider)
+        provider_config = gather_provider_config(
+            provider, 'webrunner', legacy_fallback=True)
         if not provider_config:
             return None
         config.update(provider_config)
@@ -341,6 +354,7 @@ def gather_webrunner_parameters() -> dict | None:
 
     # Deployment type
     config['deployment_type'] = 'webrunner'
+    config['provider_workload'] = 'webrunner'
     config['webrunner_deployment'] = True
 
     # Naming — auto-derive from deployment_id, no second prompt
@@ -599,16 +613,11 @@ def execute_webrunner_deployment(config: dict):
     config['scanner_ip_log'] = os.path.join(logs_dir, f"scanner_ips_{config['webrunner_name']}.txt")
     config['results_dir'] = os.path.join(logs_dir, f"webrunner_{config['deployment_id']}")
 
-    for provider in config['providers']:
-        set_provider_environment({**config, 'provider': provider})
-
-    playbook = 'providers/webrunner.yml'
-
     print(f"\n{COLORS['CYAN']}[*] Launching WEBRUNNER — {n_nodes} nodes across "
           f"{', '.join(PROVIDER_LABELS[p] for p in config['providers'])}{COLORS['RESET']}")
     print(f"{COLORS['YELLOW']}    Provisioning may take several minutes per node.{COLORS['RESET']}\n")
 
-    success = execute_playbook(playbook, config)
+    success = dispatch_composite_workload(config, _execute_webrunner_legacy)
 
     if success:
         print(f"\n{COLORS['GREEN']}[+] WEBRUNNER complete.{COLORS['RESET']}")
@@ -619,3 +628,10 @@ def execute_webrunner_deployment(config: dict):
         print(f"\n{COLORS['RED']}[-] WEBRUNNER failed. Check: logs/deployment_{config['deployment_id']}.log{COLORS['RESET']}")
 
     wait_for_input()
+
+
+def _execute_webrunner_legacy(config):
+    """Run the existing composite playbook for legacy providers."""
+    for provider in config['providers']:
+        set_provider_environment({**config, 'provider': provider})
+    return execute_playbook('providers/webrunner.yml', config)

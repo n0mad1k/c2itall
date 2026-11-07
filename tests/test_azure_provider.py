@@ -409,6 +409,108 @@ class RoutingAndTemplateTests(AzureFixture):
                     getattr(module, function_name)(config)
                 dispatch.assert_called_once_with(config, getattr(module, legacy_name))
 
+    def test_composite_dispatch_uses_one_lifecycle_and_refuses_partial_fallback(self):
+        config = {'providers': ['linode', 'aws'],
+                  'provider_workload': 'webrunner'}
+        legacy = mock.Mock(return_value=True)
+        with mock.patch.object(
+                deployment_engine, 'composite_workload_routes',
+                return_value=[('linode', None), ('aws', None)]):
+            self.assertTrue(
+                deployment_engine.dispatch_composite_workload(config, legacy))
+        legacy.assert_called_once_with(config)
+
+        adapter = mock.Mock()
+        adapter.deploy.return_value = True
+        with mock.patch.object(
+                deployment_engine, 'composite_workload_routes',
+                return_value=[('azure', adapter)]):
+            self.assertTrue(
+                deployment_engine.dispatch_composite_workload(config, legacy))
+        adapter.deploy.assert_called_once_with(config)
+        legacy.assert_called_once()
+
+        adapter.deploy.side_effect = RuntimeError('composite handler failed')
+        with mock.patch.object(
+                deployment_engine, 'composite_workload_routes',
+                return_value=[('azure', adapter)]), self.assertRaisesRegex(
+                    RuntimeError, 'composite handler failed'):
+            deployment_engine.dispatch_composite_workload(config, legacy)
+        legacy.assert_called_once()
+
+        for routes in (
+                [('linode', None), ('azure', adapter)],
+                [('azure', mock.Mock()), ('other', object())]):
+            with self.subTest(routes=routes), mock.patch.object(
+                    deployment_engine, 'composite_workload_routes',
+                    return_value=routes):
+                self.assertFalse(
+                    deployment_engine.dispatch_composite_workload(config, legacy))
+        legacy.assert_called_once()
+
+    def test_composite_route_validation(self):
+        for providers in (None, [], ['aws', 'aws'], ['aws', '']):
+            with self.subTest(providers=providers), self.assertRaises(ValueError):
+                registry.composite_workload_routes({
+                    'providers': providers, 'provider_workload': 'webrunner'})
+        self.assertEqual(
+            registry.composite_workload_routes({
+                'providers': ['linode', 'aws'],
+                'provider_workload': 'webrunner'}),
+            [('linode', None), ('aws', None)])
+
+    def test_webrunner_uses_registry_order_and_composite_dispatch(self):
+        module_spec = importlib.util.spec_from_file_location(
+            'webrunner_dispatch_test',
+            ROOT / 'modules/webrunner/deploy_webrunner.py')
+        module = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(module)
+        with mock.patch.object(
+                module, 'available_providers',
+                return_value=['aws', 'azure', 'linode', 'flokinet']), mock.patch(
+                    'builtins.input', return_value='1'), contextlib.redirect_stdout(
+                        io.StringIO()):
+            self.assertEqual(module._select_providers(), ['linode'])
+        with mock.patch.object(
+                module, 'available_providers',
+                return_value=['aws', 'azure', 'linode', 'flokinet']), mock.patch(
+                    'builtins.input', return_value='4'), contextlib.redirect_stdout(
+                        io.StringIO()):
+            self.assertEqual(module._select_providers(), ['azure'])
+
+        with mock.patch.object(module, 'clear_screen'), mock.patch.object(
+                module, 'print_banner'), mock.patch.object(
+                    module, 'generate_deployment_id', return_value='test-id'), mock.patch.object(
+                        module, '_select_providers', return_value=['linode']), mock.patch.object(
+                            module, 'gather_provider_config', return_value=None) as gather, mock.patch(
+                                'builtins.input', side_effect=['', '']), contextlib.redirect_stdout(
+                                    io.StringIO()):
+            self.assertIsNone(module.gather_webrunner_parameters())
+        gather.assert_called_once_with(
+            'linode', 'webrunner', legacy_fallback=True)
+
+        config = {
+            'deployment_id': 'test-id', 'webrunner_name': 'wr-test-id',
+            'engagement': 'test-id', 'providers': ['linode'],
+            'provider_workload': 'webrunner', 'preset': 'balanced',
+            'chunk_size': 1000, 'scan_mode': 'nmap-only', 'ports': [443],
+            'masscan_rate': 100, 'total_ips': 1, 'use_tor': False,
+            'enhanced_opsec': False, 'teardown_after_scan': True,
+            'country_codes': [], 'node_chunks': [{
+                'provider': 'linode', 'node_name': 'wr-test-id-01',
+                'cidrs': ['192.0.2.1/32'], 'ip_count': 1, 'idx': 0,
+                'region': 'us-east'}],
+        }
+        with mock.patch.object(module, '_base', self.temporary.name), mock.patch.object(
+                module, 'clear_screen'), mock.patch.object(module, 'print_banner'), mock.patch.object(
+                    module, 'setup_logging'), mock.patch.object(
+                        module, 'confirm_action', return_value=True), mock.patch.object(
+                            module, 'wait_for_input'), mock.patch.object(
+                                module, 'dispatch_composite_workload', return_value=False) as dispatch, contextlib.redirect_stdout(
+                                    io.StringIO()):
+            module.execute_webrunner_deployment(config)
+        dispatch.assert_called_once_with(config, module._execute_webrunner_legacy)
+
     def test_existing_routes_remain_and_azure_cannot_route_payloads(self):
         for provider, dirname in (("aws", "AWS"), ("linode", "Linode"), ("flokinet", "FlokiNET")):
             self.assertEqual(deployment_engine.determine_playbook({"provider": provider, "c2_only": True}), f"providers/{dirname}/c2.yml")
