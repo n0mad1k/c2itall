@@ -317,6 +317,9 @@ class RoutingAndTemplateTests(AzureFixture):
             self.assertEqual(
                 provider_utils.available_providers('c2', legacy_fallback=True),
                 ['aws', 'linode', 'flokinet', 'azure'])
+        self.assertEqual(
+            provider_utils.available_providers('attack_box', legacy_fallback=True),
+            ['aws', 'linode', 'flokinet', 'azure'])
 
     def test_workload_config_prefers_registered_handler_then_legacy_loader(self):
         adapter = mock.Mock()
@@ -389,6 +392,36 @@ class RoutingAndTemplateTests(AzureFixture):
                 select.assert_called_once_with(workload, legacy_fallback=True)
                 gather.assert_called_once_with(
                     'aws', workload, legacy_fallback=True)
+
+    def test_azure_attack_box_menu_leaves_key_ownership_to_provider(self):
+        module_spec = importlib.util.spec_from_file_location(
+            'azure_attack_box_menu',
+            ROOT / 'modules/attack-box/deploy_attack_box.py')
+        module = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(module)
+        provider_config = {
+            'provider_manages_ssh_key': True,
+            'azure_subscription_id': smoke.SUBSCRIPTION,
+            'azure_location': 'eastus', 'azure_vm_size': smoke.SIZE,
+            'operator_ip': '8.8.8.8',
+        }
+        with mock.patch.object(module, 'clear_screen'), mock.patch.object(
+                module, 'print_banner'), mock.patch.object(
+                    module, 'generate_deployment_id', return_value='attack-test'), \
+                mock.patch.object(module, 'select_provider', return_value='azure'), \
+                mock.patch.object(module, 'gather_provider_config',
+                                  return_value=provider_config), \
+                mock.patch.object(module, 'get_deployment_name_with_options',
+                                  return_value='qr-attack-test'), \
+                mock.patch.object(module, 'get_public_ip', return_value='8.8.8.8'), \
+                mock.patch.object(module, 'generate_ssh_key') as key, \
+                mock.patch('builtins.input', side_effect=['n', 'n', 'n']), \
+                contextlib.redirect_stdout(io.StringIO()):
+            config = module.gather_quick_recon_parameters()
+        key.assert_not_called()
+        self.assertEqual(config['provider'], 'azure')
+        self.assertEqual(config['provider_workload'], 'attack_box')
+        self.assertNotIn('ssh_key_path', config)
 
     def test_direct_legacy_modules_enter_dispatcher_before_existing_executor(self):
         cases = (
@@ -615,21 +648,32 @@ class RoutingAndTemplateTests(AzureFixture):
             module.execute_webrunner_deployment(config)
         dispatch.assert_called_once_with(config, module._execute_webrunner_legacy)
 
-    def test_existing_routes_remain_and_azure_cannot_route_payloads(self):
+    def test_existing_routes_remain_and_azure_routes_only_implemented_workloads(self):
         for provider, dirname in (("aws", "AWS"), ("linode", "Linode"), ("flokinet", "FlokiNET")):
             self.assertEqual(deployment_engine.determine_playbook({"provider": provider, "c2_only": True}), f"providers/{dirname}/c2.yml")
             self.assertEqual(deployment_engine.determine_playbook({"provider": provider, "attack_box_deployment": True}), f"providers/{dirname}/attack_box.yml")
         self.assertTrue(deployment_engine.determine_playbook(self.config).endswith("providers/Azure/infrastructure.yml"))
-        for extra in ({"c2_only": True}, {"attack_box_deployment": True}, {"phishing_deployment": True}, {"infrastructure_deployment": False}):
+        attack = {
+            **self.config, 'provider_workload': 'attack_box',
+            'deployment_type': 'quick_recon_box',
+            'attack_box_type': 'quick_recon', 'attack_box_deployment': True,
+        }
+        self.assertTrue(
+            deployment_engine.determine_playbook(attack).endswith(
+                'providers/Azure/attack_box.yml'))
+        for extra in ({"c2_only": True}, {"phishing_deployment": True}, {"infrastructure_deployment": False}):
             self.assertIsNone(deployment_engine.determine_playbook({**self.config, **extra}))
 
-    def test_phantom_route_is_advertised_without_exposing_other_azure_workloads(self):
+    def test_phantom_and_attack_box_routes_do_not_expose_unimplemented_azure_workloads(self):
         self.assertEqual(
             provider_utils.available_providers('phantom', legacy_fallback=True),
             ['aws', 'linode', 'flokinet', 'azure'])
         self.assertEqual(
             provider_utils.available_providers('c2', legacy_fallback=True),
             ['aws', 'linode', 'flokinet'])
+        self.assertEqual(
+            provider_utils.available_providers('attack_box', legacy_fallback=True),
+            ['aws', 'linode', 'flokinet', 'azure'])
         self.assertEqual(
             provider_utils.available_providers('chat', legacy_fallback=True),
             ['aws', 'linode', 'flokinet', 'azure'])
@@ -730,6 +774,46 @@ class RoutingAndTemplateTests(AzureFixture):
             'azure_subscription_id': smoke.SUBSCRIPTION,
             'azure_resource_group': 'c2itall-test-azure',
         })
+
+    def test_azure_attack_box_adapter_owns_routed_lifecycle(self):
+        from utils.azure_workload_adapter import AzureAttackBoxAdapter
+
+        adapter = AzureAttackBoxAdapter()
+        config = {
+            'provider': 'azure', 'provider_workload': 'attack_box',
+            'deployment_id': 'test-azure', 'deployment_type': 'quick_recon_box',
+            'attack_box_type': 'quick_recon', 'attack_box_deployment': True,
+            'attack_box_name': 'qr-test-azure', 'setup_vpn': False,
+            'azure_subscription_id': smoke.SUBSCRIPTION,
+            'azure_location': 'eastus', 'azure_vm_size': smoke.SIZE,
+            'operator_ip': '8.8.8.8', 'azure_state_dir': str(self.state_dir),
+        }
+        infrastructure = adapter._infrastructure_config(config)
+        self.assertEqual(infrastructure['provider_workload'], 'attack_box')
+        self.assertEqual(infrastructure['azure_inbound_rules'], [])
+        normalized = azure.validate_config(infrastructure, require_key=False)
+        self.assertEqual(normalized['provider_workload'], 'attack_box')
+        with self.assertRaisesRegex(ValueError, 'quick-recon'):
+            adapter._infrastructure_config({**config, 'attack_box_type': 'kali',
+                                            'deployment_type': 'kali_attack_box'})
+
+        state = dict(normalized, outputs={'public_ip': {'value': '1.1.1.1'}})
+        with mock.patch.object(azure, 'prepare_state'), mock.patch.object(
+                azure, 'prepare_ssh_key'), mock.patch.object(
+                    azure, 'deploy_azure', return_value=True), mock.patch.object(
+                        azure, 'load_state', return_value=state), mock.patch.object(
+                            adapter, '_run_service_playbook', return_value=True) as service, \
+                mock.patch.object(deployment_engine, 'save_deployment_info') as save:
+            self.assertTrue(adapter.deploy(config))
+        service.assert_called_once_with(config)
+        save.assert_called_once_with(config)
+        self.assertEqual(config['attack_box_ip'], '1.1.1.1')
+        self.assertEqual(config['ssh_user'], 'azureuser')
+
+        with mock.patch.object(azure, 'cleanup_azure', return_value=True), \
+                mock.patch.object(cleanup_engine, 'archive_deployment_logs') as archive:
+            self.assertTrue(adapter.cleanup(config))
+        archive.assert_called_once_with('test-azure')
 
     def test_azure_phantom_adapter_maps_every_supported_service_allowlist(self):
         from utils.azure_phantom_adapter import _service_rules
@@ -883,6 +967,20 @@ class ProviderContractTests(AzureFixture):
             keys.assert_not_called()
             archive.assert_not_called()
 
+    def test_standalone_teardown_uses_saved_workload_adapter(self):
+        import teardown as standalone
+        from utils.azure_workload_adapter import AzureAttackBoxAdapter
+
+        state = self.prepare()
+        state['provider_workload'] = 'attack_box'
+        with mock.patch.object(
+                AzureAttackBoxAdapter, 'cleanup', return_value=True) as workload, \
+                mock.patch.object(azure, 'cleanup_azure') as infrastructure, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(standalone.teardown_adapter_state(state, force=True))
+        workload.assert_called_once_with(state)
+        infrastructure.assert_not_called()
+
     def test_standalone_teardown_invalid_state_does_not_fall_back_to_logs(self):
         import teardown as standalone
         with mock.patch.object(registry, 'load_infrastructure_state', side_effect=ValueError('invalid')), mock.patch.object(standalone.glob, 'glob') as logs, contextlib.redirect_stdout(io.StringIO()):
@@ -981,7 +1079,10 @@ class ProviderContractTests(AzureFixture):
         with mock.patch.object(standalone.glob, 'glob', return_value=[]), mock.patch('builtins.input', return_value='no'), mock.patch.object(azure, 'cleanup_azure') as adapter, contextlib.redirect_stdout(io.StringIO()):
             self.assertFalse(standalone.teardown_all_deployments())
             adapter.assert_not_called()
-        with mock.patch.object(registry, 'infrastructure_adapter', return_value=None), mock.patch.object(standalone, 'execute_teardown') as legacy, contextlib.redirect_stdout(io.StringIO()):
+        with mock.patch.object(standalone, 'workload_route', return_value=None), \
+                mock.patch.object(registry, 'infrastructure_adapter', return_value=None), \
+                mock.patch.object(standalone, 'execute_teardown') as legacy, \
+                contextlib.redirect_stdout(io.StringIO()):
             self.assertFalse(standalone.teardown_adapter_state(state, force=True))
             legacy.assert_not_called()
 
@@ -1219,6 +1320,17 @@ class SmokeTests(unittest.TestCase):
         harness_spec.loader.exec_module(harness)
         with mock.patch.object(harness, 'activate') as activate, contextlib.redirect_stdout(
                 io.StringIO()):
+            self.assertEqual(harness.main([]), 0)
+        activate.assert_not_called()
+
+    def test_attack_box_live_harness_dry_run_has_no_cloud_calls(self):
+        harness_spec = importlib.util.spec_from_file_location(
+            'azure_attack_box_live',
+            ROOT / 'scripts/test_azure_attack_box_live.py')
+        harness = importlib.util.module_from_spec(harness_spec)
+        harness_spec.loader.exec_module(harness)
+        with mock.patch.object(harness, 'activate') as activate, \
+                contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(harness.main([]), 0)
         activate.assert_not_called()
 

@@ -77,6 +77,7 @@ PROVIDER_SPECS = {
                           config_loader='utils.azure_utils:gather_azure_config',
                           routes={
                               'infrastructure': 'utils.azure_adapter:AzureInfrastructureAdapter',
+                              'attack_box': 'utils.azure_workload_adapter:azure_attack_box_adapter',
                               'phantom': 'utils.azure_phantom_adapter:AzurePhantomAdapter',
                               'chat': 'utils.azure_phantom_adapter:AzurePhantomAdapter',
                           }),

@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STATE_DIR = ROOT / 'deployments' / 'azure'
 CONFIG_KEYS = frozenset({
     'provider', 'deployment_id', 'deployment_type', 'infrastructure_deployment',
+    'provider_workload',
     'azure_subscription_id', 'azure_location', 'azure_vm_size',
     'azure_resource_group', 'azure_os_disk_gb', 'operator_ip', 'ssh_key_path',
     'ssh_private_key_path', 'ssh_key_generated', 'azure_inbound_rules',
@@ -184,6 +185,10 @@ def validate_config(config, require_key=True):
         raise ValueError('Azure supports infrastructure deployments only')
     if result.get('deployment_type') != 'infrastructure':
         raise ValueError('Azure deployment_type must be infrastructure')
+    workload = result.get('provider_workload', 'infrastructure')
+    if not isinstance(workload, str) or not re.fullmatch(r'[a-z][a-z0-9_]{1,39}', workload):
+        raise ValueError('Invalid Azure provider_workload')
+    result['provider_workload'] = workload
     deployment_id = result.get('deployment_id', '')
     if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,39}', deployment_id):
         raise ValueError('Invalid Azure deployment ID')

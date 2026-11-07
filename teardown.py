@@ -98,7 +98,7 @@ def teardown_adapter_state(state, force=False):
         return False
     from utils.provider_registry import infrastructure_adapter
     try:
-        adapter = infrastructure_adapter(state['provider'])
+        adapter = workload_route(state) or infrastructure_adapter(state['provider'])
         if adapter is None:
             raise ValueError('Infrastructure adapter is unavailable')
         # The adapter owns exact key cleanup and state archival. Never follow it

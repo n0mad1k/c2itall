@@ -124,14 +124,16 @@ def gather_attack_box_parameters(attack_box_type="kali"):
         config['instance_size'] = "medium"
         config['linode_instance_type'] = "g6-standard-4"
     
-    # SSH key generation using attack box name for consistency
-    ssh_key_path = generate_ssh_key(config['attack_box_name'])
-    if ssh_key_path:
-        config['ssh_key_path'] = ssh_key_path + ".pub"
-        print(f"{COLORS['GREEN']}SSH key generated: {ssh_key_path}{COLORS['RESET']}")
-    else:
-        print(f"{COLORS['RED']}Failed to generate SSH key{COLORS['RESET']}")
-        return None
+    # Native providers may persist intent before creating their own canonical
+    # recovery key. Legacy providers retain the existing module-owned key path.
+    if not config.get('provider_manages_ssh_key'):
+        ssh_key_path = generate_ssh_key(config['attack_box_name'])
+        if ssh_key_path:
+            config['ssh_key_path'] = ssh_key_path + ".pub"
+            print(f"{COLORS['GREEN']}SSH key generated: {ssh_key_path}{COLORS['RESET']}")
+        else:
+            print(f"{COLORS['RED']}Failed to generate SSH key{COLORS['RESET']}")
+            return None
     
     # Additional tools selection
     print(f"\n{COLORS['BLUE']}Additional Tools & Features:{COLORS['RESET']}")
@@ -308,14 +310,15 @@ def gather_quick_recon_parameters():
     if provider == "linode":
         config['linode_instance_type'] = "g6-standard-2"
     
-    # SSH key generation
-    ssh_key_path = generate_ssh_key(config['attack_box_name'])
-    if ssh_key_path:
-        config['ssh_key_path'] = ssh_key_path + ".pub"
-        print(f"{COLORS['GREEN']}SSH key generated: {ssh_key_path}{COLORS['RESET']}")
-    else:
-        print(f"{COLORS['RED']}Failed to generate SSH key{COLORS['RESET']}")
-        return None
+    # SSH key generation (unless the selected native provider owns the key).
+    if not config.get('provider_manages_ssh_key'):
+        ssh_key_path = generate_ssh_key(config['attack_box_name'])
+        if ssh_key_path:
+            config['ssh_key_path'] = ssh_key_path + ".pub"
+            print(f"{COLORS['GREEN']}SSH key generated: {ssh_key_path}{COLORS['RESET']}")
+        else:
+            print(f"{COLORS['RED']}Failed to generate SSH key{COLORS['RESET']}")
+            return None
     
     # Minimal OPSEC configuration
     print(f"\n{COLORS['BLUE']}Quick OPSEC Configuration:{COLORS['RESET']}")
