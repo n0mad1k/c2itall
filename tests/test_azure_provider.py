@@ -80,6 +80,7 @@ class ConfigurationTests(AzureFixture):
     def test_normalization_and_no_other_provider_secrets(self):
         result = azure.validate_config({**self.config, "aws_secret_key": "secret", "linode_token": "secret"})
         self.assertEqual(result["operator_ip"], "8.8.8.8/32")
+        self.assertEqual(result["azure_os_disk_gb"], 32)
         self.assertNotIn("aws_secret_key", result)
         self.assertNotIn("linode_token", result)
 
@@ -87,6 +88,8 @@ class ConfigurationTests(AzureFixture):
         for key, value in (("deployment_id", "../escape"), ("azure_subscription_id", "not-a-uuid"),
                            ("azure_resource_group", "group;command"), ("azure_location", "eastus --bad"),
                            ("azure_vm_size", "B1s"), ("operator_ip", "0.0.0.0/0"),
+                           ("azure_os_disk_gb", 31), ("azure_os_disk_gb", True),
+                           ("azure_os_disk_gb", "64"),
                            ("operator_ip", "8.8.8.0/24"), ("operator_ip", "127.0.0.1"),
                            ("operator_ip", "2001:4860:4860::8888"), ("ssh_key_generated", "true"),
                            ("deployment_type", "c2"), ("infrastructure_deployment", False)):
@@ -534,6 +537,10 @@ class RoutingAndTemplateTests(AzureFixture):
             {(rule['protocol'], rule['port']) for rule in _service_rules({
                 'server_type': 'matrix', 'provider_workload': 'chat'})},
             {('Tcp', 80), ('Tcp', 443), ('Tcp', 8448), ('Udp', 41641)})
+        self.assertEqual(
+            {(rule['protocol'], rule['port']) for rule in _service_rules({
+                'server_type': 'tak', 'provider_workload': 'chat'})},
+            {('Tcp', 8089), ('Tcp', 8443), ('Tcp', 8446), ('Udp', 41641)})
 
     def test_deferred_chat_module_uses_shared_provider_route_and_phantom(self):
         module_spec = importlib.util.spec_from_file_location(
@@ -598,6 +605,21 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertEqual(config['target_host'], '1.1.1.1')
         self.assertEqual(config['ssh_user'], 'azureuser')
         self.assertEqual(config['ssh_key'], str(self.key))
+        self.assertEqual(config['provider_workload'], 'phantom')
+
+        chat_config = dict(config, deployment_id='test-chat',
+                           provider_workload='chat', server_type='tak')
+        chat_config.pop('azure_os_disk_gb', None)
+        chat_infrastructure = adapter._infrastructure_config(chat_config)
+        self.assertEqual(chat_infrastructure['azure_os_disk_gb'], 64)
+        with mock.patch.object(azure, 'prepare_state'), mock.patch.object(
+                azure, 'prepare_ssh_key'), mock.patch.object(
+                    azure, 'deploy_azure', return_value=True), mock.patch.object(
+                        azure, 'load_state', return_value=dict(
+                            chat_infrastructure, outputs={
+                                'public_ip': {'value': '1.1.1.1'}}, status='ready')):
+            self.assertTrue(adapter.deploy(chat_config))
+        self.assertEqual(chat_config['provider_workload'], 'chat')
 
         with mock.patch.object(azure, 'cleanup_azure', return_value=True) as cleanup:
             self.assertTrue(adapter.cleanup(config))
@@ -621,6 +643,7 @@ class RoutingAndTemplateTests(AzureFixture):
             'vault': {('Tcp', 80), ('Tcp', 443)},
             'media': {('Tcp', 80), ('Tcp', 443)},
             'all_in_one': {('Tcp', 80), ('Tcp', 443)},
+            'tak': {('Tcp', 8089), ('Tcp', 8443), ('Tcp', 8446), ('Udp', 41641)},
         }
         for service, ports in expected.items():
             with self.subTest(service=service):
@@ -666,6 +689,13 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertNotIn("storageUri", vm["properties"]["diagnosticsProfile"]["bootDiagnostics"])
         self.assertEqual(vm["properties"]["storageProfile"]["osDisk"]["diskSizeGB"], 32)
         self.assertEqual(vm["properties"]["storageProfile"]["osDisk"]["managedDisk"]["storageAccountType"], "StandardSSD_LRS")
+        larger = azure.prepare_state({**self.config, "deployment_id": "larger-disk",
+                                      "azure_resource_group": "c2itall-larger-disk",
+                                      "azure_os_disk_gb": 64})
+        larger_vm = next(resource for resource in azure.render_template(larger)["resources"]
+                         if resource["type"] == "Microsoft.Compute/virtualMachines")
+        self.assertEqual(
+            larger_vm["properties"]["storageProfile"]["osDisk"]["diskSizeGB"], 64)
         rules = types["Microsoft.Network/networkSecurityGroups"]["properties"]["securityRules"]
         allows = [rule["properties"] for rule in rules if rule["properties"]["access"] == "Allow"]
         self.assertEqual(len(allows), 1)

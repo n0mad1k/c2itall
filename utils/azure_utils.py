@@ -22,7 +22,7 @@ STATE_DIR = ROOT / 'deployments' / 'azure'
 CONFIG_KEYS = frozenset({
     'provider', 'deployment_id', 'deployment_type', 'infrastructure_deployment',
     'azure_subscription_id', 'azure_location', 'azure_vm_size',
-    'azure_resource_group', 'operator_ip', 'ssh_key_path',
+    'azure_resource_group', 'azure_os_disk_gb', 'operator_ip', 'ssh_key_path',
     'ssh_private_key_path', 'ssh_key_generated', 'azure_inbound_rules',
 })
 UNSUPPORTED_FLAGS = frozenset({'c2_only', 'deploy_c2', 'c2_framework', 'attack_box_deployment',
@@ -192,6 +192,10 @@ def validate_config(config, require_key=True):
                          ('azure_vm_size', r'Standard_[A-Za-z0-9_]+')]:
         if not re.fullmatch(pattern, result.get(key, '')):
             raise ValueError(f'Invalid {key}')
+    disk_size = result.get('azure_os_disk_gb', 32)
+    if type(disk_size) is not int or not 32 <= disk_size <= 2048:
+        raise ValueError('azure_os_disk_gb must be an integer from 32 through 2048')
+    result['azure_os_disk_gb'] = disk_size
     result.setdefault('azure_resource_group', f'c2itall-{deployment_id}')
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,89}', result['azure_resource_group']):
         raise ValueError('Invalid Azure resource group')

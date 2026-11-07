@@ -119,7 +119,8 @@ def resource_snapshot(runner, config):
             and image["offer"] == "ubuntu-24_04-lts" and image["sku"] == "server",
             "Unexpected Phantom VM image")
     disk_sizes = [disk[key] for key in ("diskSizeGB", "diskSizeGb") if key in disk]
-    require(disk_sizes and all(size == 32 for size in disk_sizes)
+    expected_disk_gb = int(config.get("azure_os_disk_gb", 32))
+    require(disk_sizes and all(size == expected_disk_gb for size in disk_sizes)
             and disk["managedDisk"]["storageAccountType"] == "StandardSSD_LRS",
             "Unexpected Phantom OS disk")
     require(vm["osProfile"]["linuxConfiguration"]["disablePasswordAuthentication"],

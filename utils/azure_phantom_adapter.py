@@ -31,6 +31,18 @@ def _service_rules(config):
             rules.append({'name': 'tailscale-direct', 'protocol': 'Udp',
                           'port': 41641, 'source': '*'})
         return rules
+    if service == 'tak':
+        rules = [
+            {'name': 'tak-client-tls', 'protocol': 'Tcp', 'port': 8089, 'source': '*'},
+            {'name': 'tak-admin', 'protocol': 'Tcp', 'port': 8443, 'source': '*'},
+            {'name': 'tak-enrollment', 'protocol': 'Tcp', 'port': 8446, 'source': '*'},
+            {'name': 'tailscale-direct', 'protocol': 'Udp', 'port': 41641,
+             'source': '*'},
+        ]
+        if config.get('tak_federation'):
+            rules.append({'name': 'tak-federation', 'protocol': 'Tcp',
+                          'port': 8444, 'source': '*'})
+        return rules
     if service == 'email':
         return [
             *_WEB_RULES,
@@ -57,6 +69,8 @@ class AzurePhantomAdapter(WorkloadAdapter):
             'azure_subscription_id': config['azure_subscription_id'],
             'azure_location': config.get('azure_location', 'eastus'),
             'azure_vm_size': config.get('azure_vm_size', 'Standard_D2as_v4'),
+            'azure_os_disk_gb': config.get(
+                'azure_os_disk_gb', 64 if config.get('server_type') == 'tak' else 32),
             'azure_resource_group': config.get('azure_resource_group',
                                                 'c2itall-' + deployment_id),
             'operator_ip': config['operator_ip'],
@@ -69,6 +83,7 @@ class AzurePhantomAdapter(WorkloadAdapter):
         return result
 
     def deploy(self, config):
+        workload = config.get('provider_workload', 'phantom')
         infrastructure = self._infrastructure_config(config)
         azure_utils.prepare_state(infrastructure)
         azure_utils.prepare_ssh_key(infrastructure)
@@ -84,7 +99,7 @@ class AzurePhantomAdapter(WorkloadAdapter):
                        if key.startswith('azure_') or key == 'operator_ip'})
         config.update(target_host=str(parsed), ssh_user='azureuser',
                       ssh_key=infrastructure['ssh_private_key_path'],
-                      provider_workload='phantom')
+                      provider_workload=workload)
         return True
 
     def cleanup(self, config):

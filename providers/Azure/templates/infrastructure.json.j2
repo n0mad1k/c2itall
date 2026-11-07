@@ -38,7 +38,7 @@
         "hardwareProfile": {"vmSize": {{ azure_vm_size | tojson }}},
         "storageProfile": {
           "imageReference": {"publisher": "Canonical", "offer": "ubuntu-24_04-lts", "sku": "server", "version": "latest"},
-          "osDisk": {"name": {{ names.os_disk | tojson }}, "createOption": "FromImage", "diskSizeGB": 32, "managedDisk": {"storageAccountType": "StandardSSD_LRS"}, "deleteOption": "Delete"}
+          "osDisk": {"name": {{ names.os_disk | tojson }}, "createOption": "FromImage", "diskSizeGB": {{ azure_os_disk_gb }}, "managedDisk": {"storageAccountType": "StandardSSD_LRS"}, "deleteOption": "Delete"}
         },
         "osProfile": {
           "computerName": {{ names.vm | tojson }}, "adminUsername": "azureuser",
