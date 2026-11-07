@@ -597,6 +597,52 @@ class RoutingAndTemplateTests(AzureFixture):
         execute.assert_called_once()
         self.assertEqual(execute.call_args.args[1], config)
 
+    def test_phishing_executor_uses_shared_runtime_and_cleans_partial_failure(self):
+        module_spec = importlib.util.spec_from_file_location(
+            'phishing_runtime_test',
+            ROOT / 'modules/phishing/deploy_phishing.py')
+        module = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(module)
+        config = {
+            'provider': 'aws', 'provider_workload': 'phishing',
+            'deployment_id': 'phishing-test',
+            'deployment_type': 'phishing',
+            'deploy_mta_front': True,
+            'deploy_phishing_redirector': True,
+            'aws_secret_key': 'secret',
+        }
+        with mock.patch.object(module.os.path, 'exists', return_value=True), \
+                mock.patch.object(
+                    deployment_engine, 'set_provider_environment') as environment, \
+                mock.patch.object(
+                    deployment_engine, 'execute_playbook',
+                    side_effect=[True, False]) as execute, \
+                mock.patch.object(
+                    cleanup_engine, 'execute_teardown',
+                    return_value=False) as cleanup, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(module.execute_component_deployment(config))
+        environment.assert_called_once_with(config)
+        self.assertEqual(execute.call_count, 2)
+        cleanup.assert_called_once_with(config)
+
+        with mock.patch.object(module.os.path, 'exists', return_value=False), \
+                mock.patch.object(
+                    deployment_engine, 'set_provider_environment'), \
+                mock.patch.object(
+                    deployment_engine, 'execute_playbook') as execute, \
+                mock.patch.object(
+                    cleanup_engine, 'execute_teardown') as cleanup, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(module.execute_component_deployment(config))
+        execute.assert_not_called()
+        cleanup.assert_not_called()
+
+        source = (ROOT / 'modules/phishing/deploy_phishing.py').read_text()
+        executor = source[source.index('def execute_component_deployment'):]
+        self.assertNotIn('subprocess.run', executor)
+        self.assertNotIn('NamedTemporaryFile', executor)
+
     def test_composite_dispatch_uses_one_lifecycle_and_refuses_partial_fallback(self):
         config = {'providers': ['linode', 'aws'],
                   'provider_workload': 'webrunner'}

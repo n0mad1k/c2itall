@@ -458,8 +458,8 @@ def execute_phishing_deployment(config):
 
 def execute_component_deployment(config):
     """Execute component-based phishing deployment"""
-    import subprocess
-    import os
+    from utils.cleanup_engine import execute_teardown
+    from utils.deployment_engine import execute_playbook, set_provider_environment
     
     print(f"\n{COLORS['BLUE']}Executing phishing deployment: {config['deployment_type']}{COLORS['RESET']}")
     
@@ -469,28 +469,32 @@ def execute_component_deployment(config):
         "linode": "Linode", 
         "flokinet": "FlokiNET"
     }
+    provider_dir = provider_dirs.get(config.get('provider'))
+    if provider_dir is None:
+        print(f"{COLORS['RED']}Provider has no legacy phishing executor{COLORS['RESET']}")
+        return False
     
     # Component playbook mapping (dict insertion order = execution order).
     # redirector and mta must deploy first: webserver needs the redirector IP,
     # and gophish needs the redirector + MTA IPs from infrastructure_state.
     component_playbooks = {
-        'deploy_mta_front': os.path.join(os.path.dirname(__file__), '..', '..', 'providers', provider_dirs[config['provider']], 'mta.yml'),
-        'deploy_phishing_redirector': os.path.join(os.path.dirname(__file__), '..', '..', 'providers', provider_dirs[config['provider']], 'redirector.yml'),
-        'deploy_phishing_webserver': os.path.join(os.path.dirname(__file__), '..', '..', 'providers', provider_dirs[config['provider']], 'webserver.yml'),
-        'deploy_gophish': os.path.join(os.path.dirname(__file__), '..', '..', 'providers', provider_dirs[config['provider']], 'gophish.yml'),
+        'deploy_mta_front': os.path.join(os.path.dirname(__file__), '..', '..', 'providers', provider_dir, 'mta.yml'),
+        'deploy_phishing_redirector': os.path.join(os.path.dirname(__file__), '..', '..', 'providers', provider_dir, 'redirector.yml'),
+        'deploy_phishing_webserver': os.path.join(os.path.dirname(__file__), '..', '..', 'providers', provider_dir, 'webserver.yml'),
+        'deploy_gophish': os.path.join(os.path.dirname(__file__), '..', '..', 'providers', provider_dir, 'gophish.yml'),
     }
-    
-    # Build extra vars for ansible as JSON (safe for special chars)
-    import json as _json
-    import tempfile as _tempfile
-    extra_vars_dict = {}
-    for key, value in config.items():
-        if isinstance(value, (str, int, bool)):
-            extra_vars_dict[key] = value
 
-    deployed_components = []
+    deployment_attempted = False
+
+    def cleanup_partial_deployment():
+        if not deployment_attempted:
+            return
+        print(f"{COLORS['YELLOW']}Cleaning up partial phishing deployment...{COLORS['RESET']}")
+        if not execute_teardown(config):
+            print(f"{COLORS['RED']}Partial deployment cleanup was not verified; retain recovery data.{COLORS['RESET']}")
 
     try:
+        set_provider_environment(config)
         # Deploy each enabled component
         for component, playbook_path in component_playbooks.items():
             if config.get(component, False):
@@ -499,80 +503,36 @@ def execute_component_deployment(config):
                 # Check if playbook exists
                 if not os.path.exists(playbook_path):
                     print(f"{COLORS['RED']}Error: Playbook not found: {playbook_path}{COLORS['RESET']}")
-                    continue
-
-                # Write vars to temp file (avoids CLI exposure)
-                _vars_file = _tempfile.NamedTemporaryFile(
-                    mode='w', suffix='.json', prefix='phish_vars_',
-                    delete=False
-                )
-                _json.dump(extra_vars_dict, _vars_file)
-                _vars_file.close()
-                os.chmod(_vars_file.name, 0o600)
-
-                # Build ansible command
-                cmd = [
-                    'ansible-playbook',
-                    playbook_path,
-                    '--extra-vars',
-                    f'@{_vars_file.name}'
-                ]
+                    cleanup_partial_deployment()
+                    return False
 
                 print(f"{COLORS['GRAY']}Running: ansible-playbook {os.path.basename(playbook_path)}{COLORS['RESET']}")
-                
-                # Execute playbook
-                result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.path.dirname(__file__))
-
-                # Clean up temp vars file
-                try:
-                    os.unlink(_vars_file.name)
-                except OSError:
-                    pass
-
-                if result.returncode == 0:
+                deployment_attempted = True
+                if execute_playbook(playbook_path, config):
                     print(f"{COLORS['GREEN']}✅ {component.replace('deploy_', '')} deployed successfully{COLORS['RESET']}")
-                    deployed_components.append(component)
                 else:
                     print(f"{COLORS['RED']}❌ {component.replace('deploy_', '')} deployment failed{COLORS['RESET']}")
-                    print(f"{COLORS['RED']}STDERR: {result.stderr}{COLORS['RESET']}")
+                    cleanup_partial_deployment()
                     return False
         
         # Deploy the orchestration playbook to save state
         print(f"\n{COLORS['YELLOW']}Saving deployment state...{COLORS['RESET']}")
         orchestration_playbook = os.path.join(os.path.dirname(__file__), 'deploy_phishing_infrastructure.yml')
-
-        _orch_vars_file = _tempfile.NamedTemporaryFile(
-            mode='w', suffix='.json', prefix='phish_orch_',
-            delete=False
-        )
-        _json.dump(extra_vars_dict, _orch_vars_file)
-        _orch_vars_file.close()
-        os.chmod(_orch_vars_file.name, 0o600)
-
-        cmd = [
-            'ansible-playbook',
-            orchestration_playbook,
-            '--extra-vars',
-            f'@{_orch_vars_file.name}'
-        ]
-        
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.path.dirname(__file__))
-
-        try:
-            os.unlink(_orch_vars_file.name)
-        except OSError:
-            pass
-
-        if result.returncode == 0:
+        if not os.path.exists(orchestration_playbook):
+            print(f"{COLORS['RED']}Error: Playbook not found: {orchestration_playbook}{COLORS['RESET']}")
+            cleanup_partial_deployment()
+            return False
+        if execute_playbook(orchestration_playbook, config):
             print(f"{COLORS['GREEN']}✅ Deployment state saved{COLORS['RESET']}")
             return True
         else:
             print(f"{COLORS['RED']}❌ Failed to save deployment state{COLORS['RESET']}")
-            print(f"{COLORS['RED']}STDERR: {result.stderr}{COLORS['RESET']}")
+            cleanup_partial_deployment()
             return False
             
     except Exception as e:
         print(f"{COLORS['RED']}Deployment error: {str(e)}{COLORS['RESET']}")
+        cleanup_partial_deployment()
         return False
 
 if __name__ == "__main__":
