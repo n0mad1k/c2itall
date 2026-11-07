@@ -641,6 +641,14 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertNotIn('MIGRATED_CAPABILITIES', transition_source)
 
     def test_provider_coverage_audit_reports_actual_azure_gaps(self):
+        validation = registry.validate_provider_registry(load_references=True)
+        self.assertEqual(validation, {
+            'providers': 4, 'workloads': 9, 'pairs': 36, 'routes': 21,
+            'counts': {
+                'native': 4, 'transition': 17,
+                'legacy_fallback': 7, 'unsupported': 8,
+            },
+        })
         rows = registry.provider_support_matrix()
         lookup = {(row['provider'], row['workload']): row['route_kind']
                   for row in rows}
@@ -668,6 +676,43 @@ class RoutingAndTemplateTests(AzureFixture):
                 contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(module.main(['--require-provider', 'azure']), 1)
             self.assertEqual(module.main(['--json']), 0)
+
+    def test_provider_registry_validation_rejects_route_drift(self):
+        azure = registry.PROVIDER_SPECS['azure']
+        unknown = azure._replace(
+            routes=dict(azure.routes, tracker='fake:factory'))
+        with mock.patch.dict(registry.PROVIDER_SPECS, {'azure': unknown}), \
+                self.assertRaisesRegex(ValueError, 'Unknown provider route workload'):
+            registry.validate_provider_registry(load_references=False)
+
+        malformed = azure._replace(config_loader='missing-separator')
+        with mock.patch.dict(registry.PROVIDER_SPECS, {'azure': malformed}), \
+                self.assertRaisesRegex(ValueError, 'module:name'):
+            registry.validate_provider_registry(load_references=False)
+
+        module_spec = importlib.util.spec_from_file_location(
+            'provider_coverage_invalid_registry',
+            ROOT / 'scripts/audit_provider_coverage.py')
+        module = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(module)
+        with mock.patch.dict(registry.PROVIDER_SPECS, {'azure': malformed}), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(module.main([]), 2)
+
+        invalid = azure._replace(
+            routes=dict(azure.routes, attack_box='fake:factory'))
+        original_load = registry._load
+
+        def load(reference):
+            if reference == 'fake:factory':
+                return lambda: object()
+            return original_load(reference)
+
+        with mock.patch.dict(registry.PROVIDER_SPECS, {'azure': invalid}), \
+                mock.patch.object(registry, '_load', side_effect=load), \
+                self.assertRaisesRegex(TypeError, 'invalid adapter'):
+            registry.validate_provider_registry(load_references=True)
 
     def test_legacy_lifecycle_artifacts_are_owner_only_and_hide_teardown_secrets(self):
         logs = self.home / 'logs'

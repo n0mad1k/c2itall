@@ -172,8 +172,17 @@ PROVIDER_SPECS = {
 
 
 def _load(reference):
-    module, name = reference.split(':', 1)
+    module, name = _reference_parts(reference)
     return getattr(import_module(module), name)
+
+
+def _reference_parts(reference):
+    if not isinstance(reference, str) or reference.count(':') != 1:
+        raise ValueError('Provider import reference must use module:name')
+    module, name = reference.split(':', 1)
+    if not module or not name or module.strip() != module or name.strip() != name:
+        raise ValueError('Provider import reference must use module:name')
+    return module, name
 
 
 class ProviderDispatcher:
@@ -331,6 +340,122 @@ def provider_support_matrix():
         for provider in PROVIDER_SPECS
         for workload in CANONICAL_WORKLOADS
     ]
+
+
+def validate_provider_registry(load_references=True):
+    """Validate every provider/workload route without invoking a deployment."""
+    if type(load_references) is not bool:
+        raise TypeError('load_references must be a boolean')
+    if not PROVIDER_SPECS:
+        raise ValueError('Provider registry is empty')
+    if not CANONICAL_WORKLOADS or len(set(CANONICAL_WORKLOADS)) != len(CANONICAL_WORKLOADS):
+        raise ValueError('Canonical workloads must be nonempty and unique')
+
+    credential_keys = set()
+    environment_keys = set()
+    reference_fields = (
+        'config_loader', 'runtime_loader', 'environment_loader',
+        'profile_loader',
+    )
+    for provider, spec in PROVIDER_SPECS.items():
+        if (not isinstance(provider, str) or not provider or
+                provider.lower() != provider or provider.strip() != provider):
+            raise ValueError('Provider keys must be lowercase names')
+        if not isinstance(spec, ProviderSpec):
+            raise TypeError('Invalid provider specification: ' + provider)
+        if (not isinstance(spec.directory, str) or not spec.directory or
+                not isinstance(spec.ssh_user, str) or not spec.ssh_user):
+            raise ValueError('Provider directory and SSH user are required: ' + provider)
+        if type(spec.legacy_menu) is not bool:
+            raise TypeError('Provider legacy_menu must be a boolean: ' + provider)
+
+        for field in reference_fields:
+            reference = getattr(spec, field)
+            if reference is None:
+                continue
+            _reference_parts(reference)
+            if load_references and not callable(_load(reference)):
+                raise TypeError('Provider loader is not callable: {0}/{1}'.format(
+                    provider, field))
+
+        for workload, reference in spec.routes.items():
+            if workload not in CANONICAL_WORKLOADS:
+                raise ValueError('Unknown provider route workload: {0}/{1}'.format(
+                    provider, workload))
+            _reference_parts(reference)
+            if load_references:
+                factory = _load(reference)
+                if not callable(factory):
+                    raise TypeError('Provider route factory is not callable: {0}/{1}'.format(
+                        provider, workload))
+                adapter = factory()
+                if not isinstance(adapter, WorkloadAdapter):
+                    raise TypeError('Provider route returned an invalid adapter: {0}/{1}'.format(
+                        provider, workload))
+
+        local_config_keys = set()
+        local_environment_keys = set()
+        for item in spec.credential_environment:
+            if (not isinstance(item, tuple) or len(item) != 2 or
+                    not all(isinstance(value, str) and value for value in item)):
+                raise ValueError('Invalid provider credential mapping: ' + provider)
+            config_key, environment_key = item
+            if config_key in local_config_keys or environment_key in local_environment_keys:
+                raise ValueError('Duplicate provider credential mapping: ' + provider)
+            local_config_keys.add(config_key)
+            local_environment_keys.add(environment_key)
+            if config_key in credential_keys or environment_key in environment_keys:
+                raise ValueError('Provider credential mapping is not isolated: ' + provider)
+            credential_keys.add(config_key)
+            environment_keys.add(environment_key)
+
+        if (any(not isinstance(key, str) or not key for key in spec.teardown_keys) or
+                len(set(spec.teardown_keys)) != len(spec.teardown_keys)):
+            raise ValueError('Invalid provider teardown keys: ' + provider)
+        for guidance in spec.cleanup_guidance:
+            if not isinstance(guidance, str) or not guidance:
+                raise ValueError('Invalid provider cleanup guidance: ' + provider)
+            try:
+                guidance.format(deployment_id='validation')
+            except (KeyError, IndexError, ValueError) as exc:
+                raise ValueError(
+                    'Invalid provider cleanup guidance template: ' + provider) from exc
+
+    for provider, workloads in LEGACY_TRANSITION_CAPABILITIES.items():
+        if provider not in PROVIDER_SPECS:
+            raise ValueError('Transition provider is not registered: ' + provider)
+        if not workloads or not workloads.issubset(LEGACY_FALLBACK_WORKLOADS):
+            raise ValueError('Invalid transition capability set: ' + provider)
+        for workload in workloads:
+            if provider_route_kind(provider, workload) != 'transition':
+                raise ValueError('Transition route metadata drift: {0}/{1}'.format(
+                    provider, workload))
+
+    counts = {kind: 0 for kind in (
+        'native', 'transition', 'legacy_fallback', 'unsupported')}
+    rows = provider_support_matrix()
+    for row in rows:
+        provider = row['provider']
+        workload = row['workload']
+        route_kind = row['route_kind']
+        counts[route_kind] += 1
+        available = provider in providers_for(
+            workload, legacy_fallback=workload in LEGACY_FALLBACK_WORKLOADS)
+        if available != (route_kind != 'unsupported'):
+            raise ValueError('Provider selection disagrees with coverage: {0}/{1}'.format(
+                provider, workload))
+        route = PROVIDER_SPECS[provider].routes.get(workload)
+        if (route_kind in ('native', 'transition')) != bool(route):
+            raise ValueError('Provider route classification drift: {0}/{1}'.format(
+                provider, workload))
+
+    return {
+        'providers': len(PROVIDER_SPECS),
+        'workloads': len(CANONICAL_WORKLOADS),
+        'pairs': len(rows),
+        'routes': sum(len(spec.routes) for spec in PROVIDER_SPECS.values()),
+        'counts': counts,
+    }
 
 
 def infrastructure_adapter(provider):

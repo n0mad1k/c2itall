@@ -10,7 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils.provider_registry import PROVIDER_SPECS, provider_support_matrix
+from utils.provider_registry import (
+    PROVIDER_SPECS, provider_support_matrix, validate_provider_registry,
+)
 
 
 def main(argv=None):
@@ -18,10 +20,17 @@ def main(argv=None):
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--require-provider', choices=tuple(PROVIDER_SPECS))
     args = parser.parse_args(argv)
+    try:
+        validation = validate_provider_registry(load_references=True)
+    except Exception as exc:
+        print('Provider registry invalid: ' + str(exc), file=sys.stderr)
+        return 2
     rows = provider_support_matrix()
     if args.json:
         print(json.dumps(rows, indent=2))
     else:
+        print('Registry valid: {providers} providers, {workloads} workloads, '
+              '{pairs} pairs, {routes} routes'.format(**validation))
         print('{0:<10} {1:<18} {2}'.format(
             'PROVIDER', 'WORKLOAD', 'ROUTE'))
         for row in rows:
