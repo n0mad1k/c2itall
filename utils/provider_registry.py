@@ -7,6 +7,7 @@ adapter is implemented. Registration never implies support for every workload.
 from collections import namedtuple
 from importlib import import_module
 import os
+from pathlib import Path
 
 
 class WorkloadAdapter:
@@ -63,6 +64,16 @@ class ProviderRuntime:
         raise NotImplementedError
 
 
+class WorkloadSpec(namedtuple('_WorkloadSpec', 'entrypoint legacy_fallback')):
+    """Canonical controller ownership and preserved fallback policy."""
+
+    __slots__ = ()
+
+    def __new__(cls, entrypoint, legacy_fallback):
+        return super(WorkloadSpec, cls).__new__(
+            cls, entrypoint, legacy_fallback)
+
+
 class ProviderSpec(namedtuple(
         '_ProviderSpec',
         'directory ssh_user legacy_menu config_loader routes runtime_loader '
@@ -104,14 +115,27 @@ LEGACY_TRANSITION_CAPABILITIES = {
         'c2', 'payload_server', 'phishing', 'redirector', 'webrunner',
     }),
 }
-CANONICAL_WORKLOADS = (
-    'infrastructure', 'attack_box', 'c2', 'redirector', 'phishing',
-    'payload_server', 'webrunner', 'phantom', 'chat',
-)
-LEGACY_FALLBACK_WORKLOADS = frozenset({
-    'attack_box', 'c2', 'redirector', 'phishing', 'payload_server',
-    'webrunner', 'phantom', 'chat',
-})
+WORKLOAD_SPECS = {
+    'infrastructure': WorkloadSpec(
+        'modules/infrastructure/deploy_infrastructure.py', False),
+    'attack_box': WorkloadSpec(
+        'modules/attack-box/deploy_attack_box.py', True),
+    'c2': WorkloadSpec('modules/c2/deploy_c2.py', True),
+    'redirector': WorkloadSpec(
+        'modules/redirectors/deploy_redirector.py', True),
+    'phishing': WorkloadSpec(
+        'modules/phishing/deploy_phishing.py', True),
+    'payload_server': WorkloadSpec(
+        'modules/payload-server/deploy_payload.py', True),
+    'webrunner': WorkloadSpec(
+        'modules/webrunner/deploy_webrunner.py', True),
+    'phantom': WorkloadSpec('ghost_protocol/phantom/phantom.py', True),
+    'chat': WorkloadSpec('modules/chat-server/deploy_chat.py', True),
+}
+CANONICAL_WORKLOADS = tuple(WORKLOAD_SPECS)
+LEGACY_FALLBACK_WORKLOADS = frozenset(
+    workload for workload, spec in WORKLOAD_SPECS.items()
+    if spec.legacy_fallback)
 _TRANSITION_REFERENCES = frozenset({
     _AWS_TRANSITION, _LINODE_TRANSITION, _FLOKINET_TRANSITION,
 })
@@ -350,6 +374,44 @@ def validate_provider_registry(load_references=True):
         raise ValueError('Provider registry is empty')
     if not CANONICAL_WORKLOADS or len(set(CANONICAL_WORKLOADS)) != len(CANONICAL_WORKLOADS):
         raise ValueError('Canonical workloads must be nonempty and unique')
+    if tuple(WORKLOAD_SPECS) != CANONICAL_WORKLOADS:
+        raise ValueError('Canonical workload catalog drift')
+    if LEGACY_FALLBACK_WORKLOADS != frozenset(
+            workload for workload, spec in WORKLOAD_SPECS.items()
+            if spec.legacy_fallback):
+        raise ValueError('Legacy fallback workload catalog drift')
+
+    project_root = Path(__file__).resolve().parents[1]
+    entrypoints = set()
+    expected_module_controllers = set()
+    for workload, spec in WORKLOAD_SPECS.items():
+        if not isinstance(spec, WorkloadSpec):
+            raise TypeError('Invalid workload specification: ' + workload)
+        if type(spec.legacy_fallback) is not bool:
+            raise TypeError('Workload legacy_fallback must be a boolean: ' + workload)
+        if (not isinstance(spec.entrypoint, str) or not spec.entrypoint or
+                Path(spec.entrypoint).is_absolute() or '..' in Path(spec.entrypoint).parts):
+            raise ValueError('Invalid workload controller entrypoint: ' + workload)
+        if spec.entrypoint in entrypoints:
+            raise ValueError('Duplicate workload controller entrypoint: ' + workload)
+        entrypoints.add(spec.entrypoint)
+        if not (project_root / spec.entrypoint).is_file():
+            raise ValueError('Workload controller is missing: {0}/{1}'.format(
+                workload, spec.entrypoint))
+        if spec.entrypoint.startswith('modules/'):
+            expected_module_controllers.add(spec.entrypoint)
+
+    discovered_module_controllers = set()
+    for controller in (project_root / 'modules').glob('*/deploy_*.py'):
+        source = controller.read_text()
+        if 'gather_provider_config(' in source:
+            discovered_module_controllers.add(
+                str(controller.relative_to(project_root)))
+    if discovered_module_controllers != expected_module_controllers:
+        missing = sorted(discovered_module_controllers - expected_module_controllers)
+        stale = sorted(expected_module_controllers - discovered_module_controllers)
+        raise ValueError('Provider workload controller catalog drift; missing={0}, stale={1}'.format(
+            missing, stale))
 
     credential_keys = set()
     environment_keys = set()
@@ -452,6 +514,7 @@ def validate_provider_registry(load_references=True):
     return {
         'providers': len(PROVIDER_SPECS),
         'workloads': len(CANONICAL_WORKLOADS),
+        'controllers': len(entrypoints),
         'pairs': len(rows),
         'routes': sum(len(spec.routes) for spec in PROVIDER_SPECS.values()),
         'counts': counts,

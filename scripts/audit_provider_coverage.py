@@ -30,7 +30,8 @@ def main(argv=None):
         print(json.dumps(rows, indent=2))
     else:
         print('Registry valid: {providers} providers, {workloads} workloads, '
-              '{pairs} pairs, {routes} routes'.format(**validation))
+              '{controllers} controllers, {pairs} pairs, {routes} routes'.format(
+                  **validation))
         print('{0:<10} {1:<18} {2}'.format(
             'PROVIDER', 'WORKLOAD', 'ROUTE'))
         for row in rows:

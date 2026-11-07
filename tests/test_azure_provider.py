@@ -643,7 +643,8 @@ class RoutingAndTemplateTests(AzureFixture):
     def test_provider_coverage_audit_reports_actual_azure_gaps(self):
         validation = registry.validate_provider_registry(load_references=True)
         self.assertEqual(validation, {
-            'providers': 4, 'workloads': 9, 'pairs': 36, 'routes': 21,
+            'providers': 4, 'workloads': 9, 'controllers': 9,
+            'pairs': 36, 'routes': 21,
             'counts': {
                 'native': 4, 'transition': 17,
                 'legacy_fallback': 7, 'unsupported': 8,
@@ -713,6 +714,35 @@ class RoutingAndTemplateTests(AzureFixture):
                 mock.patch.object(registry, '_load', side_effect=load), \
                 self.assertRaisesRegex(TypeError, 'invalid adapter'):
             registry.validate_provider_registry(load_references=True)
+
+    def test_workload_catalog_matches_provider_backed_controllers(self):
+        expected = {
+            'infrastructure': 'modules/infrastructure/deploy_infrastructure.py',
+            'attack_box': 'modules/attack-box/deploy_attack_box.py',
+            'c2': 'modules/c2/deploy_c2.py',
+            'redirector': 'modules/redirectors/deploy_redirector.py',
+            'phishing': 'modules/phishing/deploy_phishing.py',
+            'payload_server': 'modules/payload-server/deploy_payload.py',
+            'webrunner': 'modules/webrunner/deploy_webrunner.py',
+            'phantom': 'ghost_protocol/phantom/phantom.py',
+            'chat': 'modules/chat-server/deploy_chat.py',
+        }
+        self.assertEqual(
+            {workload: spec.entrypoint
+             for workload, spec in registry.WORKLOAD_SPECS.items()},
+            expected)
+
+        catalog = dict(registry.WORKLOAD_SPECS)
+        catalog['c2'] = registry.WorkloadSpec(
+            'modules/c2/missing_provider_controller.py', True)
+        fallbacks = frozenset(
+            workload for workload, spec in catalog.items()
+            if spec.legacy_fallback)
+        with mock.patch.object(registry, 'WORKLOAD_SPECS', catalog), \
+                mock.patch.object(registry, 'CANONICAL_WORKLOADS', tuple(catalog)), \
+                mock.patch.object(registry, 'LEGACY_FALLBACK_WORKLOADS', fallbacks), \
+                self.assertRaisesRegex(ValueError, 'controller is missing'):
+            registry.validate_provider_registry(load_references=False)
 
     def test_legacy_lifecycle_artifacts_are_owner_only_and_hide_teardown_secrets(self):
         logs = self.home / 'logs'
