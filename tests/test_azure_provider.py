@@ -370,6 +370,77 @@ class RoutingAndTemplateTests(AzureFixture):
 
 
 class ProviderContractTests(AzureFixture):
+    def test_health_reads_owned_vm_without_mutating_state(self):
+        state = self.prepare()
+        before = (self.state_dir / 'test-azure.json').read_bytes()
+        view = {'id': state['planned_resource_ids']['vm'], 'statuses': [
+            {'code': 'ProvisioningState/succeeded'}, {'code': 'PowerState/running'}]}
+        with mock.patch.object(azure, '_group', return_value=self.group(state)), mock.patch.object(azure, '_resources', return_value=self.resources(state)), mock.patch.object(azure, 'run_az', return_value=view) as cli:
+            result = registry.infrastructure_adapter('azure').health(self.config)
+            self.assertTrue(result['healthy'])
+            self.assertEqual(cli.call_args.args[0][:2], ['vm', 'get-instance-view'])
+            self.assertEqual(cli.call_args.args[1], smoke.SUBSCRIPTION)
+        self.assertEqual((self.state_dir / 'test-azure.json').read_bytes(), before)
+
+    def test_health_missing_stopped_or_unknown_vm_is_not_success(self):
+        state = self.prepare()
+        with mock.patch.object(azure, '_group', return_value=None), mock.patch.object(azure, 'run_az') as cli:
+            self.assertFalse(azure.health_azure(self.config)['healthy'])
+            cli.assert_not_called()
+        for statuses in ([], [{'code': 'PowerState/deallocated'}], [{'code': 'PowerState/running'}],
+                         [{'code': 'PowerState/running'}, {'code': 'PowerState/deallocated'}, {'code': 'ProvisioningState/succeeded'}]):
+            view = {'id': state['planned_resource_ids']['vm'], 'statuses': statuses}
+            with mock.patch.object(azure, '_group', return_value=self.group(state)), mock.patch.object(azure, '_resources', return_value=self.resources(state)), mock.patch.object(azure, 'run_az', return_value=view):
+                self.assertFalse(azure.health_azure(self.config)['healthy'])
+
+    def test_health_refuses_wrong_subscription_and_foreign_response(self):
+        state = self.prepare()
+        with mock.patch.object(azure, '_group') as group, self.assertRaisesRegex(ValueError, 'identity'):
+            azure.health_azure({**self.config, 'azure_subscription_id': 'wrong'})
+        group.assert_not_called()
+        with mock.patch.object(azure, '_group', return_value=self.group(state)), mock.patch.object(azure, '_resources', return_value=self.resources(state)), mock.patch.object(azure, 'run_az', return_value={'id': '/foreign'}), self.assertRaisesRegex(ValueError, 'owned VM'):
+            azure.health_azure(self.config)
+
+    def test_health_collection_reports_errors_and_unsupported_checks(self):
+        state = self.prepare()
+        for error in (RuntimeError('API unavailable'), NotImplementedError()):
+            adapter = mock.Mock()
+            adapter.health.side_effect = error
+            with mock.patch.object(registry, 'list_infrastructure_states', return_value=[state]), mock.patch.object(registry, 'infrastructure_adapter', return_value=adapter):
+                report = registry.infrastructure_health()[0]
+                self.assertFalse(report['healthy'])
+                self.assertEqual(report['deployment_id'], state['deployment_id'])
+
+    def test_standalone_teardown_prefers_adapter_state_without_legacy_key_cleanup(self):
+        import teardown as standalone
+        state = self.prepare()
+        with mock.patch.object(cleanup_engine, 'execute_teardown', return_value=True) as execute, mock.patch.object(standalone, 'cleanup_ssh_keys') as keys, mock.patch.object(standalone, 'archive_logs') as archive, contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(standalone.teardown_deployment(state['deployment_id'], force=True))
+            self.assertEqual(execute.call_args.args[0]['provider'], 'azure')
+            keys.assert_not_called()
+            archive.assert_not_called()
+
+    def test_standalone_teardown_invalid_state_does_not_fall_back_to_logs(self):
+        import teardown as standalone
+        with mock.patch.object(registry, 'load_infrastructure_state', side_effect=ValueError('invalid')), mock.patch.object(standalone.glob, 'glob') as logs, contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(standalone.teardown_deployment('test-azure', force=True))
+            logs.assert_not_called()
+
+    def test_standalone_teardown_confirmation_and_failure_exit_status(self):
+        import teardown as standalone
+        state = self.prepare()
+        with mock.patch('builtins.input', return_value='no'), mock.patch.object(cleanup_engine, 'execute_teardown') as execute, contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(standalone.teardown_deployment(state['deployment_id']))
+            execute.assert_not_called()
+        with mock.patch.object(sys, 'argv', ['teardown.py', '--deployment-id', 'test-azure', '--force']), mock.patch.object(standalone, 'teardown_deployment', return_value=False), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(standalone.main(), 1)
+
+    def test_standalone_teardown_missing_adapter_state_keeps_legacy_lookup(self):
+        import teardown as standalone
+        with mock.patch.object(registry, 'load_infrastructure_state', return_value=None), mock.patch.object(standalone.glob, 'glob', return_value=[]) as logs, mock.patch.object(standalone, 'list_deployments'), contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(standalone.teardown_deployment('Old_ID', force=True))
+            logs.assert_called_once_with('logs/deployment_info_Old_ID*.txt')
+
     def test_legacy_imports_do_not_load_azure_adapter_or_runtime(self):
         result = subprocess.run([sys.executable, '-B', '-c',
             "import sys; from utils import provider_utils, deployment_engine, cleanup_engine; "
@@ -675,8 +746,9 @@ class SmokeTests(unittest.TestCase):
                     self.assertIn("StrictHostKeyChecking=accept-new", argv)
                     self.assertIn("UserKnownHostsFile=/synthetic/evidence/known_hosts", argv)
                     self.assertEqual(ssh.call_args.kwargs["timeout"], 30)
-                    self.assertEqual(repeat.call_args.args, (ROOT, "deploy", config))
-                    self.assertLessEqual(repeat.call_args.kwargs["timeout"], 60)
+                    self.assertEqual(repeat.call_args_list[0].args, (ROOT, "deploy", config))
+                    self.assertLessEqual(repeat.call_args_list[0].kwargs["timeout"], 60)
+                    self.assertEqual(repeat.call_args_list[1].args, (ROOT, "health", config))
                     self.assertEqual(sum(call.args[:2] == ("vm", "list") for call in az.call_args_list), 2)
                     self.assertEqual(sum(call.args[:2] == ("resource", "list") for call in az.call_args_list), 2)
                     result = record.call_args.args[1]

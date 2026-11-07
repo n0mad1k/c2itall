@@ -413,8 +413,17 @@ def validate_configurations():
 def infrastructure_health_check():
     """Check health of deployed infrastructure"""
     print(f"\n{COLORS['BLUE']}Infrastructure Health Check{COLORS['RESET']}")
-    print(f"{COLORS['YELLOW']}This would check the status of deployed infrastructure{COLORS['RESET']}")
-    print(f"{COLORS['YELLOW']}Feature coming soon...{COLORS['RESET']}")
+    from utils.provider_registry import infrastructure_health
+    try:
+        reports = infrastructure_health()
+        if not reports:
+            print('No tracked infrastructure deployments found.')
+        for report in reports:
+            status = 'HEALTHY' if report['healthy'] else 'NOT HEALTHY'
+            print(f"{report['provider']} {report['deployment_id']}: {status} — {report.get('detail', '')}")
+        print('Legacy deployments without a registered health handler are not checked.')
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        print(f"{COLORS['RED']}Infrastructure health check failed: {error}{COLORS['RESET']}")
     wait_for_input()
 
 def interactive_teardown():

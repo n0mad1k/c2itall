@@ -421,6 +421,36 @@ def _wait_deployment(state, deadline, cancel=False):
         time.sleep(min(5, max(0, deadline - time.monotonic())))
 
 
+def health_azure(config):
+    """Read owned VM provisioning/power state without starting or modifying it."""
+    state = load_state(config['deployment_id'], config.get('azure_state_dir'))
+    for key in ('azure_subscription_id', 'azure_resource_group', 'ownership_marker'):
+        if key in config and config[key] != state[key]:
+            raise ValueError('Health-check identity does not match saved state')
+    deadline = min(config.get('azure_deadline', float('inf')), time.monotonic() + 60)
+    group = _group(state, deadline)
+    if group is None:
+        return {'healthy': False, 'detail': 'Resource group is absent'}
+    resources = _resources(state, deadline)
+    validate_ownership(state, group, resources)
+    vm_id = state['planned_resource_ids']['vm']
+    if not any(resource.get('id', '').lower() == vm_id.lower() for resource in resources):
+        return {'healthy': False, 'detail': 'VM is absent'}
+    view = run_az(['vm', 'get-instance-view', '--ids', vm_id,
+                   '--query', '{id:id,statuses:instanceView.statuses}'],
+                  state['azure_subscription_id'], deadline)
+    if view.get('id', '').lower() != vm_id.lower():
+        raise ValueError('Health response does not match the owned VM')
+    statuses = {item.get('code', '').lower() for item in (view.get('statuses') or [])}
+    powers = {value.split('/', 1)[1] for value in statuses if value.startswith('powerstate/')}
+    provisions = {value.split('/', 1)[1] for value in statuses if value.startswith('provisioningstate/')}
+    power = next(iter(powers)) if len(powers) == 1 else 'unknown'
+    provisioning = next(iter(provisions)) if len(provisions) == 1 else 'unknown'
+    return {'healthy': power == 'running' and provisioning == 'succeeded',
+            'power_state': power, 'provisioning_state': provisioning,
+            'detail': f'VM {power}; provisioning {provisioning}'}
+
+
 def deploy_azure(config):
     try:
         normalized = validate_config(config, require_key=False)

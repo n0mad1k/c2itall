@@ -40,6 +40,7 @@ APPROVED_PATHS = (
     "modules/infrastructure/deploy_infrastructure.py", "tests/test_azure_provider.py",
     "scripts/deploy_azure_smoke.py",
     "utils/provider_registry.py", "utils/azure_adapter.py",
+    "teardown.py",
 )
 PHASES = (
     "Validate public branch, tools, account and pinned Azure parameters.",
@@ -416,6 +417,7 @@ class Runner:
         if len(repeated) != 1 or repeated[0]["id"] != vm["id"] or before != after:
             raise SmokeError("Repeat deployment changed resource identities or VM count")
         self.record("validation.json", {"vm_id": vm["id"], "resource_ids": after, "ssh": "passed", "repeat": "passed"})
+        self.worker(source, "health", config)
 
     def cleanup(self, source, config):
         self.cleaning = True
@@ -477,9 +479,21 @@ def worker_main(operation, config_file):
         if not deploy_infrastructure(config):
             raise SmokeError("Infrastructure deployment failed")
     elif operation == "cleanup":
-        from utils.cleanup_engine import execute_teardown
-        if not execute_teardown(config):
+        import teardown
+        # Archived source uses the original controller's durable state directory.
+        azure_utils.STATE_DIR = Path(config['azure_state_dir'])
+        state = azure_utils.load_state(config['deployment_id'])
+        for field in ('azure_subscription_id', 'azure_resource_group'):
+            if state[field] != config[field]:
+                raise SmokeError('Recovery state differs from the pinned cleanup target')
+        if not teardown.teardown_deployment(config['deployment_id'], force=True):
             raise SmokeError("Ownership-checked infrastructure cleanup failed")
+    elif operation == "health":
+        from utils.provider_registry import workload_route
+        report = workload_route(config).health(config)
+        config_path.with_name('health.json').write_text(json.dumps(report, indent=2))
+        if report.get('healthy') is not True:
+            raise SmokeError('Infrastructure adapter health check failed')
 
 
 def activate(operator_ip=None, prepare_only=False):
@@ -549,7 +563,7 @@ def main(argv=None):
     mode.add_argument("--prepare", action="store_true")
     mode.add_argument("--dry-run", action="store_true")
     parser.add_argument("--operator-ip", help="Workstation public IPv4; otherwise resolve via api.ipify.org")
-    parser.add_argument("--worker", choices=("key", "render", "deploy", "cleanup"), help=argparse.SUPPRESS)
+    parser.add_argument("--worker", choices=("key", "render", "deploy", "cleanup", "health"), help=argparse.SUPPRESS)
     parser.add_argument("--config", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.worker:

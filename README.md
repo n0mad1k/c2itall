@@ -92,6 +92,11 @@ these files independently of legacy logs. Cleanup refuses foreign groups and
 unexpected resources, cancels active ARM provisioning, and confirms group deletion
 before removing only keys generated for that deployment. Keep failed state files
 for recovery; successful state is retained in `deployments/azure/archive/`.
+Standalone recovery by ID is also supported through
+`python3 teardown.py --deployment-id <deployment_id>` (add `--force` to skip its
+confirmation). It prefers adapter state and uses legacy lookup only when no
+adapter state exists. Other standalone teardown modes retain their legacy scope;
+use the shared Cleanup menu or infrastructure `--teardown-all` for combined cleanup.
 
 Preview the reviewed live smoke with `python3 deploy.py --deploy --azure-smoke --dry-run`.
 Run `python3 scripts/deploy_azure_smoke.py --prepare` for the reviewed commit, push,
@@ -124,6 +129,11 @@ the CLI's selected subscription. Configuration validation checks Azure inputs an
 the public key when `providers/Azure/vars.yaml` exists; interactive configuration
 does not require that file. Local key cleanup preserves keys referenced by active
 infrastructure state and refuses deletion if that state cannot be read.
+Infrastructure Health Check now reads the owned VM's provisioning and power
+state through its adapter. The same read-only check is available as
+`python3 modules/infrastructure/deploy_infrastructure.py --health`; an unhealthy
+or unavailable check returns failure. An empty result means no tracked adapter
+deployments, not that every cloud resource or legacy workload was checked.
 
 ### Provider routing and incremental migration
 

@@ -26,6 +26,9 @@ class AzureInfrastructureAdapter(InfrastructureAdapter):
     def cleanup(self, config):
         return azure_utils.cleanup_azure(config)
 
+    def health(self, config):
+        return azure_utils.health_azure(config)
+
     def load_state(self, deployment_id):
         if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,39}', deployment_id):
             return None

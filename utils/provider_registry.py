@@ -29,6 +29,9 @@ class InfrastructureAdapter:
     def cleanup(self, config):
         raise NotImplementedError
 
+    def health(self, config):
+        raise NotImplementedError
+
     def load_state(self, deployment_id):
         raise NotImplementedError
 
@@ -154,3 +157,20 @@ def load_infrastructure_state(deployment_id):
     if len(matches) > 1:
         raise ValueError('Deployment ID exists in multiple providers; select a specific deployment')
     return matches[0] if matches else None
+
+
+def infrastructure_health():
+    """Read actual provider state; never treat an unavailable check as healthy."""
+    reports = []
+    for state in list_infrastructure_states():
+        identity = {'provider': state['provider'], 'deployment_id': state['deployment_id']}
+        try:
+            result = infrastructure_adapter(state['provider']).health(state)
+            if not isinstance(result, dict) or type(result.get('healthy')) is not bool:
+                raise ValueError('Provider returned an invalid health result')
+            reports.append(dict(result, **identity))
+        except NotImplementedError:
+            reports.append(dict(identity, healthy=False, detail='Health check is not implemented'))
+        except Exception as error:
+            reports.append(dict(identity, healthy=False, detail=str(error)))
+    return reports

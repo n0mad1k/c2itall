@@ -45,7 +45,7 @@ def main():
     elif args.all:
         teardown_all_deployments(force=args.force)
     elif args.deployment_id:
-        teardown_deployment(args.deployment_id, force=args.force)
+        return 0 if teardown_deployment(args.deployment_id, force=args.force) else 1
     elif args.select:
         select_and_teardown_deployment()
     else:
@@ -130,6 +130,21 @@ def interactive_mode():
 def teardown_deployment(deployment_id, force=False):
     """Teardown a specific deployment"""
     print(f"\n{COLORS['BLUE']}Tearing down deployment: {deployment_id}{COLORS['RESET']}")
+    from utils.provider_registry import load_infrastructure_state
+    try:
+        state = load_infrastructure_state(deployment_id)
+    except (OSError, ValueError, KeyError) as error:
+        print(f"{COLORS['RED']}Cannot read infrastructure recovery state: {error}{COLORS['RESET']}")
+        return False
+    if state is not None:
+        print(f"Provider: {state['provider']}")
+        if not force and input('Proceed with infrastructure teardown? (yes/no): ').strip().lower() != 'yes':
+            print('Teardown cancelled')
+            return False
+        from utils.cleanup_engine import execute_teardown as teardown_infrastructure
+        # The adapter owns exact key cleanup and state archival. Do not follow it
+        # with the legacy prefix-based deletion helpers.
+        return teardown_infrastructure(state)
     
     # Find deployment info
     info_files = glob.glob(f"logs/deployment_info_{deployment_id}*.txt")
@@ -530,4 +545,4 @@ def select_and_teardown_deployment():
             print(f"{COLORS['RED']}Please enter a valid number or 'q' to quit{COLORS['RESET']}")
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

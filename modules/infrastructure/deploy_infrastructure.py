@@ -3,6 +3,7 @@
 
 from pathlib import Path
 import argparse
+import json
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -20,7 +21,13 @@ def main(argv=None):
     recovery = parser.add_mutually_exclusive_group()
     recovery.add_argument('--teardown-id')
     recovery.add_argument('--teardown-all', action='store_true')
+    recovery.add_argument('--health', action='store_true', help='Read health of tracked infrastructure without deploying')
     args = parser.parse_args(argv)
+    if args.health:
+        from utils.provider_registry import infrastructure_health
+        reports = infrastructure_health()
+        print(json.dumps(reports, indent=2))
+        return all(report['healthy'] for report in reports)
     if args.teardown_id:
         from utils.cleanup_engine import teardown_by_deployment_id
         return teardown_by_deployment_id(args.teardown_id)
