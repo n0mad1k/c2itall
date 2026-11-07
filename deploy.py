@@ -657,16 +657,19 @@ def list_deployments():
     print(f"\n{COLORS['BLUE']}Active Deployments{COLORS['RESET']}")
     
     import glob
-    from utils.azure_utils import list_states
-    azure_states = list_states()
-    for state in azure_states:
-        print(f"  Azure {state['deployment_id']}: {state['status']} / {state['azure_resource_group']}")
+    from utils.provider_registry import list_infrastructure_states
+    adapter_states = list_infrastructure_states()
+    for state in adapter_states:
+        provider = state.get('provider', 'unknown')
+        deployment_id = state.get('deployment_id', 'unknown')
+        status = state.get('status', 'unknown')
+        print(f"  {provider.capitalize()} {deployment_id}: {status}")
     info_files = glob.glob("logs/deployment_info_*.txt")
     
-    if not info_files and not azure_states:
+    if not info_files and not adapter_states:
         print(f"{COLORS['GREEN']}No active deployments found{COLORS['RESET']}")
     else:
-        print(f"Found {len(info_files)} deployments:\n")
+        print(f"Found {len(info_files) + len(adapter_states)} deployment records:\n")
         
         for info_file in info_files:
             try:

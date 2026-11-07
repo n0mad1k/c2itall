@@ -1037,6 +1037,27 @@ class ProviderContractTests(AzureFixture):
                 self.assertEqual(provider_utils.gather_provider_config(name), {'provider': name})
                 gather.assert_called_once_with()
 
+    def test_main_menu_lists_generic_adapter_state_without_azure_import(self):
+        import deploy
+
+        state = {'provider': 'example', 'deployment_id': 'generic-1',
+                 'status': 'ready'}
+        output = io.StringIO()
+        previous = Path.cwd()
+        try:
+            os.chdir(self.home)
+            with mock.patch.object(
+                    registry, 'list_infrastructure_states', return_value=[state]) as states, \
+                    mock.patch.object(deploy, 'wait_for_input'), \
+                    contextlib.redirect_stdout(output):
+                deploy.list_deployments()
+        finally:
+            os.chdir(previous)
+
+        states.assert_called_once_with()
+        self.assertIn('Example generic-1: ready', output.getvalue())
+        self.assertIn('Found 1 deployment records', output.getvalue())
+
     def test_registered_workload_precedes_legacy_and_failure_never_falls_back(self):
         spec = registry.PROVIDER_SPECS['aws']._replace(routes={'infrastructure': 'synthetic:Adapter'})
         adapter = mock.Mock()
