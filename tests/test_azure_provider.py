@@ -1037,6 +1037,22 @@ class ProviderContractTests(AzureFixture):
                 self.assertEqual(provider_utils.gather_provider_config(name), {'provider': name})
                 gather.assert_called_once_with()
 
+    def test_legacy_provider_utility_import_uses_canonical_dispatcher(self):
+        from providers import provider_utils as legacy_utils
+        from utils import aws_utils
+
+        self.assertIs(legacy_utils.select_provider, provider_utils.select_provider)
+        self.assertIs(
+            legacy_utils.gather_provider_config,
+            provider_utils.gather_provider_config)
+        with mock.patch.object(
+                aws_utils, 'gather_aws_config',
+                return_value={'source': 'canonical'}) as gather:
+            self.assertEqual(
+                legacy_utils.gather_provider_config('aws', 'c2'),
+                {'source': 'canonical'})
+        gather.assert_called_once_with()
+
     def test_main_menu_lists_generic_adapter_state_without_azure_import(self):
         import deploy
 
