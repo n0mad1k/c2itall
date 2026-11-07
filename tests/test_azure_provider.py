@@ -569,6 +569,34 @@ class RoutingAndTemplateTests(AzureFixture):
                     getattr(module, function_name)(config)
                 dispatch.assert_called_once_with(config, getattr(module, legacy_name))
 
+    def test_payload_executor_uses_shared_secret_safe_runtime_and_fails_missing(self):
+        module_spec = importlib.util.spec_from_file_location(
+            'payload_runtime_test',
+            ROOT / 'modules/payload-server/deploy_payload.py')
+        module = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(module)
+        config = {
+            'provider': 'aws', 'provider_workload': 'payload_server',
+            'deployment_id': 'payload-test',
+            'deployment_type': 'basic_payload_server',
+            'domain': 'payload.test', 'aws_secret_key': 'secret',
+        }
+        with mock.patch.object(module.os.path, 'exists', return_value=False), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(module.execute_ansible_deployment(config))
+
+        with mock.patch.object(module.os.path, 'exists', return_value=True), \
+                mock.patch.object(
+                    deployment_engine, 'set_provider_environment') as environment, \
+                mock.patch.object(
+                    deployment_engine, 'execute_playbook',
+                    return_value=True) as execute, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(module.execute_ansible_deployment(config))
+        environment.assert_called_once_with(config)
+        execute.assert_called_once()
+        self.assertEqual(execute.call_args.args[1], config)
+
     def test_composite_dispatch_uses_one_lifecycle_and_refuses_partial_fallback(self):
         config = {'providers': ['linode', 'aws'],
                   'provider_workload': 'webrunner'}

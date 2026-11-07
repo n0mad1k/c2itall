@@ -268,8 +268,6 @@ def execute_payload_deployment(config):
 
 def execute_ansible_deployment(config):
     """Execute the Ansible deployment based on configuration"""
-    import subprocess
-    
     deployment_type = config.get('deployment_type')
     provider = config.get('provider')
     
@@ -295,54 +293,12 @@ def execute_ansible_deployment(config):
     playbook_path = os.path.join(module_dir, playbook)
     
     if not os.path.exists(playbook_path):
-        print(f"{COLORS['YELLOW']}Playbook not found: {playbook_path}{COLORS['RESET']}")
-        print(f"{COLORS['YELLOW']}This would normally execute the {playbook} playbook{COLORS['RESET']}")
-        return True  # Simulate success for now
-    
-    try:
-        # Build the ansible-playbook command
-        cmd = [
-            'ansible-playbook',
-            playbook_path,
-            '-e', f'deployment_id={config["deployment_id"]}',
-            '-e', f'provider={config["provider"]}',
-            '-e', f'domain={config["domain"]}',
-            '-e', f'deployment_type={deployment_type}'
-        ]
-        
-        # Add payload-specific variables
-        for key in ['host_executables', 'host_scripts', 'host_documents', 'host_mobile']:
-            if key in config:
-                cmd.extend(['-e', f'{key}={str(config[key]).lower()}'])
-        
-        # Add security options
-        for key in ['enable_basic_auth', 'enable_ip_filtering', 'enable_user_agent_filtering', 'enable_rate_limiting']:
-            if key in config:
-                cmd.extend(['-e', f'{key}={str(config[key]).lower()}'])
-        
-        # Add provider-specific variables
-        if provider == 'aws':
-            if config.get('aws_access_key'):
-                cmd.extend(['-e', f'aws_access_key={config["aws_access_key"]}'])
-            if config.get('aws_secret_key'):
-                cmd.extend(['-e', f'aws_secret_key={config["aws_secret_key"]}'])
-            if config.get('aws_region'):
-                cmd.extend(['-e', f'aws_region={config["aws_region"]}'])
-        
-        # Execute the playbook
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        if result.returncode == 0:
-            print(f"{COLORS['GREEN']}Ansible playbook executed successfully{COLORS['RESET']}")
-            return True
-        else:
-            print(f"{COLORS['RED']}Ansible playbook failed:{COLORS['RESET']}")
-            print(result.stderr)
-            return False
-            
-    except Exception as e:
-        print(f"{COLORS['RED']}Error executing playbook: {e}{COLORS['RESET']}")
+        print(f"{COLORS['RED']}Playbook not found: {playbook_path}{COLORS['RESET']}")
         return False
+
+    from utils.deployment_engine import execute_playbook, set_provider_environment
+    set_provider_environment(config)
+    return execute_playbook(playbook_path, config)
 
 if __name__ == "__main__":
     payload_menu()
