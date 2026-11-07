@@ -18,7 +18,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
     from utils.common import COLORS, PROVIDER_DIRS, setup_logging
-    from utils.provider_registry import workload_route, uses_legacy_routes
+    from utils.provider_registry import (
+        prepare_provider_environment, provider_cleanup_guidance,
+        workload_route, uses_legacy_routes,
+    )
 except ImportError as e:
     print(f"Error importing utils: {e}")
     print("Make sure you're running this from the c2itall directory")
@@ -393,31 +396,8 @@ def execute_legacy_teardown(config):
         return False
 
 def set_provider_environment(config):
-    """Set provider-specific environment variables"""
-    provider = config.get('provider')
-    
-    if provider == "aws":
-        if config.get('aws_access_key'):
-            os.environ['AWS_ACCESS_KEY_ID'] = config['aws_access_key']
-        if config.get('aws_secret_key'):
-            os.environ['AWS_SECRET_ACCESS_KEY'] = config['aws_secret_key']
-    elif provider == "linode":
-        if config.get('linode_token'):
-            os.environ['LINODE_TOKEN'] = config['linode_token']
-        else:
-            # Try to load from vars file
-            try:
-                import yaml
-                provider_dir = PROVIDER_DIRS.get(provider, provider.capitalize())
-                vars_file = f"providers/{provider_dir}/vars.yaml"
-                if os.path.exists(vars_file):
-                    with open(vars_file, 'r') as f:
-                        vars_data = yaml.safe_load(f)
-                    if vars_data and vars_data.get('linode_token'):
-                        os.environ['LINODE_TOKEN'] = vars_data['linode_token']
-                        print(f"Loaded Linode token from {vars_file}")
-            except Exception as e:
-                print(f"{COLORS['YELLOW']}Warning: Could not load Linode token: {e}{COLORS['RESET']}")
+    """Delegate legacy teardown environment setup to provider metadata."""
+    return prepare_provider_environment(config, teardown=True)
 
 def create_extra_vars(config):
     """Create Ansible extra variables"""
@@ -505,20 +485,12 @@ def show_manual_cleanup_guidance(config=None):
         print(f"Deployment ID: {deployment_id}")
         print(f"Provider: {provider}")
         
-        if provider == "linode":
-            print(f"\nLinode cleanup steps:")
-            print(f"1. Go to https://cloud.linode.com/")
-            print(f"2. Check 'Linodes' section for instances with labels containing: {deployment_id}")
-            print(f"3. Delete any instances found")
-            print(f"4. Check 'Firewalls' section for firewalls with labels containing: {deployment_id}")
-            print(f"5. Delete any firewalls found")
-            
-        elif provider == "aws":
-            print(f"\nAWS cleanup steps:")
-            print(f"1. Go to AWS EC2 Console")
-            print(f"2. Check instances with tags containing: {deployment_id}")
-            print(f"3. Delete instances and associated resources")
-            print(f"4. Check security groups, key pairs, and elastic IPs")
+        guidance = provider_cleanup_guidance(provider, deployment_id)
+        if guidance:
+            label = PROVIDER_DIRS.get(provider, str(provider))
+            print(f"\n{label} cleanup steps:")
+            for index, item in enumerate(guidance, 1):
+                print(f"{index}. {item}")
     
     print(f"\nLocal cleanup:")
     print(f"1. SSH keys in ~/.ssh/ starting with c2deploy_, attack-box-, or a-")

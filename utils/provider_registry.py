@@ -66,20 +66,22 @@ class ProviderRuntime:
 class ProviderSpec(namedtuple(
         '_ProviderSpec',
         'directory ssh_user legacy_menu config_loader routes runtime_loader '
-        'environment_loader profile_loader credential_environment teardown_keys')):
+        'environment_loader profile_loader credential_environment teardown_keys '
+        'cleanup_guidance')):
     __slots__ = ()
 
     def __new__(cls, directory, ssh_user, legacy_menu=True, config_loader=None,
                 routes=None, runtime_loader=None, environment_loader=None,
                 profile_loader=None, credential_environment=None,
-                teardown_keys=None):
+                teardown_keys=None, cleanup_guidance=None):
         return super(ProviderSpec, cls).__new__(cls, directory, ssh_user, legacy_menu,
                                                config_loader, dict(routes or {}),
                                                runtime_loader,
                                                environment_loader,
                                                profile_loader,
                                                tuple(credential_environment or ()),
-                                               tuple(teardown_keys or ()))
+                                               tuple(teardown_keys or ()),
+                                               tuple(cleanup_guidance or ()))
 
     @property
     def capabilities(self):
@@ -124,6 +126,12 @@ PROVIDER_SPECS = {
                         ),
                         teardown_keys=(
                             'aws_access_key', 'aws_secret_key', 'aws_region'),
+                        cleanup_guidance=(
+                            'Open the AWS EC2 Console',
+                            'Check instances with tags containing: {deployment_id}',
+                            'Delete instances and associated resources',
+                            'Check security groups, key pairs and elastic IPs',
+                        ),
                         routes={workload: _AWS_TRANSITION for workload in
                                 LEGACY_TRANSITION_CAPABILITIES['aws']}),
     'linode': ProviderSpec('Linode', 'root', config_loader='utils.linode_utils:gather_linode_config',
@@ -132,12 +140,23 @@ PROVIDER_SPECS = {
                            credential_environment=(
                                ('linode_token', 'LINODE_TOKEN'),),
                            teardown_keys=('linode_token', 'linode_region'),
+                           cleanup_guidance=(
+                               'Open the Linode Cloud Manager: https://cloud.linode.com/',
+                               'Check Linodes with labels containing: {deployment_id}',
+                               'Delete matching Linodes and NodeBalancers',
+                               'Check and delete matching firewalls',
+                           ),
                            routes={workload: _LINODE_TRANSITION for workload in
                                    LEGACY_TRANSITION_CAPABILITIES['linode']}),
     'flokinet': ProviderSpec('FlokiNET', 'root', config_loader='utils.flokinet_utils:gather_flokinet_config',
                              environment_loader='utils.flokinet_utils:prepare_flokinet_environment',
                              credential_environment=(
                                  ('flokinet_api_key', 'FLOKINET_API_KEY'),),
+                             cleanup_guidance=(
+                                 'Open the FlokiNET control panel',
+                                 'Check for servers containing: {deployment_id}',
+                                 'Delete any matching resources',
+                             ),
                              routes={workload: _FLOKINET_TRANSITION for workload in
                                      LEGACY_TRANSITION_CAPABILITIES['flokinet']}),
     'azure': ProviderSpec('Azure', 'azureuser', False,
@@ -266,6 +285,17 @@ def provider_teardown_vars(config):
         return {}
     return {key: config[key] for key in spec.teardown_keys
             if config.get(key) is not None}
+
+
+def provider_cleanup_guidance(provider, deployment_id):
+    """Render provider-owned recovery hints for an incomplete legacy cleanup."""
+    spec = PROVIDER_SPECS.get(provider)
+    if spec is None:
+        return ()
+    return tuple(
+        item.format(deployment_id=deployment_id)
+        for item in spec.cleanup_guidance
+    )
 
 
 def providers_for(capability=None, legacy_fallback=False):

@@ -1165,12 +1165,52 @@ class RoutingAndTemplateTests(AzureFixture):
             self.assertEqual(os.environ['LINODE_TOKEN'], 'vars-token')
 
         import inspect
+        import teardown as standalone
         for function in (
                 deployment_engine.set_provider_environment,
-                cleanup_engine.set_provider_environment_for_teardown):
+                cleanup_engine.set_provider_environment_for_teardown,
+                standalone.set_provider_environment):
             source = inspect.getsource(function)
             self.assertIn('prepare_provider_environment(', source)
             self.assertNotIn('provider ==', source)
+
+        config = {'provider': 'aws', 'aws_access_key': 'access'}
+        with mock.patch.object(
+                standalone, 'prepare_provider_environment') as prepare:
+            standalone.set_provider_environment(config)
+        prepare.assert_called_once_with(config, teardown=True)
+
+    def test_manual_cleanup_guidance_is_provider_owned(self):
+        import inspect
+        import teardown as standalone
+
+        expected = {
+            'aws': 'AWS EC2 Console',
+            'linode': 'Linode Cloud Manager',
+            'flokinet': 'FlokiNET control panel',
+        }
+        for provider, marker in expected.items():
+            with self.subTest(provider=provider):
+                guidance = registry.provider_cleanup_guidance(
+                    provider, 'cleanup-test')
+                self.assertTrue(guidance)
+                self.assertIn(marker, ' '.join(guidance))
+                self.assertIn('cleanup-test', ' '.join(guidance))
+
+        cleanup_output = io.StringIO()
+        standalone_output = io.StringIO()
+        config = {'provider': 'flokinet', 'deployment_id': 'cleanup-test'}
+        with contextlib.redirect_stdout(cleanup_output):
+            self.assertFalse(cleanup_engine.manual_cleanup_guidance(config))
+        with contextlib.redirect_stdout(standalone_output):
+            standalone.show_manual_cleanup_guidance(config)
+        self.assertIn('FlokiNET control panel', cleanup_output.getvalue())
+        self.assertIn('FlokiNET control panel', standalone_output.getvalue())
+
+        for function in (
+                cleanup_engine.manual_cleanup_guidance,
+                standalone.show_manual_cleanup_guidance):
+            self.assertNotIn('provider ==', inspect.getsource(function))
 
     def test_provider_credentials_are_isolated_by_registry_metadata(self):
         populated = {

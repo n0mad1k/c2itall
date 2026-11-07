@@ -19,7 +19,8 @@ from utils.common import COLORS, PROVIDER_DIRS, confirm_action
 from utils.provider_registry import (
     infrastructure_adapter, list_infrastructure_states,
     load_infrastructure_state, prepare_provider_environment,
-    provider_teardown_vars, uses_legacy_routes, workload_route,
+    provider_cleanup_guidance, provider_teardown_vars, uses_legacy_routes,
+    workload_route,
 )
 
 def teardown_by_deployment_id(deployment_id):
@@ -301,23 +302,12 @@ def manual_cleanup_guidance(config):
     print(f"Deployment ID: {deployment_id}")
     print(f"Provider: {provider}")
     
-    if provider == "aws":
-        print(f"\nAWS Resources to check:")
-        print(f"- EC2 instances with tags containing: {deployment_id}")
-        print(f"- Security groups with names containing: {deployment_id}")
-        print(f"- Key pairs with names containing: {deployment_id}")
-        print(f"- EIPs associated with the deployment")
-        
-    elif provider == "linode":
-        print(f"\nLinode Resources to check:")
-        print(f"- Linodes with labels containing: {deployment_id}")
-        print(f"- NodeBalancers with labels containing: {deployment_id}")
-        print(f"- Firewalls with labels containing: {deployment_id}")
-        
-    elif provider == "flokinet":
-        print(f"\nFlokiNET Resources to check:")
-        print(f"- Check your FlokiNET control panel for resources created")
-        print(f"- Look for servers with the deployment ID: {deployment_id}")
+    guidance = provider_cleanup_guidance(provider, deployment_id)
+    if guidance:
+        label = PROVIDER_DIRS.get(provider, str(provider))
+        print(f"\n{label} Resources to check:")
+        for item in guidance:
+            print(f"- {item}")
     
     print(f"\nLocal cleanup:")
     print(f"- SSH keys: ~/.ssh/c2deploy_{deployment_id}*")
