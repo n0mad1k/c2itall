@@ -8,7 +8,7 @@ C2ingRed enables rapid deployment of complete Command and Control (C2) infrastru
 
 ## Features
 
-- **Multi-provider Support**: AWS, Linode, and FlokiNET
+- **Multi-provider Support**: AWS, Linode, FlokiNET, and registered Azure workloads
 - **Infrastructure Components**:
   - C2 server with Havoc C2 Framework (dev branch)
   - HTTPS redirectors with security hardening
@@ -64,16 +64,28 @@ ansible --version
 
 ## Usage
 
-### Azure infrastructure-only VM
+### Azure infrastructure and quick-recon VM
 
 The Azure flow and its smoke-test script require Python 3.12 or newer.
 
 Choose **Tools & Utilities → Infrastructure-only VM**, then **Azure**, or run
-`python3 modules/infrastructure/deploy_infrastructure.py`. Azure is offered only
-for this flow. It creates a dedicated resource group, network, firewall, static
+`python3 modules/infrastructure/deploy_infrastructure.py`. The Attack Box menu
+also offers Azure for its Quick Recon Box subtype. These routes create a
+dedicated resource group, network, firewall, static
 Standard IPv4, NIC and Ubuntu 24.04 VM with a 32-GiB StandardSSD managed disk.
 SSH is allowed only from your public IPv4 /32, password login is disabled, and
 normal system logs and managed boot diagnostics remain enabled.
+
+The Azure quick-recon route reuses the provider-neutral task module to install
+the workspace, nmap/DNS tools, Tor, torsocks and proxychains. Its provider owns
+the durable state and deployment key, and standalone teardown uses the saved
+workload identity before removing its active deployment record. Preview its
+non-mutating harness with `python3 scripts/test_azure_attack_box_live.py`; run a
+real deploy/repeat/SSH verification/cleanup cycle by adding `--activate`.
+Kali and full attack-box subtypes are refused because the subscription has not
+accepted the Kali Marketplace image terms; they are not silently mapped to
+Ubuntu. Azure C2, redirector, phishing, payload-server and WEBRUNNER handlers
+are not registered yet and therefore are not advertised as Azure capabilities.
 
 Use an authenticated Azure CLI session (`az login`) and supply the subscription,
 region, VM size and SSH public key explicitly. No Azure SDK package is required;
@@ -165,7 +177,7 @@ imports. An adapter supplies configuration, validation, key preparation, playboo
 selection, deployment, cleanup and durable-state discovery. New handlers are
 registered in `ProviderSpec.routes`; adding a provider or workload does not
 require adding another provider switch to that module. Azure implements the
-infrastructure handler today. AWS, Linode and FlokiNET retain their existing
+infrastructure and quick-recon attack-box handlers today. AWS, Linode and FlokiNET retain their existing
 workload implementations through the compatibility fallback; they have not been
 silently rewritten or live-tested by this change. WEBRUNNER now uses a composite
 dispatcher: an all-legacy provider selection runs its existing playbook once, and
