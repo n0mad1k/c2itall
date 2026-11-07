@@ -19,7 +19,7 @@ from utils.common import COLORS, PROVIDER_DIRS, confirm_action
 from utils.provider_registry import (
     infrastructure_adapter, list_infrastructure_states,
     load_infrastructure_state, prepare_provider_environment,
-    uses_legacy_routes, workload_route,
+    provider_teardown_vars, uses_legacy_routes, workload_route,
 )
 
 def teardown_by_deployment_id(deployment_id):
@@ -252,17 +252,7 @@ def create_teardown_vars(config):
     if config.get('attack_box_name'):
         teardown_vars['attack_box_name'] = config['attack_box_name']
     
-    # Add provider-specific vars if present
-    if config.get('aws_access_key'):
-        teardown_vars['aws_access_key'] = config['aws_access_key']
-    if config.get('aws_secret_key'):
-        teardown_vars['aws_secret_key'] = config['aws_secret_key']
-    if config.get('aws_region'):
-        teardown_vars['aws_region'] = config['aws_region']
-    if config.get('linode_token'):
-        teardown_vars['linode_token'] = config['linode_token']
-    if config.get('linode_region'):
-        teardown_vars['linode_region'] = config['linode_region']
+    teardown_vars.update(provider_teardown_vars(config))
     
     return json.dumps(teardown_vars)
 

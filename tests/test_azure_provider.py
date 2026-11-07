@@ -1020,6 +1020,90 @@ class RoutingAndTemplateTests(AzureFixture):
             self.assertIn('prepare_provider_environment(', source)
             self.assertNotIn('provider ==', source)
 
+    def test_provider_credentials_are_isolated_by_registry_metadata(self):
+        populated = {
+            'AWS_ACCESS_KEY_ID': 'aws-access',
+            'AWS_SECRET_ACCESS_KEY': 'aws-secret',
+            'LINODE_TOKEN': 'linode-token',
+            'FLOKINET_API_KEY': 'floki-key',
+        }
+        with mock.patch.dict(os.environ, populated, clear=True):
+            self.assertEqual(registry.provider_secret_vars({'provider': 'aws'}), {
+                'aws_access_key': 'aws-access',
+                'aws_secret_key': 'aws-secret',
+            })
+            self.assertEqual(
+                registry.provider_secret_vars({'provider': 'linode'}),
+                {'linode_token': 'linode-token'})
+            self.assertEqual(
+                registry.provider_secret_vars({'provider': 'flokinet'}),
+                {'flokinet_api_key': 'floki-key'})
+            self.assertEqual(
+                registry.provider_secret_vars({'provider': 'azure'}), {})
+
+        self.assertEqual(registry.provider_credential_keys(), {
+            'aws_access_key', 'aws_secret_key', 'linode_token',
+            'flokinet_api_key'})
+        aws_cleanup = json.loads(cleanup_engine.create_teardown_vars({
+            'provider': 'aws', 'deployment_id': 'test',
+            'aws_access_key': 'access', 'aws_secret_key': 'secret',
+            'aws_region': 'us-east-1', 'linode_token': 'excluded',
+        }))
+        self.assertEqual(aws_cleanup, {
+            'deployment_id': 'test', 'provider': 'aws',
+            'operation': 'teardown', 'aws_access_key': 'access',
+            'aws_secret_key': 'secret', 'aws_region': 'us-east-1',
+        })
+        linode_cleanup = json.loads(cleanup_engine.create_teardown_vars({
+            'provider': 'linode', 'deployment_id': 'test',
+            'linode_token': 'token', 'linode_region': 'us-east',
+            'aws_secret_key': 'excluded',
+        }))
+        self.assertEqual(linode_cleanup, {
+            'deployment_id': 'test', 'provider': 'linode',
+            'operation': 'teardown', 'linode_token': 'token',
+            'linode_region': 'us-east',
+        })
+
+        captured = {}
+
+        class Process:
+            returncode = 0
+            stdout = ()
+
+            def __init__(self, argv, **kwargs):
+                paths = [value[1:] for value in argv if value.startswith('@')]
+                captured['secret_vars'] = json.loads(Path(paths[-1]).read_text())
+
+            def wait(self):
+                return 0
+
+        legacy = {
+            'provider': 'aws', 'deployment_id': 'isolation-test',
+            'aws_access_key': 'aws-config',
+            'aws_secret_key': 'aws-config-secret',
+            'linode_token': 'excluded-config',
+            'flokinet_api_key': 'excluded-floki',
+            'smtp_auth_pass': 'smtp-secret',
+        }
+        previous = Path.cwd()
+        (self.home / 'logs').mkdir(exist_ok=True)
+        try:
+            os.chdir(self.home)
+            with mock.patch.dict(os.environ, populated, clear=True), \
+                    mock.patch.object(
+                        deployment_engine.subprocess, 'Popen', Process), \
+                    mock.patch.object(deployment_engine, 'save_deployment_info'):
+                self.assertTrue(deployment_engine.execute_playbook(
+                    'providers/AWS/c2.yml', legacy))
+        finally:
+            os.chdir(previous)
+        self.assertEqual(captured['secret_vars'], {
+            'aws_access_key': 'aws-access',
+            'aws_secret_key': 'aws-secret',
+            'smtp_auth_pass': 'smtp-secret',
+        })
+
 
 class ProviderContractTests(AzureFixture):
     def test_health_reads_owned_vm_without_mutating_state(self):

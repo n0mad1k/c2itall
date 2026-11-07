@@ -6,6 +6,7 @@ adapter is implemented. Registration never implies support for every workload.
 
 from collections import namedtuple
 from importlib import import_module
+import os
 
 
 class WorkloadAdapter:
@@ -61,15 +62,18 @@ class ProviderRuntime:
 class ProviderSpec(namedtuple(
         '_ProviderSpec',
         'directory ssh_user legacy_menu config_loader routes runtime_loader '
-        'environment_loader')):
+        'environment_loader credential_environment teardown_keys')):
     __slots__ = ()
 
     def __new__(cls, directory, ssh_user, legacy_menu=True, config_loader=None,
-                routes=None, runtime_loader=None, environment_loader=None):
+                routes=None, runtime_loader=None, environment_loader=None,
+                credential_environment=None, teardown_keys=None):
         return super(ProviderSpec, cls).__new__(cls, directory, ssh_user, legacy_menu,
                                                config_loader, dict(routes or {}),
                                                runtime_loader,
-                                               environment_loader)
+                                               environment_loader,
+                                               tuple(credential_environment or ()),
+                                               tuple(teardown_keys or ()))
 
     @property
     def capabilities(self):
@@ -84,16 +88,27 @@ _FLOKINET_TRANSITION = 'utils.legacy_provider_adapter:flokinet_adapter'
 PROVIDER_SPECS = {
     'aws': ProviderSpec('AWS', 'kali', config_loader='utils.aws_utils:gather_aws_config',
                         environment_loader='utils.aws_utils:prepare_aws_environment',
+                        credential_environment=(
+                            ('aws_access_key', 'AWS_ACCESS_KEY_ID'),
+                            ('aws_secret_key', 'AWS_SECRET_ACCESS_KEY'),
+                        ),
+                        teardown_keys=(
+                            'aws_access_key', 'aws_secret_key', 'aws_region'),
                         routes={workload: _AWS_TRANSITION for workload in (
                             'attack_box', 'c2', 'payload_server', 'phishing',
                             'redirector', 'webrunner')}),
     'linode': ProviderSpec('Linode', 'root', config_loader='utils.linode_utils:gather_linode_config',
                            environment_loader='utils.linode_utils:prepare_linode_environment',
+                           credential_environment=(
+                               ('linode_token', 'LINODE_TOKEN'),),
+                           teardown_keys=('linode_token', 'linode_region'),
                            routes={workload: _LINODE_TRANSITION for workload in (
                                'attack_box', 'c2', 'payload_server', 'phishing',
                                'redirector', 'webrunner')}),
     'flokinet': ProviderSpec('FlokiNET', 'root', config_loader='utils.flokinet_utils:gather_flokinet_config',
                              environment_loader='utils.flokinet_utils:prepare_flokinet_environment',
+                             credential_environment=(
+                                 ('flokinet_api_key', 'FLOKINET_API_KEY'),),
                              routes={workload: _FLOKINET_TRANSITION for workload in (
                                  'c2', 'payload_server', 'phishing', 'redirector',
                                  'webrunner')}),
@@ -176,6 +191,39 @@ def prepare_provider_environment(config, teardown=False):
     if not callable(prepare):
         raise TypeError('Provider environment loader must be callable')
     return prepare(config, teardown=teardown)
+
+
+def provider_secret_vars(config):
+    """Return only the active provider's controller credentials."""
+    spec = PROVIDER_SPECS.get(config.get('provider'))
+    if spec is None:
+        return {}
+    result = {}
+    for item in spec.credential_environment:
+        if (not isinstance(item, tuple) or len(item) != 2 or
+                not all(isinstance(value, str) and value for value in item)):
+            raise ValueError('Invalid provider credential environment mapping')
+        config_key, environment_key = item
+        value = os.environ.get(environment_key) or config.get(config_key)
+        if value is not None and value != '':
+            result[config_key] = value
+    return result
+
+
+def provider_credential_keys():
+    """Return every registered provider credential key for isolation checks."""
+    return frozenset(config_key
+                     for spec in PROVIDER_SPECS.values()
+                     for config_key, _ in spec.credential_environment)
+
+
+def provider_teardown_vars(config):
+    """Return the selected provider's preserved legacy cleanup inputs."""
+    spec = PROVIDER_SPECS.get(config.get('provider'))
+    if spec is None:
+        return {}
+    return {key: config[key] for key in spec.teardown_keys
+            if config.get(key) is not None}
 
 
 def providers_for(capability=None, legacy_fallback=False):

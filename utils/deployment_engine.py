@@ -15,7 +15,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from utils.common import COLORS, PROVIDER_DIRS
 from utils.provider_registry import (
     composite_workload_routes, prepare_provider_environment,
-    provider_runtime, workload_route, uses_legacy_routes,
+    provider_credential_keys, provider_runtime, provider_secret_vars,
+    workload_route, uses_legacy_routes,
 )
 
 _SECRET_KEYS = frozenset({
@@ -206,18 +207,14 @@ def execute_playbook(playbook, config):
         # variables without appearing in process listings or the main extra-vars JSON.
         # Read from environment (set by set_provider_environment) so this works even
         # when config was passed as a copy ({**config}) that didn't capture the token.
-        secret_vars = {}
-        if os.environ.get('LINODE_TOKEN'):
-            secret_vars['linode_token'] = os.environ['LINODE_TOKEN']
-        if os.environ.get('AWS_ACCESS_KEY_ID'):
-            secret_vars['aws_access_key'] = os.environ['AWS_ACCESS_KEY_ID']
-        if os.environ.get('AWS_SECRET_ACCESS_KEY'):
-            secret_vars['aws_secret_key'] = os.environ['AWS_SECRET_ACCESS_KEY']
-        if os.environ.get('FLOKINET_API_KEY'):
-            secret_vars['flokinet_api_key'] = os.environ['FLOKINET_API_KEY']
+        secret_vars = provider_secret_vars(config)
+        registered_credentials = provider_credential_keys()
         # Also pick up any remaining secret keys from config dict (e.g. smtp_auth_pass)
         for k, v in config.items():
-            if v is not None and k not in secret_vars and any(s in k.lower() for s in _SECRET_KEYS):
+            if k in registered_credentials:
+                continue
+            if (v is not None and k not in secret_vars and
+                    any(s in k.lower() for s in _SECRET_KEYS)):
                 secret_vars[k] = v
         if secret_vars:
             fd, secret_vars_file = tempfile.mkstemp(suffix='.json', prefix='ansible_secret_')
