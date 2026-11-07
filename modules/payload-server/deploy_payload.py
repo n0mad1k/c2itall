@@ -31,16 +31,18 @@ def gather_payload_parameters():
     print(f"Deployment ID: {COLORS['CYAN']}{config['deployment_id']}{COLORS['RESET']}")
     
     # Provider selection
-    provider = select_provider()
+    provider = select_provider('payload_server', legacy_fallback=True)
     if not provider:
         return None
     config['provider'] = provider
     
     # Get provider-specific configuration
-    provider_config = gather_provider_config(provider)
+    provider_config = gather_provider_config(
+        provider, 'payload_server', legacy_fallback=True)
     if not provider_config:
         return None
     config.update(provider_config)
+    config['provider_workload'] = 'payload_server'
     
     # Payload-specific configuration
     print(f"\n{COLORS['BLUE']}Payload Server Configuration{COLORS['RESET']}")
@@ -250,7 +252,8 @@ def execute_payload_deployment(config):
         return
     
     # Execute the actual deployment
-    success = execute_ansible_deployment(config)
+    from utils.deployment_engine import dispatch_workload
+    success = dispatch_workload(config, execute_ansible_deployment)
     
     if success:
         print(f"\n{COLORS['GREEN']}Payload server infrastructure deployed successfully!{COLORS['RESET']}")

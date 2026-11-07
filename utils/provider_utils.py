@@ -9,14 +9,14 @@ from .linode_utils import gather_linode_config
 from .flokinet_utils import gather_flokinet_config
 from .provider_registry import providers_for, provider_dispatcher
 
-def available_providers(capability=None):
-    """Only advertise capabilities backed by a registered implementation."""
-    return providers_for(capability)
+def available_providers(capability=None, legacy_fallback=False):
+    """Advertise registered handlers plus explicitly allowed legacy providers."""
+    return providers_for(capability, legacy_fallback=legacy_fallback)
 
 
-def select_provider(capability=None):
+def select_provider(capability=None, legacy_fallback=False):
     """Let the user select a cloud provider"""
-    providers = available_providers(capability)
+    providers = available_providers(capability, legacy_fallback=legacy_fallback)
     if not providers:
         print('No provider implements this capability.')
         return None
@@ -38,10 +38,10 @@ def select_provider(capability=None):
         except ValueError:
             print(f"{COLORS['RED']}Please enter a valid number{COLORS['RESET']}")
 
-def gather_provider_config(provider, capability=None):
+def gather_provider_config(provider, capability=None, legacy_fallback=False):
     """Gather configuration for the specified provider"""
     dispatcher = provider_dispatcher(provider)
     if dispatcher is not None:
-        return dispatcher.gather_config(capability)
+        return dispatcher.gather_config(capability, legacy_fallback=legacy_fallback)
     print(f"{COLORS['RED']}Unknown provider: {provider}{COLORS['RESET']}")
     return None

@@ -152,6 +152,14 @@ registration never falls back to legacy execution. Existing selectors and menu
 defaults are preserved; registering one workload does not replace the provider's
 other workloads or advertise unsupported capabilities.
 
+Attack-box, C2, redirector, phishing and payload-server menus now request their
+canonical workload through this dispatcher. They offer registered handlers plus
+providers that explicitly retain legacy support, gather configuration from a new
+handler when present, and otherwise call the existing provider loader. Subtype
+names such as `gophish_only` remain deployment details and no longer obscure the
+canonical provider workload. Phishing and payload-server execution also enters
+the dispatcher before their unchanged legacy executors.
+
 The neutral infrastructure module uses the adapter contract rather than Azure
 imports. An adapter supplies configuration, validation, key preparation, playbook
 selection, deployment, cleanup and durable-state discovery. New handlers are
@@ -159,8 +167,9 @@ registered in `ProviderSpec.routes`; adding a provider or workload does not
 require adding another provider switch to that module. Azure implements the
 infrastructure handler today. AWS, Linode and FlokiNET retain their existing
 workload implementations through the compatibility fallback; they have not been
-silently rewritten or live-tested by this change. Separate module-specific
-dispatchers, including Phantom and WEBRUNNER, remain on their existing paths.
+silently rewritten or live-tested by this change. Phantom and WEBRUNNER remain on
+their existing paths because their separate and multi-provider lifecycles require
+different adapter contracts.
 Provider registrations remain enabled after the test.
 
 ### Main Menu (Easiest Method)

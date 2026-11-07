@@ -304,6 +304,111 @@ class RoutingAndTemplateTests(AzureFixture):
         with mock.patch("builtins.input", return_value="3"), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(provider_utils.select_provider(), "flokinet")
 
+    def test_deferred_workloads_offer_new_routes_and_explicit_legacy_fallbacks(self):
+        self.assertEqual(
+            provider_utils.available_providers('c2', legacy_fallback=True),
+            ['aws', 'linode', 'flokinet'])
+        azure_spec = registry.PROVIDER_SPECS['azure']._replace(
+            routes=dict(registry.PROVIDER_SPECS['azure'].routes, c2='fake:Adapter'))
+        with mock.patch.dict(registry.PROVIDER_SPECS, {'azure': azure_spec}):
+            self.assertEqual(
+                provider_utils.available_providers('c2', legacy_fallback=True),
+                ['aws', 'linode', 'flokinet', 'azure'])
+
+    def test_workload_config_prefers_registered_handler_then_legacy_loader(self):
+        adapter = mock.Mock()
+        adapter.gather_config.return_value = {'source': 'new'}
+        factory = mock.Mock(return_value=adapter)
+        azure_spec = registry.PROVIDER_SPECS['azure']._replace(
+            routes=dict(registry.PROVIDER_SPECS['azure'].routes, c2='fake:Adapter'))
+        with mock.patch.dict(registry.PROVIDER_SPECS, {'azure': azure_spec}), mock.patch.object(registry, '_load', return_value=factory):
+            self.assertEqual(
+                provider_utils.gather_provider_config(
+                    'azure', 'c2', legacy_fallback=True),
+                {'source': 'new'})
+            adapter.gather_config.assert_called_once_with()
+
+        legacy_loader = mock.Mock(return_value={'source': 'legacy'})
+        with mock.patch.object(registry, '_load', return_value=legacy_loader):
+            self.assertEqual(
+                provider_utils.gather_provider_config(
+                    'aws', 'c2', legacy_fallback=True),
+                {'source': 'legacy'})
+            legacy_loader.assert_called_once_with()
+
+        with self.assertRaisesRegex(ValueError, 'No configuration route'):
+            provider_utils.gather_provider_config('azure', 'c2', legacy_fallback=True)
+
+    def test_canonical_workload_dispatch_never_retries_failed_handler(self):
+        config = {'provider': 'azure', 'provider_workload': 'phishing',
+                  'deployment_type': 'gophish_only'}
+        self.assertEqual(registry.requested_workload(config), 'phishing')
+        adapter = mock.Mock()
+        legacy = mock.Mock(return_value=True)
+        adapter.deploy.return_value = True
+        with mock.patch.object(deployment_engine, 'workload_route', return_value=adapter):
+            self.assertTrue(deployment_engine.dispatch_workload(config, legacy))
+        adapter.deploy.assert_called_once_with(config)
+        legacy.assert_not_called()
+
+        adapter.deploy.side_effect = RuntimeError('handler failed')
+        with mock.patch.object(deployment_engine, 'workload_route', return_value=adapter), self.assertRaisesRegex(RuntimeError, 'handler failed'):
+            deployment_engine.dispatch_workload(config, legacy)
+        legacy.assert_not_called()
+
+        with mock.patch.object(deployment_engine, 'workload_route', return_value=None):
+            self.assertFalse(deployment_engine.dispatch_workload(config, legacy))
+        legacy.assert_not_called()
+
+        legacy_config = dict(config, provider='aws')
+        with mock.patch.object(deployment_engine, 'workload_route', return_value=None):
+            self.assertTrue(
+                deployment_engine.dispatch_workload(legacy_config, legacy))
+        legacy.assert_called_once_with(legacy_config)
+
+    def test_deferred_module_menus_request_canonical_workload_with_fallback(self):
+        cases = (
+            ('modules/attack-box/deploy_attack_box.py', 'gather_attack_box_parameters', 'attack_box'),
+            ('modules/c2/deploy_c2.py', 'gather_c2_parameters', 'c2'),
+            ('modules/redirectors/deploy_redirector.py', 'gather_redirector_parameters', 'redirector'),
+            ('modules/phishing/deploy_phishing.py', 'gather_phishing_parameters', 'phishing'),
+            ('modules/payload-server/deploy_payload.py', 'gather_payload_parameters', 'payload_server'),
+        )
+        for index, (relative_path, function_name, workload) in enumerate(cases):
+            with self.subTest(workload=workload):
+                module_spec = importlib.util.spec_from_file_location(
+                    f'deferred_module_{index}', ROOT / relative_path)
+                module = importlib.util.module_from_spec(module_spec)
+                module_spec.loader.exec_module(module)
+                with mock.patch.object(module, 'clear_screen'), mock.patch.object(module, 'print_banner'), mock.patch.object(module, 'generate_deployment_id', return_value='test-id'), mock.patch.object(module, 'select_provider', return_value='aws') as select, mock.patch.object(module, 'gather_provider_config', return_value=None) as gather, contextlib.redirect_stdout(io.StringIO()):
+                    self.assertIsNone(getattr(module, function_name)())
+                select.assert_called_once_with(workload, legacy_fallback=True)
+                gather.assert_called_once_with(
+                    'aws', workload, legacy_fallback=True)
+
+    def test_direct_legacy_modules_enter_dispatcher_before_existing_executor(self):
+        cases = (
+            ('modules/phishing/deploy_phishing.py', 'execute_phishing_deployment',
+             'execute_component_deployment', {
+                 'provider': 'aws', 'provider_workload': 'phishing',
+                 'deployment_type': 'gophish_only', 'deployment_id': 'test-id',
+                 'phishing_domain': 'example.test'}),
+            ('modules/payload-server/deploy_payload.py', 'execute_payload_deployment',
+             'execute_ansible_deployment', {
+                 'provider': 'aws', 'provider_workload': 'payload_server',
+                 'deployment_type': 'basic_payload_server',
+                 'deployment_id': 'test-id', 'domain': 'example.test'}),
+        )
+        for index, (relative_path, function_name, legacy_name, config) in enumerate(cases):
+            with self.subTest(workload=config['provider_workload']):
+                module_spec = importlib.util.spec_from_file_location(
+                    f'direct_module_{index}', ROOT / relative_path)
+                module = importlib.util.module_from_spec(module_spec)
+                module_spec.loader.exec_module(module)
+                with mock.patch.object(module, 'clear_screen'), mock.patch.object(module, 'print_banner'), mock.patch.object(module, 'setup_logging'), mock.patch.object(module, 'confirm_action', return_value=True), mock.patch.object(module, 'wait_for_input'), mock.patch.object(module, 'archive_old_logs', create=True), mock.patch.object(deployment_engine, 'dispatch_workload', return_value=False) as dispatch, contextlib.redirect_stdout(io.StringIO()):
+                    getattr(module, function_name)(config)
+                dispatch.assert_called_once_with(config, getattr(module, legacy_name))
+
     def test_existing_routes_remain_and_azure_cannot_route_payloads(self):
         for provider, dirname in (("aws", "AWS"), ("linode", "Linode"), ("flokinet", "FlokiNET")):
             self.assertEqual(deployment_engine.determine_playbook({"provider": provider, "c2_only": True}), f"providers/{dirname}/c2.yml")

@@ -22,6 +22,18 @@ _SECRET_KEYS = frozenset({
 })
 
 
+def dispatch_workload(config, legacy_deploy):
+    """Prefer a registered workload handler and otherwise call legacy code once."""
+    provider = config.get('provider')
+    adapter = workload_route(config)
+    if adapter is not None:
+        return adapter.deploy(config)
+    if uses_legacy_routes(provider):
+        return legacy_deploy(config)
+    logging.error('Provider has no route for this workload')
+    return False
+
+
 def deploy_infrastructure(config):
     """
     Deploy infrastructure based on the provided configuration.

@@ -81,12 +81,13 @@ class ProviderDispatcher:
             raise ValueError(f'Registered route is missing for {self.provider}/{workload}')
         return _load(reference)()
 
-    def gather_config(self, capability=None):
+    def gather_config(self, capability=None, legacy_fallback=False):
         if capability is not None:
             route = self.route(capability)
-            if route is None:
+            if route is not None:
+                return route.gather_config()
+            if not (legacy_fallback and self.spec.legacy_menu):
                 raise ValueError(f'No configuration route for {self.provider}/{capability}')
-            return route.gather_config()
         if not self.spec.config_loader:
             raise ValueError(f'Configuration loader is missing for {self.provider}')
         return _load(self.spec.config_loader)()
@@ -96,9 +97,12 @@ def provider_dispatcher(provider):
     return ProviderDispatcher(provider) if provider in PROVIDER_SPECS else None
 
 
-def providers_for(capability=None):
+def providers_for(capability=None, legacy_fallback=False):
+    """Return providers that can service a workload through a new or legacy route."""
     return [key for key, spec in PROVIDER_SPECS.items()
-            if (spec.legacy_menu if capability is None else capability in spec.capabilities)]
+            if (spec.legacy_menu if capability is None else
+                capability in spec.capabilities or
+                (legacy_fallback and spec.legacy_menu))]
 
 
 def infrastructure_adapter(provider):
@@ -116,6 +120,8 @@ def workload_route(config):
 
 def requested_workload(config):
     """Recognize the existing selectors without changing legacy precedence."""
+    if isinstance(config.get('provider_workload'), str) and config['provider_workload']:
+        return config['provider_workload']
     if isinstance(config.get('deployment_type'), str) and config['deployment_type']:
         return config['deployment_type']
     for flag, workload in (

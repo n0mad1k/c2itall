@@ -33,16 +33,18 @@ def gather_phishing_parameters():
     print(f"Deployment ID: {COLORS['CYAN']}{config['deployment_id']}{COLORS['RESET']}")
     
     # Provider selection
-    provider = select_provider()
+    provider = select_provider('phishing', legacy_fallback=True)
     if not provider:
         return None
     config['provider'] = provider
     
     # Get provider-specific configuration
-    provider_config = gather_provider_config(provider)
+    provider_config = gather_provider_config(
+        provider, 'phishing', legacy_fallback=True)
     if not provider_config:
         return None
     config.update(provider_config)
+    config['provider_workload'] = 'phishing'
     
     # Phishing-specific configuration
     print(f"\n{COLORS['BLUE']}Phishing Configuration{COLORS['RESET']}")
@@ -437,7 +439,8 @@ def execute_phishing_deployment(config):
     config['phishing_deployment'] = True
     
     # Execute the actual deployment using component-based approach
-    success = execute_component_deployment(config)
+    from utils.deployment_engine import dispatch_workload
+    success = dispatch_workload(config, execute_component_deployment)
     
     if success:
         print(f"\n{COLORS['GREEN']}✅ Phishing infrastructure deployed successfully!{COLORS['RESET']}")

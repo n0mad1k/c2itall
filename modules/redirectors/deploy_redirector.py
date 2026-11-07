@@ -31,16 +31,18 @@ def gather_redirector_parameters():
     print(f"Deployment ID: {COLORS['CYAN']}{config['deployment_id']}{COLORS['RESET']}")
     
     # Provider selection
-    provider = select_provider()
+    provider = select_provider('redirector', legacy_fallback=True)
     if not provider:
         return None
     config['provider'] = provider
     
     # Get provider-specific configuration
-    provider_config = gather_provider_config(provider)
+    provider_config = gather_provider_config(
+        provider, 'redirector', legacy_fallback=True)
     if not provider_config:
         return None
     config.update(provider_config)
+    config['provider_workload'] = 'redirector'
     
     # Redirector-specific configuration
     print(f"\n{COLORS['BLUE']}Redirector Configuration{COLORS['RESET']}")
