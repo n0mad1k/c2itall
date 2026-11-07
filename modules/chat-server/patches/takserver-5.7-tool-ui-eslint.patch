@@ -1,0 +1,14 @@
+diff --git a/src/takserver-tool-ui/package.json b/src/takserver-tool-ui/package.json
+index 9064385..532a1fa 100644
+--- a/src/takserver-tool-ui/package.json
++++ b/src/takserver-tool-ui/package.json
+@@ -29,8 +29,7 @@
+   },
+   "eslintConfig": {
+     "extends": [
+-      "react-app",
+-      "react-app/jest"
++      "react-app"
+     ]
+   },
+   "browserslist": {

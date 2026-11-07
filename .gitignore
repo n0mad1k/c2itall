@@ -118,3 +118,5 @@ FIXES.md
 GATE_*.md
 .codex-state/
 deployments/azure/
+deployments/chat/
+artifacts/takserver/

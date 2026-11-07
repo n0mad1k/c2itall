@@ -1,0 +1,361 @@
+---
+# Official TAK Server 5.7 deployment for the provider-routed chat module.
+
+- name: Deploy TAK Server
+  hosts: all
+  become: true
+  vars:
+    tak_expected_version: "5.7-RELEASE14"
+    tak_package_name: "takserver_5.7-RELEASE14_all.deb"
+    tak_remote_deb: "/var/tmp/{{ tak_package_name }}"
+    tak_public_host: "{{ tak_server_name | default(target_host) }}"
+    tak_package_dir: "/opt/tak/c2itall-client-{{ deployment_id }}"
+    tak_package_zip: "/opt/tak/c2itall-client-{{ deployment_id }}.zip"
+    tak_server_cert_name: "{{ tak_public_host }}"
+    tak_federation_enabled: "{{ tak_federation | default(false) }}"
+
+  pre_tasks:
+    - name: Validate required TAK deployment values
+      assert:
+        that:
+          - tak_deb_path is string
+          - tak_deb_sha256 is match('^[0-9a-f]{64}$')
+          - tak_cert_password | length >= 16
+          - tak_ca_password | length >= 16
+          - tak_admin_name is match('^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$')
+          - tak_client_name is match('^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$')
+          - tak_ca_name is match('^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$')
+          - tak_artifact_dir is string
+        fail_msg: Invalid TAK Server deployment configuration
+      no_log: true
+
+    - name: Check pinned TAK package on controller
+      stat:
+        path: "{{ tak_deb_path }}"
+        checksum_algorithm: sha256
+      register: tak_local_deb
+      delegate_to: localhost
+      become: false
+
+    - name: Verify pinned TAK package checksum
+      assert:
+        that:
+          - tak_local_deb.stat.isreg | default(false)
+          - tak_local_deb.stat.checksum == tak_deb_sha256
+        fail_msg: Pinned TAK package is missing or has the wrong checksum
+
+  tasks:
+    - name: Install repository and package prerequisites
+      apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - openssl
+          - zip
+        state: present
+        update_cache: true
+
+    - name: Create PostgreSQL keyring directory
+      file:
+        path: /usr/share/postgresql-common/pgdg
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install PostgreSQL repository key
+      get_url:
+        url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+        dest: /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Configure PostgreSQL 15 repository
+      copy:
+        dest: /etc/apt/sources.list.d/pgdg.list
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt {{ ansible_distribution_release }}-pgdg main
+
+    - name: Install TAK runtime dependencies
+      apt:
+        name:
+          - openjdk-17-jdk
+          - postgresql-15
+          - postgresql-15-postgis-3
+        state: present
+        update_cache: true
+
+    - name: Read installed TAK package version
+      command:
+        argv: [dpkg-query, -W, "-f=${Version}", takserver]
+      register: tak_installed_version
+      changed_when: false
+      failed_when: false
+
+    - name: Transfer pinned TAK package
+      copy:
+        src: "{{ tak_deb_path }}"
+        dest: "{{ tak_remote_deb }}"
+        owner: root
+        group: root
+        mode: "0600"
+      when: tak_installed_version.stdout | trim != tak_expected_version
+
+    - name: Verify transferred TAK package
+      stat:
+        path: "{{ tak_remote_deb }}"
+        checksum_algorithm: sha256
+      register: tak_remote_package
+      when: tak_installed_version.stdout | trim != tak_expected_version
+
+    - name: Refuse a changed TAK package in transit
+      assert:
+        that: tak_remote_package.stat.checksum == tak_deb_sha256
+      when: tak_installed_version.stdout | trim != tak_expected_version
+
+    - name: Install pinned TAK Server package
+      apt:
+        deb: "{{ tak_remote_deb }}"
+        state: present
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+      when: tak_installed_version.stdout | trim != tak_expected_version
+
+    - name: Remove transferred TAK package
+      file:
+        path: "{{ tak_remote_deb }}"
+        state: absent
+
+    - name: Stop TAK Server before certificate configuration
+      service:
+        name: takserver
+        state: stopped
+      failed_when: false
+
+    - name: Install owner-only TAK certificate metadata
+      template:
+        src: templates/tak-cert-metadata.sh.j2
+        dest: /opt/tak/certs/cert-metadata.sh
+        owner: tak
+        group: tak
+        mode: "0600"
+      no_log: true
+
+    - name: Generate TAK root CA
+      command:
+        argv: [./makeRootCa.sh, --ca-name, "{{ tak_ca_name }}"]
+        chdir: /opt/tak/certs
+        creates: /opt/tak/certs/files/ca.pem
+      become_user: tak
+      no_log: true
+
+    - name: Generate TAK server certificate
+      command:
+        argv: [./makeCert.sh, server, "{{ tak_server_cert_name }}"]
+        chdir: /opt/tak/certs
+        creates: "/opt/tak/certs/files/{{ tak_server_cert_name }}.jks"
+      become_user: tak
+      no_log: true
+
+    - name: Generate TAK administrator certificate
+      command:
+        argv: [./makeCert.sh, client, "{{ tak_admin_name }}"]
+        chdir: /opt/tak/certs
+        creates: "/opt/tak/certs/files/{{ tak_admin_name }}.p12"
+      become_user: tak
+      no_log: true
+
+    - name: Generate TAK client certificate
+      command:
+        argv: [./makeCert.sh, client, "{{ tak_client_name }}"]
+        chdir: /opt/tak/certs
+        creates: "/opt/tak/certs/files/{{ tak_client_name }}.p12"
+      become_user: tak
+      no_log: true
+
+    - name: Create active TAK configuration from packaged example
+      copy:
+        src: /opt/tak/CoreConfig.example.xml
+        dest: /opt/tak/CoreConfig.xml
+        remote_src: true
+        owner: tak
+        group: tak
+        mode: "0600"
+        force: false
+
+    - name: Point TAK configuration at generated server certificate
+      replace:
+        path: /opt/tak/CoreConfig.xml
+        regexp: 'certs/files/takserver\.jks'
+        replace: "certs/files/{{ tak_server_cert_name }}.jks"
+      no_log: true
+
+    - name: Set generated TAK keystore password
+      replace:
+        path: /opt/tak/CoreConfig.xml
+        regexp: 'keystorePass="[^"]*"'
+        replace: 'keystorePass="{{ tak_cert_password }}"'
+      no_log: true
+
+    - name: Set generated TAK truststore password
+      replace:
+        path: /opt/tak/CoreConfig.xml
+        regexp: 'truststorePass="[^"]*"'
+        replace: 'truststorePass="{{ tak_ca_password }}"'
+      no_log: true
+
+    - name: Register TAK administrator certificate offline
+      command:
+        argv:
+          - java
+          - -jar
+          - /opt/tak/utils/UserManager.jar
+          - --offline
+          - certmod
+          - -A
+          - "/opt/tak/certs/files/{{ tak_admin_name }}.pem"
+      register: tak_admin_registration
+      changed_when: "'Added' in tak_admin_registration.stdout or 'added' in tak_admin_registration.stdout"
+      no_log: true
+
+    - name: Allow TAK client and administration ports through UFW
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop:
+        - "8089"
+        - "8443"
+        - "8446"
+
+    - name: Allow TAK federation through UFW when enabled
+      ufw:
+        rule: allow
+        port: "8444"
+        proto: tcp
+      when: tak_federation_enabled | bool
+
+    - name: Enable and start TAK Server
+      service:
+        name: takserver
+        state: started
+        enabled: true
+
+    - name: Wait for TAK client TLS
+      wait_for:
+        host: 127.0.0.1
+        port: 8089
+        delay: 15
+        timeout: 300
+
+    - name: Wait for TAK administration TLS
+      wait_for:
+        host: 127.0.0.1
+        port: 8443
+        timeout: 300
+
+    - name: Verify TAK administration API with client certificate
+      command:
+        argv:
+          - curl
+          - --fail
+          - --silent
+          - --show-error
+          - --insecure
+          - --cert-type
+          - P12
+          - --cert
+          - "/opt/tak/certs/files/{{ tak_admin_name }}.p12:{{ tak_cert_password }}"
+          - https://127.0.0.1:8443/Marti/api/version
+      changed_when: false
+      no_log: true
+
+    - name: Create TAK connection-package directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: tak
+        group: tak
+        mode: "0700"
+      loop:
+        - "{{ tak_package_dir }}"
+        - "{{ tak_package_dir }}/MANIFEST"
+
+    - name: Install TAK client connection preference
+      template:
+        src: templates/tak-client.pref.j2
+        dest: "{{ tak_package_dir }}/config.pref"
+        owner: tak
+        group: tak
+        mode: "0600"
+      no_log: true
+
+    - name: Install TAK connection-package manifest
+      template:
+        src: templates/tak-manifest.xml.j2
+        dest: "{{ tak_package_dir }}/MANIFEST/manifest.xml"
+        owner: tak
+        group: tak
+        mode: "0600"
+
+    - name: Add generated credentials to TAK connection package
+      copy:
+        src: "{{ item.src }}"
+        dest: "{{ tak_package_dir }}/{{ item.dest }}"
+        remote_src: true
+        owner: tak
+        group: tak
+        mode: "0600"
+      loop:
+        - src: "/opt/tak/certs/files/{{ tak_client_name }}.p12"
+          dest: client.p12
+        - src: /opt/tak/certs/files/truststore-root.p12
+          dest: caCert.p12
+      no_log: true
+
+    - name: Build TAK connection package
+      command:
+        argv:
+          - zip
+          - -q
+          - -r
+          - "{{ tak_package_zip }}"
+          - MANIFEST
+          - config.pref
+          - client.p12
+          - caCert.p12
+        chdir: "{{ tak_package_dir }}"
+        creates: "{{ tak_package_zip }}"
+      become_user: tak
+      no_log: true
+
+    - name: Fetch TAK connection package and administrator certificate
+      fetch:
+        src: "{{ item.src }}"
+        dest: "{{ tak_artifact_dir }}/{{ item.dest }}"
+        flat: true
+        validate_checksum: true
+      loop:
+        - src: "{{ tak_package_zip }}"
+          dest: "tak-connection-{{ deployment_id }}.zip"
+        - src: "/opt/tak/certs/files/{{ tak_admin_name }}.p12"
+          dest: "tak-admin-{{ deployment_id }}.p12"
+        - src: /opt/tak/certs/files/ca.pem
+          dest: "tak-ca-{{ deployment_id }}.pem"
+      no_log: true
+
+    - name: Protect fetched TAK artifacts on controller
+      file:
+        path: "{{ tak_artifact_dir }}/{{ item }}"
+        mode: "0600"
+      loop:
+        - "tak-connection-{{ deployment_id }}.zip"
+        - "tak-admin-{{ deployment_id }}.p12"
+        - "tak-ca-{{ deployment_id }}.pem"
+      delegate_to: localhost
+      become: false

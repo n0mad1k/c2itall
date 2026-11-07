@@ -1,0 +1,14 @@
+COUNTRY={{ tak_cert_country | default('US') | quote }}
+STATE={{ tak_cert_state | quote }}
+CITY={{ tak_cert_city | quote }}
+ORGANIZATION={{ tak_cert_organization | quote }}
+ORGANIZATIONAL_UNIT={{ tak_cert_unit | quote }}
+CAPASS={{ tak_ca_password | quote }}
+PASS={{ tak_cert_password | quote }}
+DIR=files
+
+SUBJBASE="/C=${COUNTRY}/"
+if [ -n "$STATE" ]; then SUBJBASE+="ST=${STATE}/"; fi
+if [ -n "$CITY" ]; then SUBJBASE+="L=${CITY}/"; fi
+if [ -n "$ORGANIZATION" ]; then SUBJBASE+="O=${ORGANIZATION}/"; fi
+if [ -n "$ORGANIZATIONAL_UNIT" ]; then SUBJBASE+="OU=${ORGANIZATIONAL_UNIT}/"; fi
