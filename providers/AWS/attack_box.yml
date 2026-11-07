@@ -42,7 +42,7 @@
         attack_box_ami: "{{ attack_box_ami_map[aws_region] | default(attack_box_ami_map['us-east-1']) }}"
 
     - name: Generate SSH key pair for attack box
-      ec2_key:
+      amazon.aws.ec2_key:
         name: "{{ ssh_key_name }}"
         region: "{{ aws_region }}"
         aws_access_key: "{{ aws_access_key }}"
@@ -58,7 +58,7 @@
       when: ec2_key_result.key.private_key is defined
 
     - name: Create security group for attack box
-      ec2_group:
+      amazon.aws.ec2_security_group:
         name: "attack-box-sg-{{ deployment_id }}"
         description: "Security group for attack box {{ deployment_id }}"
         region: "{{ aws_region }}"
@@ -83,20 +83,24 @@
           Name: "attack-box-sg-{{ deployment_id }}"
           DeploymentID: "{{ deployment_id }}"
           Type: "attack-box"
+        state: present
       register: security_group
 
     - name: Launch attack box EC2 instance
-      ec2:
+      amazon.aws.ec2_instance:
+        name: "{{ attack_box_name }}"
         key_name: "{{ ssh_key_name }}"
-        group: "{{ security_group.group_name }}"
+        security_group: "{{ security_group.group_name }}"
         instance_type: "{{ instance_type }}"
-        image: "{{ attack_box_ami }}"
+        image_id: "{{ attack_box_ami }}"
         region: "{{ aws_region }}"
         aws_access_key: "{{ aws_access_key }}"
         aws_secret_key: "{{ aws_secret_key }}"
+        network:
+          assign_public_ip: true
         wait: true
-        count: 1
-        instance_tags:
+        state: running
+        tags:
           Name: "{{ attack_box_name }}"
           DeploymentID: "{{ deployment_id }}"
           Type: "attack-box"
@@ -135,7 +139,7 @@
 
     - name: Wait for SSH to be available
       wait_for:
-        host: "{{ ec2_result.instances[0].public_ip }}"
+        host: "{{ ec2_result.instances[0].public_ip_address }}"
         port: 22
         delay: 60
         timeout: 300
@@ -144,20 +148,20 @@
       debug:
         msg:
           - "Attack box deployed successfully!"
-          - "Instance ID: {{ ec2_result.instances[0].id }}"
-          - "Public IP: {{ ec2_result.instances[0].public_ip }}"
-          - "Private IP: {{ ec2_result.instances[0].private_ip }}"
-          - "SSH Command: ssh -i ~/.ssh/{{ ssh_key_name }} root@{{ ec2_result.instances[0].public_ip }}"
+          - "Instance ID: {{ ec2_result.instances[0].instance_id }}"
+          - "Public IP: {{ ec2_result.instances[0].public_ip_address }}"
+          - "Private IP: {{ ec2_result.instances[0].private_ip_address }}"
+          - "SSH Command: ssh -i ~/.ssh/{{ ssh_key_name }} root@{{ ec2_result.instances[0].public_ip_address }}"
 
     - name: Save deployment information
       copy:
         content: |
           # Attack Box Deployment Information
-          Instance ID: {{ ec2_result.instances[0].id }}
-          Public IP: {{ ec2_result.instances[0].public_ip }}
-          Private IP: {{ ec2_result.instances[0].private_ip }}
+          Instance ID: {{ ec2_result.instances[0].instance_id }}
+          Public IP: {{ ec2_result.instances[0].public_ip_address }}
+          Private IP: {{ ec2_result.instances[0].private_ip_address }}
           SSH Key: ~/.ssh/{{ ssh_key_name }}
-          SSH Command: ssh -i ~/.ssh/{{ ssh_key_name }} root@{{ ec2_result.instances[0].public_ip }}
+          SSH Command: ssh -i ~/.ssh/{{ ssh_key_name }} root@{{ ec2_result.instances[0].public_ip_address }}
           Region: {{ aws_region }}
           Instance Type: {{ instance_type }}
           AMI: {{ attack_box_ami }}
@@ -166,7 +170,7 @@
 
     - name: Set attack box facts for other playbooks
       set_fact:
-        attack_box_instance_id: "{{ ec2_result.instances[0].id }}"
-        attack_box_public_ip: "{{ ec2_result.instances[0].public_ip }}"
-        attack_box_private_ip: "{{ ec2_result.instances[0].private_ip }}"
+        attack_box_instance_id: "{{ ec2_result.instances[0].instance_id }}"
+        attack_box_public_ip: "{{ ec2_result.instances[0].public_ip_address }}"
+        attack_box_private_ip: "{{ ec2_result.instances[0].private_ip_address }}"
         attack_box_security_group: "{{ security_group.group_name }}"

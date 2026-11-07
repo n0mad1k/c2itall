@@ -103,17 +103,13 @@
 
     - name: Disable system history
       ansible.builtin.lineinfile:
-        path: "{{ item }}"
-        line: "{{ line_item }}"
+        path: "{{ item.0 }}"
+        line: "{{ item.1 }}"
         state: present
         create: yes
-      with_items:
-        - /etc/profile
-        - /root/.bashrc
       with_nested:
+        - [ '/etc/profile', '/root/.bashrc' ]
         - [ 'export HISTFILESIZE=0', 'export HISTSIZE=0', 'unset HISTFILE' ]
-      loop_control:
-        loop_var: line_item
       become: true
       when: disable_history | bool
 
