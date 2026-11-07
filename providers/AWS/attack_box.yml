@@ -82,6 +82,7 @@
         tags:
           Name: "attack-box-sg-{{ deployment_id }}"
           DeploymentID: "{{ deployment_id }}"
+          deployment_id: "{{ deployment_id }}"
           Type: "attack-box"
         state: present
       register: security_group
@@ -103,6 +104,7 @@
         tags:
           Name: "{{ attack_box_name }}"
           DeploymentID: "{{ deployment_id }}"
+          deployment_id: "{{ deployment_id }}"
           Type: "attack-box"
           Environment: "{{ attack_box_type }}"
         user_data: |

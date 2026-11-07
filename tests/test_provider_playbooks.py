@@ -55,6 +55,28 @@ class ProviderPlaybookSyntaxTests(unittest.TestCase):
             self.assertIn(marker, cleanup)
         self.assertNotIn("ignore_errors", cleanup)
 
+    def test_aws_cleanup_proves_absence_before_local_closeout(self):
+        cleanup = (ROOT / "providers/AWS/cleanup.yml").read_text()
+        for marker in (
+                '"tag:deployment_id": "{{ deployment_id }}"',
+                '"tag:DeploymentID": "{{ deployment_id }}"',
+                "Verify current-tag instances are absent",
+                "Verify historical-tag instances are absent",
+                "Verify current-tag security groups are absent",
+                "Verify historical-tag security groups are absent",
+                "Verify current-tag VPCs are absent",
+                "Verify deployment key pairs are absent",
+        ):
+            self.assertIn(marker, cleanup)
+        self.assertLess(
+            cleanup.index("Verify deployment key pairs are absent"),
+            cleanup.index("Delete SSH key files"))
+
+        attack_box = (ROOT / "providers/AWS/attack_box.yml").read_text()
+        webrunner = (ROOT / "providers/webrunner.yml").read_text()
+        self.assertIn('deployment_id: "{{ deployment_id }}"', attack_box)
+        self.assertIn('deployment_id: "{{ deployment_id }}"', webrunner)
+
 
 if __name__ == "__main__":
     unittest.main()

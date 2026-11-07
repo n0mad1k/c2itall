@@ -43,6 +43,7 @@
     tags:
       Name: "wr-{{ deployment_id }}-sg"
       DeploymentID: "{{ deployment_id }}"
+      deployment_id: "{{ deployment_id }}"
     state: present
   register: wr_sg
 
@@ -61,6 +62,7 @@
     tags:
       Name: "{{ node_chunk.node_name }}"
       DeploymentID: "{{ deployment_id }}"
+      deployment_id: "{{ deployment_id }}"
       webrunner: "{{ webrunner_name }}"
     wait: true
     state: running

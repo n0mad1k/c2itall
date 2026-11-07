@@ -165,6 +165,10 @@
             rules_egress:
               - proto: all
                 cidr_ip: "0.0.0.0/0"
+            tags:
+              Name: "webrunner-{{ webrunner_name }}"
+              deployment_id: "{{ deployment_id }}"
+              webrunner: "{{ webrunner_name }}"
             state: present
           loop: "{{ aws_unique_regions }}"
           ignore_errors: true
