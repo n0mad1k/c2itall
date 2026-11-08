@@ -437,6 +437,14 @@
         while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; do sleep 5; done
       changed_when: false
 
+    # The marketplace image lags kali-rolling by years; apt otherwise swaps the
+    # running kernel mid-provisioning and the new postinst fails on this image.
+    - name: Keep the image kernel during provisioning
+      command: apt-mark hold linux-image-cloud-amd64
+      register: kernel_hold
+      changed_when: "'set on hold' in kernel_hold.stdout"
+      failed_when: false
+
     - name: Report first-boot package state (diagnostic)
       shell: |
         echo "== dpkg audit"; dpkg --audit
@@ -444,7 +452,7 @@
         echo "== kernel packages"; dpkg -l 'linux-image*' | tail -n +6
         echo "== cloud-init kernel activity"; grep -n -i 'linux-image\|run-parts\|dpkg: error\|upgrade' /var/log/cloud-init-output.log | head -20
         echo "== hooks"; ls /etc/kernel/postinst.d; grep -ln run-parts /etc/kernel/postinst.d/* /var/lib/dpkg/info/linux-image-*.postinst 2>/dev/null
-        echo "== rust simulation (stale lists)"; apt-get install -s cargo rustc libssl-dev pkg-config 2>&1 | grep -i 'linux-image\|^Inst linux\|^Remv\|^Conf linux\|^E:' | head
+        echo "== holds"; apt-mark showhold
       register: first_boot_state
       changed_when: false
       failed_when: false
@@ -473,28 +481,15 @@
       retries: 10
       delay: 10
 
-    - name: Simulate the Rust install after refreshing apt (diagnostic)
-      shell: apt-get install -s cargo rustc libssl-dev pkg-config 2>&1 | grep -i 'linux-image\|^Inst linux\|^Remv\|^Conf linux\|^E:' | head
-      register: rust_simulation
+    - name: Simulate the build dependency install with the kernel held (diagnostic)
+      shell: apt-get install -s build-essential libssl-dev python3-pip pipx 2>&1 | grep -i 'linux-\|held\|^E:' | head
+      register: build_simulation
       changed_when: false
       failed_when: false
 
-    - name: Display the Rust install simulation (diagnostic)
+    - name: Display the build dependency simulation (diagnostic)
       debug:
-        var: rust_simulation.stdout_lines
-
-    - name: Install Rust compiler
-      apt:
-        name:
-          - cargo
-          - rustc
-          - libssl-dev
-          - pkg-config
-        state: present
-      register: rust_install
-      until: rust_install is success
-      retries: 3
-      delay: 5
+        var: build_simulation.stdout_lines
 
     - name: Clean up any failed pipx installations
       file:
