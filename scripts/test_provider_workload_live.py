@@ -454,7 +454,8 @@ class Redirector:
     def local_artifacts(self, provider, config):
         deployment_id = config['deployment_id']
         return key_files('c2deploy_' + deployment_id) + azure_artifacts(deployment_id) + [
-            ROOT / ('infrastructure_state_' + deployment_id + '.json')]
+            ROOT / ('infrastructure_state_' + deployment_id + '.json'),
+            ROOT / 'providers' / PROVIDER_DIRS[provider] / ('infrastructure_state_' + deployment_id + '.json')]
 
     def verify(self, context, config):
         report = checks(context, [
@@ -529,7 +530,8 @@ class C2:
     def local_artifacts(self, provider, config):
         deployment_id = config['deployment_id']
         return key_files('c2deploy_' + deployment_id) + azure_artifacts(deployment_id) + [
-            ROOT / ('infrastructure_state_' + deployment_id + '.json')]
+            ROOT / ('infrastructure_state_' + deployment_id + '.json'),
+            ROOT / 'providers' / PROVIDER_DIRS[provider] / ('infrastructure_state_' + deployment_id + '.json')]
 
     def verify(self, context, config):
         report = checks(context, [

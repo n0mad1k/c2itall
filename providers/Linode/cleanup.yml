@@ -176,6 +176,11 @@
         path: "{{ playbook_dir }}/../deployment_state_{{ deployment_id }}.json"
         state: absent
 
+    - name: Remove the shared infrastructure state written beside the playbook
+      file:
+        path: "{{ playbook_dir }}/infrastructure_state_{{ deployment_id }}.json"
+        state: absent
+
     - name: Remove attack-box records written beside the playbook
       ansible.builtin.file:
         path: "{{ item }}"
