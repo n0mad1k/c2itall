@@ -12,19 +12,6 @@
     instance_type: "{{ aws_instance_type | default('t2.micro') }}"
     # Check for shared infrastructure
     use_shared_infra: "{{ not (c2_region is defined and gophish_region is defined and c2_region != gophish_region) and not c2_only | default(false) | bool and not gophish_only | default(false) | bool }}"
-    # Ubuntu AMI IDs for different regions (Ubuntu 22.04 LTS)
-    ubuntu_ami_map:
-      us-east-1: "ami-0aa2b7722dc1b5612"
-      us-east-2: "ami-06c4532923d4ba1ec"
-      us-west-1: "ami-0573b70afecda915d"
-      us-west-2: "ami-0c79c59ac2c572b87"
-      eu-west-1: "ami-0694d931cee176e7d"
-      eu-west-2: "ami-0505148b3591e4c07"
-      eu-central-1: "ami-06dd92ecc74fdfb36"
-      ap-southeast-1: "ami-0df7a207adb9748c7"
-      ap-southeast-2: "ami-0df4b2961410d4cff"
-      ap-northeast-1: "ami-0014b5f031a76c1b1"
-      sa-east-1: "ami-0af6e9042ea5a4e3e"
 
   tasks:
     - name: Default inputs the controller may not supply
@@ -95,7 +82,7 @@
 
     - name: Set AMI ID for selected region
       set_fact:
-        ami_id: "{{ ubuntu_ami_map[aws_gophish_region] | default(ubuntu_ami_map['us-east-1']) }}"
+        ami_id: "{{ lookup('amazon.aws.ssm_parameter', '/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id', region=aws_gophish_region) }}"
 
     # Create new infrastructure only if not using shared
     - name: Create VPC
