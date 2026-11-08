@@ -252,7 +252,7 @@ def interruption_handlers():
             signal.signal(sig, handler)
 
 
-def run_command(argv, timeout=60, deadline=None):
+def run_command(argv, timeout=60, deadline=None, check=True):
     """Run a bounded controller command and reap its entire process group."""
     if deadline is not None:
         timeout = min(timeout, deadline - time.monotonic())
@@ -276,7 +276,7 @@ def run_command(argv, timeout=60, deadline=None):
                 process.stderr.close()
             raise
     result = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
-    if result.returncode:
+    if result.returncode and check:
         raise RuntimeError(f'Azure command failed ({result.returncode}): {(stderr or stdout).strip()}')
     return result
 

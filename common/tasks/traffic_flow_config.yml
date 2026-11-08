@@ -78,9 +78,6 @@
         - { ip: "{{ redirector_ip }}", port: "443" }
         - { ip: "{{ redirector_ip }}", port: "{{ havoc_http_port | default('8080') }}" }
         - { ip: "{{ redirector_ip }}", port: "{{ havoc_https_port | default('9443') }}" }
-        - { ip: "{{ logserver_ip | default(omit) }}", port: "5144" }
-        - { ip: "{{ payloadserver_ip | default(omit) }}", port: "8888" }
-      when: item.ip != omit
   when: 
     - server_role == 'c2'
     - not is_aws_provider
@@ -199,9 +196,6 @@
       loop:
         - "{{ c2_ip }}"
         - "{{ redirector_ip }}"
-        - "{{ payloadserver_ip | default(omit) }}"
-        - "{{ phishingserver_ip | default(omit) }}"
-      when: item != omit
   when: 
     - server_role == 'logserver'
     - not is_aws_provider

@@ -22,6 +22,16 @@
           - ansible_facts['distribution'] is search('Kali')
         fail_msg: Azure C2 requires a domain and the Kali marketplace image
 
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+      failed_when: false
+
+    - name: Wait for package manager locks to clear
+      ansible.builtin.shell: |
+        while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; do sleep 5; done
+      changed_when: false
+
     # Kali rotated its archive signing key in 2025; older images cannot update without it
     - name: Refresh the Kali archive keyring
       ansible.builtin.get_url:

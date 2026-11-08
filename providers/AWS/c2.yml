@@ -427,6 +427,16 @@
           - "User: {{ ansible_user }}"
           - "Python version: {{ ansible_python_version | default('unknown') }}"
       
+    - name: Wait for cloud-init to finish
+      command: cloud-init status --wait
+      changed_when: false
+      failed_when: false
+
+    - name: Wait for package manager locks to clear
+      shell: |
+        while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; do sleep 5; done
+      changed_when: false
+
     - name: Download Kali archive keyring to temporary location
       get_url:
         url: https://archive.kali.org/archive-keyring.gpg

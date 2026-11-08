@@ -1833,6 +1833,36 @@ class RoutingAndTemplateTests(AzureFixture):
         with self.assertRaisesRegex(TypeError, 'metadata is incomplete'):
             IncompleteAdapter().playbook(config)
 
+    def test_azure_service_playbook_failure_keeps_its_log(self):
+        from utils.azure_workload_adapter import AzureSingleVmWorkloadAdapter
+
+        class ExampleAdapter(AzureSingleVmWorkloadAdapter):
+            workload = 'example'
+            address_key = 'example_ip'
+            playbook_name = 'example.yml'
+            service_log_suffix = 'example'
+
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary) / 'state'
+            state_dir.mkdir(mode=0o700)
+            key = Path(temporary) / 'key'
+            key.write_text('unit-test-private-key')
+            failed = subprocess.CompletedProcess(
+                [], 2, 'TASK [Configure] fatal: broken\n', '[WARNING]: noise\n')
+            with mock.patch.object(azure, 'run_command', return_value=failed), \
+                    self.assertLogs(level='ERROR') as logs:
+                result = ExampleAdapter()._run_service_playbook({
+                    'provider': 'azure', 'provider_workload': 'example',
+                    'deployment_id': 'example-azure', 'example_ip': '8.8.8.8',
+                    'ssh_private_key_path': str(key),
+                    'azure_state_dir': str(state_dir),
+                })
+            self.assertFalse(result)
+            log = state_dir / 'logs' / 'example-azure-example.log'
+            self.assertEqual(log.read_text(),
+                             'TASK [Configure] fatal: broken\n[WARNING]: noise\n')
+            self.assertIn(str(log), logs.output[0])
+
     def test_quick_recon_uses_supported_ansible_fact_access(self):
         source = (ROOT / 'modules/attack-box/tasks/configure_quick_recon.yml').read_text()
         self.assertNotIn('ansible_date_time', source)

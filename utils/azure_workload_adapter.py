@@ -142,7 +142,7 @@ class AzureSingleVmWorkloadAdapter(WorkloadAdapter):
                 '-i', inventory, '-u', 'azureuser',
                 '--private-key', str(private_key),
                 '--extra-vars', '@' + str(variables),
-            ], timeout=1800, deadline=deadline)
+            ], timeout=1800, deadline=deadline, check=False)
         log_path = log_dir / (config['deployment_id'] + '-' +
                               self.service_log_suffix + '.log')
         with azure_utils.secure_directory(log_dir) as directory:
@@ -154,6 +154,10 @@ class AzureSingleVmWorkloadAdapter(WorkloadAdapter):
                 azure_utils._regular_file(stream.fileno())
                 stream.write(result.stdout)
                 stream.write(result.stderr)
+        if result.returncode:
+            logging.error('Azure %s service playbook failed (%s); see %s',
+                          self._label(), result.returncode, log_path)
+            return False
         return True
 
     def deploy(self, config):
