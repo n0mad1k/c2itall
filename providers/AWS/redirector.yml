@@ -355,7 +355,7 @@
         redirector_subdomain: "{{ redirector_subdomain }}"
         havoc_teamserver_port: "{{ havoc_teamserver_port | default(40056) }}"
         havoc_http_port: "{{ havoc_http_port | default(8080) }}"
-        havoc_https_port: "{{ havoc_https_port | default(443) }}"
+        havoc_https_port: "{{ havoc_https_port | default(9443) }}"
         zero_logs: "{{ zero_logs | default(true) }}"
 
 # Rest of the playbook for configuring the redirector

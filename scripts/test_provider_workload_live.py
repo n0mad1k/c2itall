@@ -458,20 +458,26 @@ class Redirector:
             ROOT / 'providers' / PROVIDER_DIRS[provider] / ('infrastructure_state_' + deployment_id + '.json')]
 
     def verify(self, context, config):
+        # The site answers only its own hostname; the catch-all vhost bounces every other Host.
+        host = config['redirector_subdomain'] + '.' + config['domain']
         report = checks(context, [
             ('nginx_active', 'test "$(systemctl is-active nginx)" = active'),
             ('nginx_enabled', 'test "$(systemctl is-enabled nginx)" = enabled'),
             ('shell_handler_enabled', 'test "$(systemctl is-enabled shell-handler)" = enabled'),
             ('http_listening', "ss -ltn | grep -q ':80 '"),
             ('https_listening', "ss -ltn | grep -q ':443 '"),
-            ('local_https', 'test "$(curl -ks -o /dev/null -w \'%{http_code}\' https://127.0.0.1/)" = 200'),
+            ('local_https', 'test "$(curl -ks -o /dev/null -w \'%{http_code}\' -H \'Host: ' + host +
+             '\' https://127.0.0.1/)" = 200'),
             ('post_install_script', 'sudo -n test -x /root/Tools/post_install_redirector.sh'),
             ('sshd_no_password', "sudo -n /usr/sbin/sshd -T | grep -iq '^passwordauthentication no$'"),
         ])
-        status = context.run([
-            'curl', '-ks', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '20',
-            'https://' + context.address + '/'])
+        base = ['curl', '-ks', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '20']
+        url = 'https://' + context.address + '/'
+        status = context.run(base + ['-H', 'Host: ' + host, url])
         require(status == '200', 'Redirector HTTPS front page is not public: ' + status)
+        unknown = context.run(base + [url])
+        require(unknown == '301', 'Redirector answered an unknown Host instead of bouncing it: ' + unknown)
+        report['unknown_host_bounced'] = True
         if context.provider == 'azure':
             rules = context.cloud.inbound_rules(config['deployment_id'])
             require(('tcp', '22', config['operator_ip'] + '/32') in rules and
@@ -488,7 +494,7 @@ class Redirector:
 
 class C2:
     name = 'c2'
-    repeat = {'aws': False, 'linode': False, 'azure': False}
+    repeat = {'aws': False, 'linode': False, 'azure': True}
     source_paths = ('modules/c2', 'providers/{dir}/c2.yml', 'common')
 
     def config(self, provider, deployment_id, operator_ip):

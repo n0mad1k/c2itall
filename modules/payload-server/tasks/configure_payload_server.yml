@@ -49,17 +49,35 @@
       -keyout /etc/nginx/ssl/payloads.key -out /etc/nginx/ssl/payloads.crt
     creates: /etc/nginx/ssl/payloads.crt
 
+# A generated password is kept on the host so repeated runs serve the credential they advertise
+- name: Keep one basic auth credential across repeated deployments
+  ansible.builtin.copy:
+    content: "{{ auth_username | default('admin', true) }}:{{ auth_password | default(lookup('password', '/dev/null length=20 chars=ascii_letters,digits'), true) }}\n"
+    dest: /root/Tools/payloads/.basic-auth
+    mode: '0600'
+    force: "{{ (auth_password | default('', true)) | length > 0 }}"
+  no_log: true
+  when: enable_basic_auth | default(false) | bool
+
+- name: Load the basic auth credential
+  ansible.builtin.slurp:
+    src: /root/Tools/payloads/.basic-auth
+  register: payload_basic_auth
+  no_log: true
+  when: enable_basic_auth | default(false) | bool
+
 - name: Choose basic auth credentials
   ansible.builtin.set_fact:
-    payload_auth_user: "{{ auth_username | default('admin', true) }}"
-    payload_auth_pass: "{{ auth_password | default(lookup('password', '/dev/null length=20 chars=ascii_letters,digits'), true) }}"
+    payload_auth_user: "{{ (payload_basic_auth.content | b64decode | trim).split(':', 1) | first }}"
+    payload_auth_pass: "{{ (payload_basic_auth.content | b64decode | trim).split(':', 1) | last }}"
   no_log: true
   when: enable_basic_auth | default(false) | bool
 
 - name: Write the basic auth file
   ansible.builtin.command:
-    cmd: htpasswd -cbB /etc/nginx/.payloads.htpasswd "{{ payload_auth_user }}" "{{ payload_auth_pass }}"
-    creates: /etc/nginx/.payloads.htpasswd
+    cmd: htpasswd -ciB /etc/nginx/.payloads.htpasswd "{{ payload_auth_user }}"
+    stdin: "{{ payload_auth_pass }}"
+  changed_when: false
   no_log: true
   when: enable_basic_auth | default(false) | bool
 
