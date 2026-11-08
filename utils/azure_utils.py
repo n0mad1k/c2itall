@@ -1,24 +1,22 @@
 """Infrastructure-only Azure lifecycle, using CLI session auth and Ansible."""
 
 import contextlib
-import fcntl
-import hashlib
 import ipaddress
 import json
 import logging
 import os
 from pathlib import Path
 import re
-import signal
 import subprocess
-import stat
 import sys
 import tempfile
-import threading
 import time
 import uuid
 
-ROOT = Path(__file__).resolve().parents[1]
+from . import controller_io
+from .controller_io import ROOT, interruption_handlers, secure_directory
+from .controller_io import regular_file as _regular_file
+from .state_store import StateStore
 STATE_DIR = ROOT / 'deployments' / 'azure'
 CONFIG_KEYS = frozenset({
     'provider', 'deployment_id', 'deployment_type', 'infrastructure_deployment',
@@ -33,7 +31,6 @@ DEFAULT_IMAGE = {'publisher': 'Canonical', 'offer': 'ubuntu-24_04-lts',
 UNSUPPORTED_FLAGS = frozenset({'c2_only', 'deploy_c2', 'c2_framework', 'attack_box_deployment',
     'redirector_only', 'tracker_deployment', 'phishing_deployment', 'chat_deployment',
     'payload_deployment', 'payload_server_deployment', 'webrunner_deployment'})
-_LOCKS = threading.local()
 _AUTH_VALID_UNTIL = {}
 _AUTH_CERTIFICATE_DIRECTORY = None
 _AUTH_CERTIFICATE_PATH = None
@@ -51,64 +48,11 @@ def supports_infrastructure(config):
 
 
 @contextlib.contextmanager
-def secure_directory(path, create=False):
-    """Open each ancestor without following symlinks, retaining a stable dir FD."""
-    path = Path(path).absolute()
-    directory = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        for part in path.parts[1:]:
-            if part in ('.', '..'):
-                raise ValueError('Unsafe directory component')
-            if create:
-                try:
-                    os.mkdir(part, 0o700, dir_fd=directory)
-                except FileExistsError:
-                    pass
-            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
-            os.close(directory)
-            directory = child
-        yield directory
-    finally:
-        os.close(directory)
-
-
-def _regular_file(fd):
-    info = os.fstat(fd)
-    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid():
-        raise ValueError('Expected an owned regular file with no hard links')
-
-
-@contextlib.contextmanager
 def lifecycle_lock(config):
     """Serialize both deployment identity and its subscription/resource-group target."""
-    path = _state_path(config['deployment_id'], config.get('azure_state_dir'))
-    target = f"{config['azure_subscription_id']}/{config['azure_resource_group']}".lower()
-    names = [f'.deployment-{config["deployment_id"]}.lock',
-             '.group-' + hashlib.sha256(target.encode()).hexdigest() + '.lock']
-    held = getattr(_LOCKS, 'held', None)
-    if held is None:
-        held = _LOCKS.held = set()
-    acquired = []
-    try:
-        with secure_directory(path.parent, create=True) as directory:
-            for name in names:
-                identity = (str(path.parent.absolute()), name)
-                if identity in held:
-                    continue
-                fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=directory)
-                try:
-                    _regular_file(fd)
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BaseException:
-                    os.close(fd)
-                    raise
-                held.add(identity)
-                acquired.append((identity, fd))
-            yield
-    finally:
-        for identity, fd in reversed(acquired):
-            held.remove(identity)
-            os.close(fd)
+    target = f"{config['azure_subscription_id']}/{config['azure_resource_group']}"
+    with _STORE.lock(config['deployment_id'], target, config.get('azure_state_dir') or STATE_DIR):
+        yield
 
 
 def azure_environment():
@@ -236,49 +180,10 @@ def ensure_azure_auth(subscription_id=None, force=False):
     return credentials['AZURE_SUBSCRIPTION_ID']
 
 
-@contextlib.contextmanager
-def interruption_handlers():
-    """Make both interactive interrupts and termination stop child groups."""
-    previous = {}
-    if threading.current_thread() is threading.main_thread():
-        def interrupted(signum, frame):
-            raise KeyboardInterrupt(f'Interrupted by signal {signum}')
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            previous[sig] = signal.signal(sig, interrupted)
-    try:
-        yield
-    finally:
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
-
-
 def run_command(argv, timeout=60, deadline=None, check=True):
-    """Run a bounded controller command and reap its entire process group."""
-    if deadline is not None:
-        timeout = min(timeout, deadline - time.monotonic())
-    if timeout <= 0:
-        raise TimeoutError('Azure lifecycle deadline exceeded')
-    with interruption_handlers():
-        process = subprocess.Popen(argv, cwd=ROOT, env=azure_environment(),
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   text=True, start_new_session=True)
-        try:
-            stdout, stderr = process.communicate(timeout=timeout)
-        except BaseException:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            try:
-                process.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.stdout.close()
-                process.stderr.close()
-            raise
-    result = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
-    if result.returncode and check:
-        raise RuntimeError(f'Azure command failed ({result.returncode}): {(stderr or stdout).strip()}')
-    return result
+    """Run a bounded az/ansible command with only the controller's Azure environment."""
+    return controller_io.run_command(argv, timeout=timeout, deadline=deadline, check=check,
+                                     env=azure_environment(), label='Azure')
 
 
 def run_az(args, subscription_id, deadline=None):
@@ -435,84 +340,31 @@ def resource_ids(config):
         ('os_disk', 'Microsoft.Compute/disks', 'osdisk')]}
 
 
+_STORE = StateStore(validate=lambda state: validate_config(state, require_key=False),
+                    planned_ids=resource_ids, label='Azure')
+
+
 def _state_path(deployment_id, state_dir=None):
-    if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,39}', deployment_id):
-        raise ValueError('Invalid deployment ID')
-    return Path(state_dir or STATE_DIR) / (deployment_id + '.json')
+    return _STORE.path(deployment_id, state_dir or STATE_DIR)
 
 
 def save_state(state, state_dir=None):
-    path = _state_path(state['deployment_id'], state_dir)
-    with secure_directory(path.parent, create=True) as directory:
-        temp = '.' + path.name + '.' + uuid.uuid4().hex
-        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
-        try:
-            with os.fdopen(fd, 'w') as stream:
-                json.dump(state, stream, indent=2)
-                stream.write('\n')
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temp, path.name, src_dir_fd=directory, dst_dir_fd=directory)
-            os.fsync(directory)
-        finally:
-            try:
-                os.unlink(temp, dir_fd=directory)
-            except FileNotFoundError:
-                pass
+    _STORE.save(state, state_dir or STATE_DIR)
 
 
 def load_state(deployment_id, state_dir=None):
-    path = _state_path(deployment_id, state_dir)
-    with secure_directory(path.parent) as directory:
-        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
-        with os.fdopen(fd) as stream:
-            _regular_file(stream.fileno())
-            state = json.load(stream)
-    if state.get('version') != 1 or state.get('deployment_id') != deployment_id:
-        raise ValueError('Unsupported or mismatched Azure state')
-    validate_config(state, require_key=False)
-    if state.get('planned_resource_ids') != resource_ids(state):
-        raise ValueError('State resource IDs do not match deployment identity')
-    uuid.UUID(state['ownership_marker'])
-    return state
+    return _STORE.load(deployment_id, state_dir or STATE_DIR)
 
 
 def list_states(state_dir=None):
-    try:
-        with secure_directory(state_dir or STATE_DIR) as directory:
-            names = sorted(name for name in os.listdir(directory) if name.endswith('.json'))
-    except FileNotFoundError:
-        return []
-    return [load_state(Path(name).stem, state_dir) for name in names]
+    return _STORE.list(state_dir or STATE_DIR)
 
 
 def prepare_state(config):
     validated = validate_config(config, require_key=False)
     directory = config.get('azure_state_dir')
-    path = _state_path(validated['deployment_id'], directory)
     with lifecycle_lock(dict(validated, azure_state_dir=directory)):
-        try:
-            state = load_state(validated['deployment_id'], directory)
-        except FileNotFoundError:
-            state = None
-        if state is not None:
-            if any(state.get(k) != v for k, v in validated.items()):
-                raise ValueError('Existing state conflicts with requested configuration')
-            return state
-        with secure_directory(path.parent / 'archive', create=True) as archive:
-            try:
-                os.stat(path.name, dir_fd=archive, follow_symlinks=False)
-            except FileNotFoundError:
-                pass
-            else:
-                raise ValueError('Deployment ID already archived; use a new deployment ID')
-        if validated['ssh_key_generated'] and any(Path(validated[k]).exists()
-                                                 for k in ('ssh_key_path', 'ssh_private_key_path')):
-            raise ValueError('Persist deployment intent before generating keys; existing keys are user-owned')
-        state = dict(validated, version=1, status='planned', ownership_marker=str(uuid.uuid4()),
-                     planned_resource_ids=resource_ids(validated), actual_resource_ids=[])
-        save_state(state, directory)
-        return state
+        return _STORE.prepare(validated, directory or STATE_DIR)
 
 
 def prepare_ssh_key(config):
@@ -745,20 +597,7 @@ def _cleanup_azure_locked(config):
                     time.sleep(min(5, max(0, deadline - time.monotonic())))
             # Recheck exact key ownership; never use legacy prefix/glob cleanup.
             validate_config(state, require_key=False)
-            path = _state_path(state['deployment_id'], directory)
-            with secure_directory(path.parent) as parent, secure_directory(path.parent / 'archive', create=True) as archive:
-                if state['ssh_key_generated']:
-                    with secure_directory(Path(state['ssh_private_key_path']).parent) as keys:
-                        for key in ('ssh_private_key_path', 'ssh_key_path'):
-                            try:
-                                os.unlink(Path(state[key]).name, dir_fd=keys)
-                            except FileNotFoundError:
-                                pass
-                state['status'] = 'deleted'
-                save_state(state, directory)
-                os.replace(path.name, path.name, src_dir_fd=parent, dst_dir_fd=archive)
-                os.fsync(parent)
-                os.fsync(archive)
+            _STORE.retire(state, directory or STATE_DIR)
             return True
     except (Exception, KeyboardInterrupt) as exc:
         logging.error('Azure cleanup failed; retaining state and resource IDs: %s', exc)
