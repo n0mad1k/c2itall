@@ -715,8 +715,12 @@ class Phishing:
                                 'gophish-' + deployment_id: 'c2itall-' + deployment_id + '-gophish-vm'}}
 
     def target(self, provider, config):
-        user = {'aws': 'ubuntu', 'azure': 'azureuser'}.get(provider, 'root')
-        return 'mta-' + config['deployment_id'], user, SSH_DIR / ('c2deploy_' + config['deployment_id'])
+        deployment_id = config['deployment_id']
+        if provider == 'aws':
+            # The AWS component plays rename the module key to .pem.
+            return 'mta-' + deployment_id, 'ubuntu', SSH_DIR / ('c2deploy_' + deployment_id + '.pem')
+        user = 'azureuser' if provider == 'azure' else 'root'
+        return 'mta-' + deployment_id, user, SSH_DIR / ('c2deploy_' + deployment_id)
 
     def local_artifacts(self, provider, config):
         deployment_id = config['deployment_id']
