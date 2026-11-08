@@ -184,6 +184,30 @@
         all_vpcs_to_delete: "{{ deployment_vpcs.vpcs + named_vpcs | unique(attribute='vpc_id') }}"
         cleanup_summary: "{{ cleanup_summary | combine({'vpcs_found': (deployment_vpcs.vpcs + named_vpcs | unique(attribute='vpc_id')) | length}) }}"
 
+    # Every non-default group inside a deployment-owned VPC belongs to the deployment.
+    - name: Find security groups inside deployment VPCs
+      amazon.aws.ec2_security_group_info:
+        region: "{{ aws_region }}"
+        filters:
+          vpc-id: "{{ item.vpc_id }}"
+      register: vpc_sg_results
+      loop: "{{ all_vpcs_to_delete }}"
+      when: all_vpcs_to_delete | length > 0
+
+    - name: Delete security groups inside deployment VPCs
+      amazon.aws.ec2_security_group:
+        group_id: "{{ item.1.group_id }}"
+        region: "{{ aws_region }}"
+        state: absent
+      loop: "{{ vpc_sg_results.results | default([]) | selectattr('skipped', 'undefined') | selectattr('security_groups', 'defined') | subelements('security_groups') }}"
+      loop_control:
+        label: "{{ item.1.group_name }}"
+      when: item.1.group_name != 'default'
+      register: deleted_vpc_sgs
+      until: deleted_vpc_sgs is not failed
+      retries: 6
+      delay: 10
+
     # STEP 8: Find and delete NAT Gateways for each VPC separately
     - name: Find NAT gateways in each VPC
       amazon.aws.ec2_vpc_nat_gateway_info:

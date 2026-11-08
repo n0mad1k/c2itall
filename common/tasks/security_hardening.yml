@@ -355,6 +355,7 @@
           path: "{{ playbook_dir }}/infrastructure_state_{{ hostvars['localhost']['deployment_id'] }}.json"
         register: redirector_state_file
         delegate_to: localhost
+        become: false
 
       - name: Load redirector state if available
         include_vars:
@@ -362,9 +363,11 @@
           name: redirector_state
         when: redirector_state_file.stat.exists
         delegate_to: localhost
+        become: false
       
     - name: Update redirector security group via raw AWS CLI
       delegate_to: localhost
+      become: false
       environment:
         AWS_ACCESS_KEY_ID: "{{ hostvars['localhost']['aws_access_key'] }}"
         AWS_SECRET_ACCESS_KEY: "{{ hostvars['localhost']['aws_secret_key'] }}"
