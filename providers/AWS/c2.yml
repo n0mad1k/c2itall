@@ -526,6 +526,8 @@
         - name: Display SSH test result
           debug:
             msg: "{{ ssh_test_result.stdout if ssh_test_result.rc == 0 else 'SSH connection failed: ' + ssh_test_result.stderr }}"
+      # C2-only deployments have no redirector; redirector_ip is the operator.
+      when: not (c2_only | default(false) | bool)
 
     - name: Print deployment summary
       debug:
