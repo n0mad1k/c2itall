@@ -181,10 +181,14 @@ cd $HAVOC_DIR/teamserver
 go mod download golang.org/x/sys
 cd $HAVOC_DIR
 
-# Build Havoc using make - build teamserver first
+# Build the teamserver directly: the makefile's Install.sh fetches two musl.cc
+# toolchains some clouds cannot reach, and payload builds use the distro
+# mingw-w64 toolchain the teamserver config points at anyway.
 log "Building Havoc teamserver..."
+cd $HAVOC_DIR/teamserver
+GO111MODULE=on go build -ldflags="-s -w -X cmd.VersionCommit=$(git rev-parse HEAD)" -o ../havoc main.go
+setcap 'cap_net_bind_service=+ep' ../havoc
 cd $HAVOC_DIR
-make ts-build
 
 # Build Havoc client
 #log "Building Havoc client..."
