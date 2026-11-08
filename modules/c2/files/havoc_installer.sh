@@ -51,21 +51,19 @@ export PATH=$PATH:/usr/local/go/bin:$GOPATH/bin
 # Download and install compiler fix
 log "Downloading and installing fixed compiler..."
 if [ ! -d "$COMPILER_DIR" ]; then
-    # Download the compiler
-    wget -q -O /tmp/compiler.tgz $COMPILER_URL
-    
-    # Extract to /usr/bin
-    tar -xzf /tmp/compiler.tgz -C /usr/bin
-    
-    # Verify compiler exists
-    if [ -f "$COMPILER_PATH" ]; then
-        log "Compiler installed successfully at $COMPILER_PATH"
-        chmod +x $COMPILER_PATH
+    # musl.cc is a volunteer mirror that drops cloud ranges; the distro
+    # mingw-w64 toolchain the teamserver config points at is the fallback.
+    if wget -q --tries=3 --timeout=30 -O /tmp/compiler.tgz $COMPILER_URL; then
+        tar -xzf /tmp/compiler.tgz -C /usr/bin
+        if [ -f "$COMPILER_PATH" ]; then
+            log "Compiler installed successfully at $COMPILER_PATH"
+            chmod +x $COMPILER_PATH
+        else
+            log "Error: Compiler installation failed. File not found at $COMPILER_PATH"
+        fi
     else
-        log "Error: Compiler installation failed. File not found at $COMPILER_PATH"
+        log "Warning: fixed compiler download failed; payload builds use the distro mingw-w64 toolchain"
     fi
-    
-    # Clean up
     rm -f /tmp/compiler.tgz
 else
     log "Compiler already installed at $COMPILER_DIR"
