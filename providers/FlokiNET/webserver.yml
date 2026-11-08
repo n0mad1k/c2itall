@@ -13,13 +13,13 @@
     - name: Validate required FlokiNET configuration
       assert:
         that:
-          - webserver_ip is defined and webserver_ip != "" and webserver_ip | string | regex_search('^\d{1,3}(\.\d{1,3}){3}$')
+          - webserver_ip is defined and webserver_ip != "" and (webserver_ip | string) is match('^\d{1,3}(\.\d{1,3}){3}$')
         fail_msg: "FlokiNET requires webserver_ip. Set webserver_ip in vars.yaml or via --flokinet-webserver-ip."
 
     - name: Validate operator IP
       assert:
         that:
-          - operator_ip is defined and operator_ip | string | regex_search('^\d{1,3}(\.\d{1,3}){3}$')
+          - operator_ip is defined and (operator_ip | string) is match('^\d{1,3}(\.\d{1,3}){3}$')
         fail_msg: "operator_ip must be defined and a single IPv4 address."
 
     # Load existing infrastructure state so downstream host firewall rules can be scoped correctly

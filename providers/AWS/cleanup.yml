@@ -7,13 +7,7 @@
   vars_files:
     - vars.yaml
   vars:
-    aws_region: "{{ aws_region | default(aws_region_choices | random) }}"
     confirm_cleanup: false  # Skip confirmation in automated teardown
-    deployment_id: "{{ deployment_id | default('') }}"
-    redirector_name: "{{ redirector_name | default('r-' + deployment_id) }}"
-    c2_name: "{{ c2_name | default('s-' + deployment_id) }}"
-    tracker_name: "{{ tracker_name | default('t-' + deployment_id) }}"
-    attack_box_name: "{{ attack_box_name | default('a-' + deployment_id) }}"
     phantom_resource_name: "{{ phantom_name | default('ph-' + deployment_id) }}"
     aws_cleanup_key_names:
       - "c2deploy_{{ deployment_id }}"
@@ -23,6 +17,15 @@
     cleanup_summary: {}
     
   tasks:
+    # Play vars cannot default a name from itself; set_fact may
+    - name: Default resource names from the deployment ID
+      set_fact:
+        aws_region: "{{ aws_region | default(aws_region_choices | random) }}"
+        redirector_name: "{{ redirector_name | default('r-' + deployment_id) }}"
+        c2_name: "{{ c2_name | default('s-' + deployment_id) }}"
+        tracker_name: "{{ tracker_name | default('t-' + deployment_id) }}"
+        attack_box_name: "{{ attack_box_name | default('a-' + deployment_id) }}"
+
     # Confirmation step (if enabled)
     - name: Confirm cleanup
       pause:

@@ -30,7 +30,7 @@
         that:
           - aws_access_key is defined and aws_access_key != ""
           - aws_secret_key is defined and aws_secret_key != ""
-          - operator_ip is defined and operator_ip | string | regex_search('^\d{1,3}(\.\d{1,3}){3}$')
+          - operator_ip is defined and (operator_ip | string) is match('^\d{1,3}(\.\d{1,3}){3}$')
         fail_msg: "AWS credentials and a valid single-IPv4 operator_ip are required"
 
     - name: Set attack box AMI

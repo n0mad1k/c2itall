@@ -34,8 +34,8 @@
 - name: Validate operator_ip and redirector_ip are single IPv4 addresses
   assert:
     that:
-      - operator_ip is defined and operator_ip | string | regex_search('^\d{1,3}(\.\d{1,3}){3}$')
-      - (redirector_ip is not defined) or (redirector_ip | string | regex_search('^\d{1,3}(\.\d{1,3}){3}$'))
+      - operator_ip is defined and (operator_ip | string) is match('^\d{1,3}(\.\d{1,3}){3}$')
+      - (redirector_ip is not defined) or ((redirector_ip | string) is match('^\d{1,3}(\.\d{1,3}){3}$'))
     fail_msg: "operator_ip and redirector_ip (if set) must each be a single valid IPv4 address (operator_ip={{ operator_ip | default('<undefined>') }}, redirector_ip={{ redirector_ip | default('<undefined>') }})"
   when: not is_aws_provider
 

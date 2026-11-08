@@ -41,7 +41,7 @@
     - name: Validate operator IP
       assert:
         that:
-          - operator_ip is defined and operator_ip | string | regex_search('^\d{1,3}(\.\d{1,3}){3}$')
+          - operator_ip is defined and (operator_ip | string) is match('^\d{1,3}(\.\d{1,3}){3}$')
         fail_msg: "operator_ip must be defined and a single IPv4 address"
 
     # Set region for mta front - fix for noop task error
