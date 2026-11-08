@@ -1,0 +1,24 @@
+---
+- name: Wait for the attack box
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Wait for SSH connectivity
+      ansible.builtin.wait_for_connection:
+        delay: 10
+        timeout: 300
+
+- name: Configure the attack box
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Validate the supported attack-box subtype
+      ansible.builtin.assert:
+        that:
+          - provider_workload == 'attack_box'
+          - attack_box_tasks is defined
+        fail_msg: The requested attack-box subtype has no native service tasks
+
+    - name: Configure the selected attack-box subtype
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/{{ attack_box_tasks }}"

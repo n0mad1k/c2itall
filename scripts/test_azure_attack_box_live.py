@@ -32,13 +32,13 @@ def verify_committed_source(runner):
     paths = (
         'modules/attack-box/deploy_attack_box.py',
         'modules/attack-box/tasks/configure_quick_recon.yml',
-        'providers/Azure/attack_box.yml',
+        'modules/attack-box/service.yml',
         'providers/Azure/infrastructure.yml',
         'providers/Azure/templates/infrastructure.json.j2',
         'scripts/test_azure_attack_box_live.py',
         'teardown.py', 'tests/test_azure_provider.py',
-        'utils/azure_adapter.py', 'utils/azure_utils.py',
-        'utils/azure_runtime.py', 'utils/azure_workload_adapter.py',
+        'utils/azure_cloud.py', 'utils/azure_utils.py',
+        'utils/azure_runtime.py', 'utils/vm_workloads.py', 'modules/attack-box/workload.py',
         'utils/cleanup_engine.py',
         'utils/deployment_engine.py', 'utils/provider_registry.py',
     )

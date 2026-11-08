@@ -1,5 +1,5 @@
 ---
-- name: Wait for the Azure payload server VM
+- name: Wait for the payload server
   hosts: all
   gather_facts: false
   tasks:
@@ -8,7 +8,7 @@
         delay: 10
         timeout: 300
 
-- name: Configure the Azure payload server
+- name: Configure the payload server
   hosts: payloadservers
   become: true
   gather_facts: true
@@ -16,10 +16,9 @@
     - name: Validate the payload server route inputs
       ansible.builtin.assert:
         that:
-          - provider == 'azure'
           - provider_workload == 'payload_server'
           - domain | length > 0
-        fail_msg: Azure payload server requires a domain
+        fail_msg: Payload server requires a domain
 
     - name: Wait for the host to finish first boot
       ansible.builtin.command: cloud-init status --wait
@@ -27,7 +26,7 @@
       failed_when: false
 
     - name: Configure the payload hosting service
-      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../modules/payload-server/tasks/configure_payload_server.yml"
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/configure_payload_server.yml"
 
     - name: Print deployment summary
       ansible.builtin.debug:

@@ -42,7 +42,7 @@ def verify_committed_source(runner):
         "modules/chat-server/deploy_chat.py",
         "modules/chat-server/chat_addons.yml",
         "scripts/test_azure_phantom_live.py", "tests/test_azure_provider.py",
-        "utils/azure_phantom_adapter.py", "utils/azure_utils.py",
+        "utils/vm_workloads.py", "utils/azure_cloud.py", "modules/phantom/workload.py", "utils/azure_utils.py",
         "utils/provider_registry.py",
     )
     for path in parent_paths:

@@ -35,7 +35,7 @@ def verify_committed_source(runner):
         "scripts/test_azure_infrastructure_live.py",
         "teardown.py",
         "tests/test_azure_provider.py",
-        "utils/azure_adapter.py", "utils/azure_utils.py",
+        "utils/azure_cloud.py", "utils/azure_utils.py",
         "utils/cleanup_engine.py", "utils/deployment_engine.py",
         "utils/legacy_provider_adapter.py", "utils/provider_registry.py",
     )

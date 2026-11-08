@@ -69,14 +69,15 @@ class ProviderRuntime:
 
 
 class WorkloadSpec(namedtuple(
-        '_WorkloadSpec', 'entrypoint legacy_fallback variants')):
-    """Canonical controller ownership and preserved fallback policy."""
+        '_WorkloadSpec', 'entrypoint legacy_fallback variants profile')):
+    """Canonical controller ownership, fallback policy and native profile location."""
 
     __slots__ = ()
 
-    def __new__(cls, entrypoint, legacy_fallback, variants=None):
+    def __new__(cls, entrypoint, legacy_fallback, variants=None, profile=None):
+        # The native profile defaults to workload.py beside the controller.
         return super(WorkloadSpec, cls).__new__(
-            cls, entrypoint, legacy_fallback, frozenset(variants or ()))
+            cls, entrypoint, legacy_fallback, frozenset(variants or ()), profile)
 
 
 class ProviderSpec(namedtuple(
@@ -84,7 +85,7 @@ class ProviderSpec(namedtuple(
         'directory ssh_user legacy_menu legacy_capabilities variant_support '
         'config_loader routes staged_routes runtime_loader '
         'environment_loader profile_loader credential_environment teardown_keys '
-        'cleanup_automated cleanup_guidance')):
+        'cleanup_automated cleanup_guidance driver')):
     __slots__ = ()
 
     def __new__(cls, directory, ssh_user, legacy_menu=True,
@@ -94,7 +95,7 @@ class ProviderSpec(namedtuple(
                 environment_loader=None, profile_loader=None,
                 credential_environment=None, teardown_keys=None,
                 cleanup_automated=True,
-                cleanup_guidance=None):
+                cleanup_guidance=None, driver=None):
         normalized_variants = {
             workload: frozenset(variants)
             for workload, variants in dict(variant_support or {}).items()
@@ -110,11 +111,14 @@ class ProviderSpec(namedtuple(
                                                tuple(credential_environment or ()),
                                                tuple(teardown_keys or ()),
                                                cleanup_automated,
-                                               tuple(cleanup_guidance or ()))
+                                               tuple(cleanup_guidance or ()),
+                                               driver)
 
     @property
     def capabilities(self):
-        return frozenset(self.routes)
+        # A cloud driver serves every workload that publishes a native profile.
+        covered = driver_workloads() if self.driver else ()
+        return frozenset(self.routes) | frozenset(covered)
 
     @property
     def staged_capabilities(self):
@@ -152,7 +156,8 @@ WORKLOAD_SPECS = {
         'modules/payload-server/deploy_payload.py', True),
     'webrunner': WorkloadSpec(
         'modules/webrunner/deploy_webrunner.py', True),
-    'phantom': WorkloadSpec('ghost_protocol/phantom/phantom.py', True),
+    'phantom': WorkloadSpec('ghost_protocol/phantom/phantom.py', True,
+                            profile='modules/phantom/workload.py'),
     'chat': WorkloadSpec('modules/chat-server/deploy_chat.py', True),
 }
 CANONICAL_WORKLOADS = tuple(WORKLOAD_SPECS)
@@ -217,22 +222,19 @@ PROVIDER_SPECS = {
                              ),
                              routes={workload: _FLOKINET_TRANSITION for workload in
                                      LEGACY_TRANSITION_CAPABILITIES['flokinet']}),
+    # A driver-backed provider lists no per-workload routes: every workload
+    # with a native profile is served through the generic adapters.
     'azure': ProviderSpec('Azure', 'azureuser', False,
-                          variant_support={'attack_box': {'quick_recon'}},
                           config_loader='utils.azure_utils:gather_azure_config',
                           runtime_loader='utils.azure_runtime:azure_runtime',
-                          routes={
-                              'infrastructure': 'utils.azure_adapter:AzureInfrastructureAdapter',
-                              'attack_box': 'utils.azure_workload_adapter:azure_attack_box_adapter',
-                              'redirector': 'utils.azure_workload_adapter:azure_redirector_adapter',
-                              'c2': 'utils.azure_workload_adapter:azure_c2_adapter',
-                              'payload_server': 'utils.azure_workload_adapter:azure_payload_server_adapter',
-                              'phantom': 'utils.azure_phantom_adapter:AzurePhantomAdapter',
-                              'chat': 'utils.azure_phantom_adapter:AzurePhantomAdapter',
-                              'webrunner': 'utils.azure_webrunner_adapter:azure_webrunner_adapter',
-                              'phishing': 'utils.azure_phishing_adapter:azure_phishing_adapter',
-                          }),
+                          driver='utils.azure_cloud:azure_driver'),
 }
+
+
+def driver_workloads():
+    """Workloads any cloud driver serves: the infrastructure VM plus every profile."""
+    from .workloads import profiled_workloads
+    return ['infrastructure', *profiled_workloads()]
 
 
 def _load(reference):
@@ -257,12 +259,15 @@ class ProviderDispatcher:
         self.spec = PROVIDER_SPECS[provider]
 
     def route(self, workload):
-        if workload not in self.spec.routes:
-            return None
-        reference = self.spec.routes[workload]
-        if not reference:
-            raise ValueError(f'Registered route is missing for {self.provider}/{workload}')
-        return _load(reference)()
+        if workload in self.spec.routes:
+            reference = self.spec.routes[workload]
+            if not reference:
+                raise ValueError(f'Registered route is missing for {self.provider}/{workload}')
+            return _load(reference)()
+        if self.spec.driver and workload in driver_workloads():
+            from .vm_workloads import driver_route
+            return driver_route(self.spec.driver, workload)
+        return None
 
     def staged_route(self, workload):
         """Load inert provider preparation without entering active dispatch."""
@@ -414,7 +419,7 @@ def provider_route_kind(provider, workload):
     reference = spec.routes.get(workload)
     if reference in _TRANSITION_REFERENCES:
         return 'transition'
-    if reference:
+    if reference or (spec.driver and workload in driver_workloads()):
         return 'native'
     if (workload in LEGACY_FALLBACK_WORKLOADS and
             workload in spec.legacy_capabilities):
@@ -434,7 +439,16 @@ def provider_supported_variants(provider, workload):
     if (not variants or provider_route_kind(provider, workload) not in
             ('native', 'transition', 'legacy_fallback')):
         return frozenset()
-    return PROVIDER_SPECS[provider].variant_support.get(workload, variants)
+    spec = PROVIDER_SPECS[provider]
+    if workload in spec.variant_support:
+        return spec.variant_support[workload]
+    if spec.driver and workload not in spec.routes:
+        # The profile declares which subtypes have native service tasks.
+        from .workloads import load_profile
+        profile = load_profile(workload)
+        if profile is not None and profile.variants is not None:
+            return profile.variants & variants
+    return variants
 
 
 def provider_supports_variant(provider, workload, variant=None):
@@ -562,7 +576,7 @@ def validate_provider_registry(load_references=True):
             declared = WORKLOAD_SPECS[workload].variants
             if (not isinstance(variants, frozenset) or not variants or
                     not variants.issubset(declared) or
-                    (workload not in spec.routes and
+                    (workload not in spec.capabilities and
                      workload not in spec.legacy_capabilities)):
                 raise ValueError(
                     'Invalid provider variant support: {0}/{1}'.format(
@@ -576,6 +590,20 @@ def validate_provider_registry(load_references=True):
             if load_references and not callable(_load(reference)):
                 raise TypeError('Provider loader is not callable: {0}/{1}'.format(
                     provider, field))
+        if spec.driver is not None:
+            _reference_parts(spec.driver)
+            if (set(spec.routes) | set(spec.staged_routes)) & set(driver_workloads()):
+                raise ValueError('Explicit routes shadow the provider driver: ' + provider)
+            if load_references:
+                from .vm_workloads import driver_route, load_driver
+                driver = load_driver(spec.driver)
+                if driver.provider != provider or driver.ssh_user != spec.ssh_user:
+                    raise ValueError('Provider driver identity drift: ' + provider)
+                for workload in driver_workloads():
+                    adapter = driver_route(spec.driver, workload)
+                    if not isinstance(adapter, WorkloadAdapter):
+                        raise TypeError('Provider driver returned an invalid adapter: {0}/{1}'.format(
+                            provider, workload))
 
         if set(spec.routes) & set(spec.staged_routes):
             raise ValueError('Active and staged provider routes overlap: ' + provider)
@@ -678,8 +706,8 @@ def validate_provider_registry(load_references=True):
                 'native', 'transition', 'legacy_fallback')):
             raise ValueError('Provider selection disagrees with coverage: {0}/{1}'.format(
                 provider, workload))
-        route = PROVIDER_SPECS[provider].routes.get(workload)
-        if (route_kind in ('native', 'transition')) != bool(route):
+        route = workload in PROVIDER_SPECS[provider].capabilities
+        if (route_kind in ('native', 'transition')) != route:
             raise ValueError('Provider route classification drift: {0}/{1}'.format(
                 provider, workload))
         staged_route = PROVIDER_SPECS[provider].staged_routes.get(workload)
@@ -704,6 +732,8 @@ def validate_provider_registry(load_references=True):
         'controllers': len(entrypoints),
         'pairs': len(rows),
         'routes': sum(len(spec.routes) for spec in PROVIDER_SPECS.values()),
+        'driver_routes': sum(len(driver_workloads()) for spec in PROVIDER_SPECS.values()
+                             if spec.driver),
         'staged_routes': sum(
             len(spec.staged_routes) for spec in PROVIDER_SPECS.values()),
         'counts': counts,

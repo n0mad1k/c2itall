@@ -43,7 +43,7 @@ APPROVED_PATHS = (
     "providers/Azure/templates/infrastructure.json.j2",
     "modules/infrastructure/deploy_infrastructure.py", "tests/test_azure_provider.py",
     "scripts/deploy_azure_smoke.py", "scripts/setup_azure_automation.py",
-    "utils/provider_registry.py", "utils/azure_adapter.py",
+    "utils/provider_registry.py", "utils/azure_cloud.py",
     "teardown.py",
 )
 PHASES = (

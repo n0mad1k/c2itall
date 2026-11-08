@@ -24,6 +24,8 @@ sys.path.insert(0, str(ROOT))
 from utils import azure_utils as azure
 from utils import cleanup_engine, deployment_engine, provider_utils
 from utils import provider_registry as registry
+from utils import vm_workloads
+from utils.workloads import WorkloadProfile, load_profile
 
 spec = importlib.util.spec_from_file_location("azure_smoke", ROOT / "scripts/deploy_azure_smoke.py")
 smoke = importlib.util.module_from_spec(spec)
@@ -462,10 +464,12 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertEqual(
             provider_utils.available_providers('phishing', legacy_fallback=True),
             ['aws', 'linode', 'flokinet', 'azure'])
-        azure_spec = registry.PROVIDER_SPECS['azure']._replace(
-            routes={key: value for key, value in registry.PROVIDER_SPECS['azure'].routes.items()
-                    if key != 'phishing'})
-        with mock.patch.dict(registry.PROVIDER_SPECS, {'azure': azure_spec}):
+        # A driver only serves workloads that publish a profile; drop one and
+        # the provider silently leaves that menu.
+        with mock.patch.object(
+                registry, 'driver_workloads',
+                return_value=[workload for workload in registry.driver_workloads()
+                              if workload != 'phishing']):
             self.assertEqual(
                 provider_utils.available_providers('phishing', legacy_fallback=True),
                 ['aws', 'linode', 'flokinet'])
@@ -508,8 +512,6 @@ class RoutingAndTemplateTests(AzureFixture):
             provider_utils.gather_provider_config('flokinet', 'attack_box', legacy_fallback=True)
 
     def test_adapter_key_ownership_is_explicit_and_shared_by_modules(self):
-        from utils.azure_workload_adapter import AzureAttackBoxAdapter
-
         with mock.patch.object(
                 azure, 'gather_azure_config', return_value={'source': 'azure'}):
             self.assertEqual(
@@ -521,7 +523,7 @@ class RoutingAndTemplateTests(AzureFixture):
             provider_utils.gather_provider_config(
                 'azure', 'attack_box', variant='kali')
         gather.assert_not_called()
-        self.assertTrue(AzureAttackBoxAdapter.manages_ssh_key)
+        self.assertTrue(vm_workloads.adapter('azure', 'attack_box').manages_ssh_key)
 
         managed = {'provider_manages_ssh_key': True}
         with mock.patch.object(provider_utils, 'generate_ssh_key') as generate:
@@ -974,7 +976,7 @@ class RoutingAndTemplateTests(AzureFixture):
         validation = registry.validate_provider_registry(load_references=True)
         self.assertEqual(validation, {
             'providers': 4, 'workloads': 9, 'controllers': 9,
-            'pairs': 36, 'routes': 31, 'staged_routes': 0,
+            'pairs': 36, 'routes': 22, 'driver_routes': 9, 'staged_routes': 0,
             'counts': {
                 'native': 9, 'transition': 22,
                 'legacy_fallback': 0, 'staged': 0, 'unsupported': 5,
@@ -1057,8 +1059,15 @@ class RoutingAndTemplateTests(AzureFixture):
                 contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(module.main([]), 2)
 
-        invalid = azure._replace(
-            routes=dict(azure.routes, attack_box='fake:factory'))
+        for field in ('routes', 'staged_routes'):
+            shadowed = azure._replace(**{field: {'attack_box': 'fake:factory'}})
+            with mock.patch.dict(registry.PROVIDER_SPECS, {'azure': shadowed}), \
+                    self.assertRaisesRegex(ValueError, 'shadow the provider driver'):
+                registry.validate_provider_registry(load_references=False)
+
+        aws = registry.PROVIDER_SPECS['aws']
+        invalid = aws._replace(
+            routes=dict(aws.routes, attack_box='fake:factory'))
         original_load = registry._load
 
         def load(reference):
@@ -1066,9 +1075,18 @@ class RoutingAndTemplateTests(AzureFixture):
                 return lambda: object()
             return original_load(reference)
 
-        with mock.patch.dict(registry.PROVIDER_SPECS, {'azure': invalid}), \
+        with mock.patch.dict(registry.PROVIDER_SPECS, {'aws': invalid}), \
                 mock.patch.object(registry, '_load', side_effect=load), \
                 self.assertRaisesRegex(TypeError, 'invalid adapter'):
+            registry.validate_provider_registry(load_references=True)
+
+        with mock.patch.object(vm_workloads, 'driver_route', return_value=object()), \
+                self.assertRaisesRegex(TypeError, 'driver returned an invalid adapter'):
+            registry.validate_provider_registry(load_references=True)
+
+        drifted = azure._replace(ssh_user='operator')
+        with mock.patch.dict(registry.PROVIDER_SPECS, {'azure': drifted}), \
+                self.assertRaisesRegex(ValueError, 'driver identity drift'):
             registry.validate_provider_registry(load_references=True)
 
         invalid_variants = azure._replace(
@@ -1078,9 +1096,9 @@ class RoutingAndTemplateTests(AzureFixture):
                 self.assertRaisesRegex(ValueError, 'variant support'):
             registry.validate_provider_registry(load_references=False)
 
-        overlapping = azure._replace(
-            staged_routes=dict(azure.staged_routes, attack_box='fake:factory'))
-        with mock.patch.dict(registry.PROVIDER_SPECS, {'azure': overlapping}), \
+        overlapping = aws._replace(
+            staged_routes=dict(aws.staged_routes, attack_box='fake:factory'))
+        with mock.patch.dict(registry.PROVIDER_SPECS, {'aws': overlapping}), \
                 self.assertRaisesRegex(ValueError, 'routes overlap'):
             registry.validate_provider_registry(load_references=False)
 
@@ -1092,8 +1110,7 @@ class RoutingAndTemplateTests(AzureFixture):
             registry.validate_provider_registry(load_references=True)
 
     def test_azure_phishing_route_deploys_two_recoverable_components(self):
-        from utils import azure_phishing_adapter, azure_workload_adapter
-        adapter = azure_phishing_adapter.azure_phishing_adapter()
+        adapter = vm_workloads.adapter('azure', 'phishing')
         self.assertFalse(adapter.manages_ssh_key)
         self.assertTrue(adapter.recovers_from_log)
         with tempfile.TemporaryDirectory() as temp:
@@ -1116,7 +1133,7 @@ class RoutingAndTemplateTests(AzureFixture):
                                       side_effect=lambda infra: deployed.append(dict(infra)) or True), \
                     mock.patch.object(azure, 'load_state', side_effect=lambda did, directory=None: {
                         'outputs': {'public_ip': {'value': addresses[did]}}}), \
-                    mock.patch.object(azure_workload_adapter.AzureSingleVmWorkloadAdapter,
+                    mock.patch.object(vm_workloads.SingleVmAdapter,
                                       '_run_service_playbook', return_value=True), \
                     mock.patch.object(deployment_engine, 'save_deployment_info'):
                 self.assertTrue(adapter.deploy(config))
@@ -1134,7 +1151,7 @@ class RoutingAndTemplateTests(AzureFixture):
                              [(80, '*'), (3333, '203.0.113.5')])
             self.assertEqual((config['mta_ip'], config['gophish_ip']), ('20.42.0.11', '20.42.0.12'))
             self.assertTrue(config['smtp_auth_pass'])
-            variables = azure_phishing_adapter.AzureGophishServer()._service_variables(config)
+            variables = adapter.component('gophish')._service_variables(config)
             self.assertEqual(variables['mta_ip'], '20.42.0.11')
             self.assertEqual(variables['smtp_auth_pass'], config['smtp_auth_pass'])
             self.assertNotIn('ssh_key_path', variables)
@@ -1178,7 +1195,7 @@ class RoutingAndTemplateTests(AzureFixture):
                     mock.patch.object(azure, 'deploy_azure', side_effect=[True, False]), \
                     mock.patch.object(azure, 'load_state', side_effect=lambda did, directory=None: {
                         'outputs': {'public_ip': {'value': addresses[did]}}}), \
-                    mock.patch.object(azure_workload_adapter.AzureSingleVmWorkloadAdapter,
+                    mock.patch.object(vm_workloads.SingleVmAdapter,
                                       '_run_service_playbook', return_value=True), \
                     mock.patch.object(deployment_engine, 'save_deployment_info'), \
                     mock.patch.object(azure, 'list_states', return_value=states), \
@@ -1431,7 +1448,6 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertFalse(public.exists())
 
     def test_azure_webrunner_route_provisions_nodes_around_the_composite_executor(self):
-        from utils import azure_webrunner_adapter
         with tempfile.TemporaryDirectory() as temp:
             chunks = Path(temp) / 'chunks.json'
             chunks.write_text(json.dumps([
@@ -1476,7 +1492,7 @@ class RoutingAndTemplateTests(AzureFixture):
                 mock.call({'deployment_id': 'x-n02', 'azure_state_dir': temp}),
                 mock.call({'deployment_id': 'x-n01', 'azure_state_dir': temp})])
 
-            adapter = azure_webrunner_adapter.azure_webrunner_adapter()
+            adapter = vm_workloads.adapter('azure', 'webrunner')
             with mock.patch.object(azure, 'list_states', return_value=states), \
                     mock.patch.object(azure, 'cleanup_azure', return_value=True) as cleanup, \
                     mock.patch.object(cleanup_engine, 'cleanup_ssh_keys_for_deployment') as keys, \
@@ -1513,7 +1529,7 @@ class RoutingAndTemplateTests(AzureFixture):
         }
         self.assertTrue(
             deployment_engine.determine_playbook(attack).endswith(
-                'providers/Azure/attack_box.yml'))
+                'modules/attack-box/service.yml'))
         for extra in ({"c2_only": True}, {"phishing_deployment": True}, {"infrastructure_deployment": False}):
             self.assertIsNone(deployment_engine.determine_playbook({**self.config, **extra}))
 
@@ -1557,7 +1573,7 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertEqual(
             provider_utils.available_providers('chat', legacy_fallback=True),
             ['aws', 'linode', 'flokinet', 'azure'])
-        from utils.azure_phantom_adapter import _service_rules
+        _service_rules = load_profile('phantom').inbound_rules
         self.assertEqual(
             {(rule['protocol'], rule['port']) for rule in _service_rules({
                 'server_type': 'matrix', 'provider_workload': 'chat'})},
@@ -1598,8 +1614,7 @@ class RoutingAndTemplateTests(AzureFixture):
         phantom.save_deploy_info.assert_called_once_with(config)
 
     def test_azure_phantom_adapter_limits_service_ports_and_maps_outputs(self):
-        from utils.azure_phantom_adapter import AzurePhantomAdapter
-        adapter = AzurePhantomAdapter()
+        adapter = vm_workloads.adapter('azure', 'phantom')
         config = {
             'provider': 'azure', 'provider_workload': 'phantom',
             'deployment_id': 'test-azure', 'server_type': 'vpn',
@@ -1635,6 +1650,7 @@ class RoutingAndTemplateTests(AzureFixture):
         chat_config = dict(config, deployment_id='test-chat',
                            provider_workload='chat', server_type='tak')
         chat_config.pop('azure_os_disk_gb', None)
+        adapter = vm_workloads.adapter('azure', 'chat')
         chat_infrastructure = adapter._infrastructure_config(chat_config)
         self.assertEqual(chat_infrastructure['azure_os_disk_gb'], 64)
         with mock.patch.object(azure, 'prepare_state'), mock.patch.object(
@@ -1646,6 +1662,7 @@ class RoutingAndTemplateTests(AzureFixture):
             self.assertTrue(adapter.deploy(chat_config))
         self.assertEqual(chat_config['provider_workload'], 'chat')
 
+        adapter = vm_workloads.adapter('azure', 'phantom')
         with mock.patch.object(azure, 'cleanup_azure', return_value=True) as cleanup:
             self.assertTrue(adapter.cleanup(config))
         cleanup.assert_called_once_with({
@@ -1656,12 +1673,8 @@ class RoutingAndTemplateTests(AzureFixture):
         })
 
     def test_azure_attack_box_adapter_owns_routed_lifecycle(self):
-        from utils.azure_workload_adapter import (
-            AzureAttackBoxAdapter, AzureSingleVmWorkloadAdapter,
-        )
-
-        adapter = AzureAttackBoxAdapter()
-        self.assertIsInstance(adapter, AzureSingleVmWorkloadAdapter)
+        adapter = vm_workloads.adapter('azure', 'attack_box')
+        self.assertIsInstance(adapter, vm_workloads.SingleVmAdapter)
         config = {
             'provider': 'azure', 'provider_workload': 'attack_box',
             'deployment_id': 'test-azure', 'deployment_type': 'quick_recon_box',
@@ -1699,14 +1712,9 @@ class RoutingAndTemplateTests(AzureFixture):
         archive.assert_called_once_with('test-azure')
 
     def test_azure_redirector_adapter_fronts_backend_with_public_web_rules(self):
-        from utils.azure_workload_adapter import (
-            AzureRedirectorAdapter, azure_redirector_adapter,
-        )
-
-        adapter = azure_redirector_adapter()
-        self.assertIsInstance(adapter, AzureRedirectorAdapter)
-        self.assertIs(registry.provider_dispatcher('azure').route('redirector').__class__,
-                      AzureRedirectorAdapter)
+        adapter = vm_workloads.adapter('azure', 'redirector')
+        self.assertIsInstance(adapter, vm_workloads.SingleVmAdapter)
+        self.assertEqual(adapter.profile.workload, 'redirector')
         self.assertIn('azure', provider_utils.available_providers(
             'redirector', legacy_fallback=True))
         config = {
@@ -1732,7 +1740,7 @@ class RoutingAndTemplateTests(AzureFixture):
         with self.assertRaisesRegex(ValueError, 'IPv4'):
             adapter._infrastructure_config({**config, 'backend_ip': '2001:db8::1'})
         self.assertEqual(
-            adapter.playbook(config), str(ROOT / 'providers/Azure/redirector.yml'))
+            adapter.playbook(config), str(ROOT / 'modules/redirectors/service.yml'))
         self.assertEqual(adapter.inventory_group, 'redirectors')
         service_vars = adapter._service_variables({**config, 'redirector_ip': '1.1.1.1'})
         self.assertNotIn('linode_token', service_vars)
@@ -1756,14 +1764,14 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertEqual(config['redirector_ip'], '1.1.1.1')
         self.assertTrue(
             deployment_engine.determine_playbook(config).endswith(
-                'providers/Azure/redirector.yml'))
+                'modules/redirectors/service.yml'))
 
     def test_azure_image_reference_renders_marketplace_plan(self):
         state = self.prepare()
         self.assertNotIn('plan', next(
             resource for resource in azure.render_template(state)['resources']
             if resource['type'] == 'Microsoft.Compute/virtualMachines'))
-        from utils.azure_workload_adapter import KALI_IMAGE
+        from utils.azure_cloud import KALI_IMAGE
         kali = azure.prepare_state({**self.config, 'deployment_id': 'kali-image',
                                     'azure_resource_group': 'c2itall-kali-image',
                                     'azure_image': KALI_IMAGE})
@@ -1789,10 +1797,11 @@ class RoutingAndTemplateTests(AzureFixture):
                     {'name': 'flow', 'protocol': 'Tcp', 'port': 8080, 'source': source}]})
 
     def test_azure_c2_adapter_isolates_management_and_redirector_flows(self):
-        from utils.azure_workload_adapter import AzureC2Adapter, KALI_IMAGE
+        from utils.azure_cloud import KALI_IMAGE
 
         adapter = registry.provider_dispatcher('azure').route('c2')
-        self.assertIsInstance(adapter, AzureC2Adapter)
+        self.assertIsInstance(adapter, vm_workloads.SingleVmAdapter)
+        self.assertEqual(adapter.profile.workload, 'c2')
         config = {
             'provider': 'azure', 'provider_workload': 'c2',
             'deployment_id': 'test-azure', 'deployment_type': 'c2_only',
@@ -1818,7 +1827,7 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertEqual(
             adapter._infrastructure_config({**config, 'redirector_ip': '127.0.0.1'})[
                 'azure_inbound_rules'], infrastructure['azure_inbound_rules'])
-        with self.assertRaisesRegex(ValueError, 'Havoc'):
+        with self.assertRaisesRegex(ValueError, 'frameworks: havoc'):
             adapter._infrastructure_config({**config, 'c2_framework': 'cobaltstrike'})
         with self.assertRaisesRegex(ValueError, 'public IPv4'):
             adapter._infrastructure_config({**config, 'redirector_ip': '10.0.0.9'})
@@ -1830,13 +1839,12 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertFalse(service_vars['redirector_only'])
         self.assertEqual(adapter.inventory_group, 'c2servers')
         self.assertTrue(
-            deployment_engine.determine_playbook(config).endswith('providers/Azure/c2.yml'))
+            deployment_engine.determine_playbook(config).endswith('modules/c2/service.yml'))
 
     def test_azure_payload_server_adapter_hosts_publicly_with_operator_ssh(self):
-        from utils.azure_workload_adapter import AzurePayloadServerAdapter
-
         adapter = registry.provider_dispatcher('azure').route('payload_server')
-        self.assertIsInstance(adapter, AzurePayloadServerAdapter)
+        self.assertIsInstance(adapter, vm_workloads.SingleVmAdapter)
+        self.assertEqual(adapter.profile.workload, 'payload_server')
         config = {
             'provider': 'azure', 'provider_workload': 'payload_server',
             'deployment_id': 'test-azure', 'deployment_type': 'secure_payload_server',
@@ -1858,26 +1866,26 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertEqual(adapter.inventory_group, 'payloadservers')
         self.assertTrue(
             deployment_engine.determine_playbook(config).endswith(
-                'providers/Azure/payload_server.yml'))
+                'modules/payload-server/service.yml'))
 
-    def test_azure_single_vm_base_exposes_a_workload_only_extension_point(self):
-        from utils.azure_workload_adapter import AzureSingleVmWorkloadAdapter
+    def test_generic_single_vm_adapter_exposes_a_workload_only_extension_point(self):
+        from utils.azure_cloud import azure_driver
 
-        class ExampleAdapter(AzureSingleVmWorkloadAdapter):
+        class ExampleProfile(WorkloadProfile):
             workload = 'example'
             address_key = 'example_ip'
-            playbook_name = 'example.yml'
-            service_log_suffix = 'example'
+            service_playbook = 'modules/example/service.yml'
+            log_suffix = 'example'
 
-            def _validate_workload(self, config):
+            def validate(self, config):
                 if config.get('deployment_type') != 'example_service':
                     raise ValueError('unsupported example subtype')
 
-            def _inbound_rules(self, config):
+            def inbound_rules(self, config):
                 return [{'name': 'example-tls', 'protocol': 'Tcp',
                          'port': 9443, 'source': '*'}]
 
-        adapter = ExampleAdapter()
+        adapter = vm_workloads.SingleVmAdapter(azure_driver(), ExampleProfile().check())
         config = {
             'provider': 'azure', 'provider_workload': 'example',
             'deployment_id': 'example-azure',
@@ -1893,7 +1901,7 @@ class RoutingAndTemplateTests(AzureFixture):
             'port': 9443, 'source': '*'}])
         self.assertEqual(
             adapter.playbook(config),
-            str(ROOT / 'providers/Azure/example.yml'))
+            str(ROOT / 'modules/example/service.yml'))
         self.assertEqual(adapter.address_key, 'example_ip')
         service_vars = adapter._service_variables({
             **config, 'aws_secret_key': 'excluded',
@@ -1904,17 +1912,17 @@ class RoutingAndTemplateTests(AzureFixture):
             'deployment_id': 'example-azure',
             'deployment_type': 'example_service',
         })
+        with self.assertRaisesRegex(ValueError, 'unsupported example subtype'):
+            adapter._infrastructure_config({**config, 'deployment_type': 'other'})
 
-        class IncompleteAdapter(AzureSingleVmWorkloadAdapter):
-            pass
+        class IncompleteProfile(WorkloadProfile):
+            workload = 'example'
 
         with self.assertRaisesRegex(TypeError, 'metadata is incomplete'):
-            IncompleteAdapter().playbook(config)
+            IncompleteProfile().check()
 
     def test_azure_single_vm_failure_enters_verified_cleanup(self):
-        from utils import azure_workload_adapter
-
-        adapter = azure_workload_adapter.AzureAttackBoxAdapter()
+        adapter = vm_workloads.adapter('azure', 'attack_box')
         with tempfile.TemporaryDirectory() as temp:
             key = Path(temp) / 'c2deploy_ab'
             key.write_text('unit-test-private-key')
@@ -1931,9 +1939,9 @@ class RoutingAndTemplateTests(AzureFixture):
                     mock.patch.object(azure, 'deploy_azure', return_value=True), \
                     mock.patch.object(azure, 'load_state', return_value={
                         'outputs': {'public_ip': {'value': '8.8.8.8'}}}), \
-                    mock.patch.object(azure_workload_adapter.AzureSingleVmWorkloadAdapter,
+                    mock.patch.object(vm_workloads.SingleVmAdapter,
                                       '_run_service_playbook', return_value=False), \
-                    mock.patch.object(azure_workload_adapter.AzureSingleVmWorkloadAdapter,
+                    mock.patch.object(vm_workloads.SingleVmAdapter,
                                       'cleanup', return_value=True) as cleanup, \
                     self.assertLogs(level='WARNING') as logs:
                 self.assertFalse(adapter.deploy(config))
@@ -1947,16 +1955,14 @@ class RoutingAndTemplateTests(AzureFixture):
             with mock.patch.object(azure, 'prepare_state'), \
                     mock.patch.object(azure, 'prepare_ssh_key'), \
                     mock.patch.object(azure, 'deploy_azure', side_effect=KeyboardInterrupt), \
-                    mock.patch.object(azure_workload_adapter.AzureSingleVmWorkloadAdapter,
+                    mock.patch.object(vm_workloads.SingleVmAdapter,
                                       'cleanup') as cleanup, \
                     self.assertLogs(level='ERROR'):
                 self.assertFalse(adapter.deploy(dict(config)))
             cleanup.assert_not_called()
 
     def test_azure_state_conflict_leaves_existing_deployment_alone(self):
-        from utils import azure_workload_adapter
-
-        adapter = azure_workload_adapter.AzureAttackBoxAdapter()
+        adapter = vm_workloads.adapter('azure', 'attack_box')
         with tempfile.TemporaryDirectory() as temp:
             key = Path(temp) / 'c2deploy_ab'
             key.write_text('unit-test-private-key')
@@ -1971,7 +1977,7 @@ class RoutingAndTemplateTests(AzureFixture):
             with mock.patch.object(azure, 'prepare_state',
                                    side_effect=ValueError('conflicts with deployment ab')), \
                     mock.patch.object(azure, 'deploy_azure') as deploy, \
-                    mock.patch.object(azure_workload_adapter.AzureSingleVmWorkloadAdapter,
+                    mock.patch.object(vm_workloads.SingleVmAdapter,
                                       'cleanup') as cleanup, \
                     self.assertLogs(level='ERROR') as logs:
                 self.assertFalse(adapter.deploy(config))
@@ -1980,13 +1986,13 @@ class RoutingAndTemplateTests(AzureFixture):
             self.assertIn('conflicts with deployment ab', logs.output[0])
 
     def test_azure_service_playbook_failure_keeps_its_log(self):
-        from utils.azure_workload_adapter import AzureSingleVmWorkloadAdapter
+        from utils.azure_cloud import azure_driver
 
-        class ExampleAdapter(AzureSingleVmWorkloadAdapter):
+        class ExampleProfile(WorkloadProfile):
             workload = 'example'
             address_key = 'example_ip'
-            playbook_name = 'example.yml'
-            service_log_suffix = 'example'
+            service_playbook = 'modules/example/service.yml'
+            log_suffix = 'example'
 
         with tempfile.TemporaryDirectory() as temporary:
             state_dir = Path(temporary) / 'state'
@@ -1997,7 +2003,7 @@ class RoutingAndTemplateTests(AzureFixture):
                 [], 2, 'TASK [Configure] fatal: broken\n', '[WARNING]: noise\n')
             with mock.patch.object(azure, 'run_command', return_value=failed), \
                     self.assertLogs(level='ERROR') as logs:
-                result = ExampleAdapter()._run_service_playbook({
+                result = vm_workloads.SingleVmAdapter(azure_driver(), ExampleProfile())._run_service_playbook({
                     'provider': 'azure', 'provider_workload': 'example',
                     'deployment_id': 'example-azure', 'example_ip': '8.8.8.8',
                     'ssh_private_key_path': str(key),
@@ -2016,7 +2022,7 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertIn("ansible_facts['date_time']['epoch']", source)
 
     def test_azure_phantom_adapter_maps_every_supported_service_allowlist(self):
-        from utils.azure_phantom_adapter import _service_rules
+        _service_rules = load_profile('phantom').inbound_rules
         expected = {
             'vpn': {('Udp', 51820)},
             'dns': {('Tcp', 53), ('Udp', 53), ('Tcp', 80), ('Tcp', 443)},
@@ -2466,12 +2472,11 @@ class ProviderContractTests(AzureFixture):
 
     def test_standalone_teardown_uses_saved_workload_adapter(self):
         import teardown as standalone
-        from utils.azure_workload_adapter import AzureAttackBoxAdapter
 
         state = self.prepare()
         state['provider_workload'] = 'attack_box'
         with mock.patch.object(
-                AzureAttackBoxAdapter, 'cleanup', return_value=True) as workload, \
+                vm_workloads.SingleVmAdapter, 'cleanup', return_value=True) as workload, \
                 mock.patch.object(azure, 'cleanup_azure') as infrastructure, \
                 contextlib.redirect_stdout(io.StringIO()):
             self.assertTrue(standalone.teardown_adapter_state(state, force=True))
@@ -2637,7 +2642,7 @@ class ProviderContractTests(AzureFixture):
     def test_legacy_imports_do_not_load_azure_adapter_or_runtime(self):
         result = subprocess.run([sys.executable, '-B', '-c',
             "import sys; from utils import provider_utils, deployment_engine, cleanup_engine; "
-            "assert 'utils.azure_adapter' not in sys.modules; "
+            "assert 'utils.azure_cloud' not in sys.modules; "
             "assert 'utils.azure_utils' not in sys.modules; "
             "assert provider_utils.available_providers() == ['aws', 'linode', 'flokinet']"],
             cwd=ROOT, capture_output=True, text=True, timeout=10)

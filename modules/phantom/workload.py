@@ -1,11 +1,8 @@
-"""Azure provisioning bridge for Phantom's privacy-service lifecycle."""
+"""Phantom profile: the privacy-service host any VM provider hands to Phantom."""
 
 import ipaddress
-from pathlib import Path
 
-from . import azure_utils
-from .provider_registry import WorkloadAdapter
-
+from utils.workloads import WorkloadProfile
 
 _WEB_RULES = (
     {'name': 'public-http', 'protocol': 'Tcp', 'port': 80, 'source': '*'},
@@ -19,24 +16,24 @@ def _operator_source(config):
         value += '/32'
     network = ipaddress.ip_network(value, strict=True)
     if network.version != 4 or network.prefixlen != 32 or not network.is_global:
-        raise ValueError('Azure Phantom operator_ip must be one global IPv4 host')
+        raise ValueError('Phantom operator_ip must be one global IPv4 host')
     return str(network)
 
 
-def _service_rules(config):
+def service_rules(config):
     service = config.get('server_type')
     if service == 'all_in_one':
         selected = config.get('services')
         allowed = {'matrix', 'vpn', 'dns', 'cloud', 'vault', 'media'}
         if (not isinstance(selected, (list, tuple)) or not selected or
                 any(component not in allowed for component in selected)):
-            raise ValueError('Azure all-in-one requires supported selected services')
+            raise ValueError('All-in-one requires supported selected services')
         rules = []
         seen = set()
         for component in selected:
             component_config = dict(config, server_type=component,
                                     provider_workload='phantom')
-            for rule in _service_rules(component_config):
+            for rule in service_rules(component_config):
                 identity = (rule['protocol'].lower(), int(rule['port']),
                             rule['source'])
                 if identity not in seen:
@@ -87,59 +84,18 @@ def _service_rules(config):
         ]
     if service in ('cloud', 'vault', 'media'):
         return list(_WEB_RULES)
-    raise ValueError('Unsupported Phantom service for Azure')
+    raise ValueError('Unsupported Phantom service')
 
 
-class AzurePhantomAdapter(WorkloadAdapter):
-    def gather_config(self):
-        return azure_utils.gather_azure_config()
+class PhantomProfile(WorkloadProfile):
+    kind = 'handoff'
+    workload = 'phantom'
 
-    def _infrastructure_config(self, config):
-        deployment_id = config['deployment_id']
-        key = Path.home() / '.ssh' / ('c2deploy_' + deployment_id)
-        result = {
-            'provider': 'azure', 'deployment_id': deployment_id,
-            'deployment_type': 'infrastructure', 'infrastructure_deployment': True,
-            'azure_subscription_id': config['azure_subscription_id'],
-            'azure_location': config.get('azure_location', 'eastus'),
-            'azure_vm_size': config.get('azure_vm_size', 'Standard_D2as_v4'),
-            'azure_os_disk_gb': config.get(
-                'azure_os_disk_gb', 64 if config.get('server_type') == 'tak' else 32),
-            'azure_resource_group': config.get('azure_resource_group',
-                                                'c2itall-' + deployment_id),
-            'operator_ip': config['operator_ip'],
-            'ssh_private_key_path': str(key), 'ssh_key_path': str(key) + '.pub',
-            'ssh_key_generated': True, 'azure_inbound_rules': _service_rules(config),
-        }
-        for key_name in ('azure_state_dir', 'azure_deadline', 'azure_cleanup_deadline'):
-            if key_name in config:
-                result[key_name] = config[key_name]
-        return result
+    def disk_gb(self, config):
+        return 64 if config.get('server_type') == 'tak' else 32
 
-    def deploy(self, config):
-        workload = config.get('provider_workload', 'phantom')
-        infrastructure = self._infrastructure_config(config)
-        azure_utils.prepare_state(infrastructure)
-        azure_utils.prepare_ssh_key(infrastructure)
-        if not azure_utils.deploy_azure(infrastructure):
-            return False
-        state = azure_utils.load_state(config['deployment_id'],
-                                       config.get('azure_state_dir'))
-        address = state.get('outputs', {}).get('public_ip', {}).get('value', '')
-        parsed = ipaddress.ip_address(address)
-        if parsed.version != 4 or not parsed.is_global:
-            raise ValueError('Azure Phantom deployment returned an invalid public IP')
-        config.update({key: value for key, value in infrastructure.items()
-                       if key.startswith('azure_') or key == 'operator_ip'})
-        config.update(target_host=str(parsed), ssh_user='azureuser',
-                      ssh_key=infrastructure['ssh_private_key_path'],
-                      provider_workload=workload)
-        return True
+    def inbound_rules(self, config):
+        return service_rules(config)
 
-    def cleanup(self, config):
-        cleanup = {'deployment_id': config['deployment_id']}
-        for key in ('azure_state_dir', 'azure_subscription_id',
-                    'azure_resource_group', 'azure_cleanup_deadline'):
-            if key in config:
-                cleanup[key] = config[key]
-        return azure_utils.cleanup_azure(cleanup)
+
+PROFILE = PhantomProfile()

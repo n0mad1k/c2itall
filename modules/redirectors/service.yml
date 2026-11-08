@@ -1,5 +1,5 @@
 ---
-- name: Wait for the Azure redirector VM
+- name: Wait for the redirector
   hosts: all
   gather_facts: false
   tasks:
@@ -8,7 +8,7 @@
         delay: 10
         timeout: 300
 
-- name: Configure the Azure redirector
+- name: Configure the redirector
   hosts: redirectors
   become: true
   gather_facts: true
@@ -16,14 +16,13 @@
     - name: Validate the redirector route inputs
       ansible.builtin.assert:
         that:
-          - provider == 'azure'
           - provider_workload == 'redirector'
           - domain | length > 0
           - c2_ip | length > 0
-        fail_msg: Azure redirector requires a domain and a backend address
+        fail_msg: Redirector requires a domain and a backend address
 
     - name: Configure the redirector service
-      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../modules/redirectors/tasks/configure_redirector.yml"
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/configure_redirector.yml"
 
     - name: Print deployment summary
       ansible.builtin.debug:

@@ -1,5 +1,5 @@
 ---
-- name: Wait for the Azure MTA front VM
+- name: Wait for the GoPhish server
   hosts: all
   gather_facts: false
   tasks:
@@ -8,18 +8,17 @@
         delay: 10
         timeout: 300
 
-- name: Configure the Azure MTA front
-  hosts: mta_fronts
+- name: Configure the GoPhish server
+  hosts: gophish_servers
   become: true
   gather_facts: true
   tasks:
     - name: Validate the phishing route inputs
       ansible.builtin.assert:
         that:
-          - provider == 'azure'
           - provider_workload == 'phishing'
           - domain | length > 0
-        fail_msg: Azure phishing requires a domain
+        fail_msg: Phishing requires a domain
 
     - name: Wait for apt to be available
       ansible.builtin.apt:
@@ -29,8 +28,8 @@
       retries: 5
       delay: 10
 
-    - name: Configure the MTA front
-      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../modules/phishing/mta-front/tasks/configure_mta_front.yml"
+    - name: Configure the GoPhish server
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/gophish/tasks/configure_phishing_server.yml"
 
     - name: Apply the shared hardening
       ansible.builtin.include_tasks: "{{ playbook_dir }}/../../common/tasks/security_hardening.yml"
@@ -38,4 +37,4 @@
     - name: Print deployment summary
       ansible.builtin.debug:
         msg:
-          - "MTA front deployment complete: {{ inventory_hostname }} ({{ domain }})"
+          - "GoPhish server deployment complete: {{ inventory_hostname }} ({{ domain }})"
