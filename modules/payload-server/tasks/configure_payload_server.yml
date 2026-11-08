@@ -1,78 +1,134 @@
 ---
-# Configure payload server for creating and hosting malicious payloads
+# Shared payload hosting server: an nginx file host with optional access
+# controls plus the light payload-generation toolchain. Runs on Ubuntu/Debian.
 
-- name: Install payload generation tools
-  apt:
+- name: Install hosting and payload tooling packages
+  ansible.builtin.apt:
     name:
+      - nginx
+      - apache2-utils
+      - openssl
+      - git
       - mingw-w64
-      - golang
-      - python3-pip
+      - golang-go
       - upx-ucl
       - osslsigncode
-      - mono-complete
-      - wine64
-      - wine32
+      - python3-pip
     state: present
     update_cache: yes
+  register: payload_packages
+  until: payload_packages is success
+  retries: 5
+  delay: 10
 
-- name: Create payload directories
-  file:
+- name: Create payload hosting directories
+  ansible.builtin.file:
+    path: "/var/www/payloads/{{ item }}"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: '0755'
+  loop: [windows, linux, macos, scripts, docs, mobile]
+
+- name: Create tooling and certificate directories
+  ansible.builtin.file:
     path: "{{ item }}"
     state: directory
     mode: '0700'
-    owner: root
-    group: root
   loop:
+    - /root/Tools
     - /root/Tools/payloads
-    - /root/Tools/payloads/templates
     - /root/Tools/payloads/output
-    - /root/Tools/payloads/scripts
+    - /etc/nginx/ssl
 
-- name: Install Python payload tools
-  pip:
-    name:
-      - pycryptodome
-      - pyinstaller
-      - py2exe
-    state: present
+- name: Generate a self-signed certificate for the payload host
+  ansible.builtin.command:
+    cmd: >-
+      openssl req -x509 -nodes -newkey rsa:2048 -days 365
+      -subj "/CN={{ payload_subdomain | default('cdn') }}.{{ domain }}"
+      -keyout /etc/nginx/ssl/payloads.key -out /etc/nginx/ssl/payloads.crt
+    creates: /etc/nginx/ssl/payloads.crt
 
-- name: Clone payload generation tools
-  git:
-    repo: "{{ item.repo }}"
-    dest: "{{ item.dest }}"
-  loop:
-    - { repo: "https://github.com/Binject/go-donut", dest: "/root/Tools/go-donut" }
-    - { repo: "https://github.com/optiv/ScareCrow", dest: "/root/Tools/ScareCrow" }
-    - { repo: "https://github.com/TheWover/donut", dest: "/root/Tools/donut" }
+- name: Choose basic auth credentials
+  ansible.builtin.set_fact:
+    payload_auth_user: "{{ auth_username | default('admin', true) }}"
+    payload_auth_pass: "{{ auth_password | default(lookup('password', '/dev/null length=20 chars=ascii_letters,digits'), true) }}"
+  no_log: true
+  when: enable_basic_auth | default(false) | bool
 
-- name: Build Go tools
-  shell: |
-    cd {{ item }} && go build
-  args:
-    creates: "{{ item }}/{{ item | basename }}"
-  loop:
-    - /root/Tools/go-donut
-    - /root/Tools/ScareCrow
+- name: Write the basic auth file
+  ansible.builtin.command:
+    cmd: htpasswd -cbB /etc/nginx/.payloads.htpasswd "{{ payload_auth_user }}" "{{ payload_auth_pass }}"
+    creates: /etc/nginx/.payloads.htpasswd
+  no_log: true
+  when: enable_basic_auth | default(false) | bool
 
-- name: Deploy payload generation scripts
-  template:
-    src: "{{ item.src }}"
-    dest: "{{ item.dest }}"
-    mode: '0700'
-  loop:
-    - { src: "../templates/phishing/generate_doc_payloads.sh.j2", dest: "/root/Tools/payloads/scripts/generate_docs.sh" }
-    - { src: "../templates/phishing/generate_exe_payloads.sh.j2", dest: "/root/Tools/payloads/scripts/generate_exes.sh" }
-    - { src: "../templates/phishing/payload_obfuscator.py.j2", dest: "/root/Tools/payloads/scripts/obfuscate.py" }
+- name: Configure the nginx rate limit zone
+  ansible.builtin.copy:
+    content: "limit_req_zone $binary_remote_addr zone=payloads:10m rate=10r/s;\n"
+    dest: /etc/nginx/conf.d/payload-rate-limit.conf
+    mode: '0644'
+  when: enable_rate_limiting | default(false) | bool
 
-- name: Create payload hosting service
-  template:
-    src: "../templates/phishing/payload-server.service.j2"
-    dest: /etc/systemd/system/payload-server.service
+- name: Configure the nginx payload site
+  ansible.builtin.template:
+    src: "../templates/nginx-payload-server.conf.j2"
+    dest: /etc/nginx/sites-available/payloads
     mode: '0644'
 
-- name: Start payload server
-  systemd:
-    name: payload-server
-    state: started
+- name: Enable the payload site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/payloads
+    dest: /etc/nginx/sites-enabled/payloads
+    state: link
+
+- name: Disable the default site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+
+- name: Place a benign index page
+  ansible.builtin.copy:
+    content: "<!doctype html><html><head><title>Content Delivery</title></head><body></body></html>\n"
+    dest: /var/www/payloads/index.html
+    owner: www-data
+    group: www-data
+    mode: '0644'
+
+- name: Restart and enable nginx
+  ansible.builtin.service:
+    name: nginx
+    state: restarted
     enabled: yes
-    daemon_reload: yes
+
+- name: Fetch payload generation projects
+  ansible.builtin.git:
+    repo: "{{ item.repo }}"
+    dest: "{{ item.dest }}"
+    depth: 1
+  loop:
+    - { repo: "https://github.com/Binject/go-donut", dest: /root/Tools/go-donut }
+    - { repo: "https://github.com/TheWover/donut", dest: /root/Tools/donut }
+
+- name: Build go-donut
+  ansible.builtin.command:
+    cmd: go build
+    chdir: /root/Tools/go-donut
+    creates: /root/Tools/go-donut/go-donut
+  environment:
+    HOME: /root
+
+- name: Record payload server access details for the operator
+  ansible.builtin.copy:
+    content: |
+      Payload server: https://{{ ansible_host }}/
+      Hostname: {{ payload_subdomain | default('cdn') }}.{{ domain }} (set the DNS A record)
+      Payload root: /var/www/payloads (windows, linux, macos, scripts, docs, mobile)
+      Basic auth: {{ (enable_basic_auth | default(false) | bool) | ternary(payload_auth_user | default('') ~ ' / ' ~ payload_auth_pass | default(''), 'disabled') }}
+      IP allowlist: {{ (enable_ip_filtering | default(false) | bool) | ternary(([operator_ip] + (allowed_ips | default([]))) | join(', '), 'disabled') }}
+      User-agent filtering: {{ enable_user_agent_filtering | default(false) | bool }}
+      Rate limiting: {{ enable_rate_limiting | default(false) | bool }}
+      Tooling: /root/Tools/go-donut/go-donut, /root/Tools/donut, mingw-w64, upx, osslsigncode
+    dest: /root/PAYLOAD_SERVER_GUIDE.txt
+    mode: '0600'
+  no_log: true

@@ -1,0 +1,92 @@
+---
+# Linode payload server: one Ubuntu Linode, then the shared hosting tasks
+
+- name: Deploy payload server on Linode
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars_files:
+    - vars.yaml
+
+  tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        payload_server_name: "{{ payload_server_name | default('ps-' + deployment_id) }}"
+        linode_region: "{{ linode_region | default('us-east') }}"
+
+    - name: Validate required inputs
+      assert:
+        that:
+          - linode_token is defined and linode_token != ""
+          - ssh_key_path is defined
+        fail_msg: "Linode API token and ssh_key_path are required"
+
+    - name: Create payload server Linode instance
+      community.general.linode_v4:
+        access_token: "{{ linode_token }}"
+        label: "{{ payload_server_name }}"
+        type: "{{ linode_instance_type | default('g6-nanode-1') }}"
+        region: "{{ linode_region }}"
+        image: "linode/ubuntu24.04"
+        root_pass: "{{ lookup('password', '/dev/null length=24 chars=ascii_letters,digits') }}"
+        authorized_keys:
+          - "{{ lookup('file', ssh_key_path) }}"
+        tags:
+          - c2itall
+          - payload-server
+          - "{{ deployment_id }}"
+        state: present
+      register: payload_instance
+
+    - name: Set payload server facts
+      set_fact:
+        payload_server_ip: "{{ payload_instance.instance.ipv4[0] }}"
+
+    - name: Wait for SSH to be available
+      wait_for:
+        host: "{{ payload_server_ip }}"
+        port: 22
+        delay: 10
+        timeout: 300
+
+    - name: Add payload server to inventory
+      add_host:
+        name: "{{ payload_server_ip }}"
+        groups: payloadservers
+        ansible_host: "{{ payload_server_ip }}"
+        ansible_user: root
+        ansible_ssh_private_key_file: "{{ ssh_key_path | replace('.pub', '') }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes"
+        ansible_python_interpreter: /usr/bin/python3
+
+- name: Configure payload server
+  hosts: payloadservers
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Wait for the host to finish first boot
+      command: cloud-init status --wait
+      changed_when: false
+      failed_when: false
+
+    - name: Disable SSH password authentication
+      copy:
+        content: "PasswordAuthentication no\n"
+        dest: /etc/ssh/sshd_config.d/00-payload-server.conf
+        mode: '0644'
+      register: payload_sshd
+
+    - name: Restart SSH to apply password authentication change
+      service:
+        name: ssh
+        state: restarted
+      when: payload_sshd.changed
+
+    - name: Configure the payload hosting service
+      include_tasks: "{{ playbook_dir }}/../../modules/payload-server/tasks/configure_payload_server.yml"
+
+    - name: Print deployment summary
+      debug:
+        msg:
+          - "Payload server deployed: https://{{ inventory_hostname }}/"
+          - "Access details: /root/PAYLOAD_SERVER_GUIDE.txt on the server"

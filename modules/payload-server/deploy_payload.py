@@ -273,25 +273,12 @@ def execute_ansible_deployment(config):
     
     print(f"\n{COLORS['BLUE']}Executing {deployment_type} deployment on {provider}...{COLORS['RESET']}")
     
-    # Use the payload server playbooks
-    playbook_map = {
-        'basic_payload_server': 'payload_server.yml',
-        'payload_server_with_redirector': 'payload_server.yml',
-        'secure_payload_server': 'payload_server.yml',
-        'mobile_payload_server': 'payload_server.yml',
-        'document_payload_server': 'payload_server.yml',
-        'multi_format_payload_server': 'payload_server.yml'
-    }
-    
-    playbook = playbook_map.get(deployment_type)
-    if not playbook:
-        print(f"{COLORS['RED']}Unknown deployment type: {deployment_type}{COLORS['RESET']}")
-        return False
-    
-    # Change to the module directory and execute the playbook
-    module_dir = os.path.dirname(__file__)
-    playbook_path = os.path.join(module_dir, playbook)
-    
+    # Every payload deployment type provisions the same hosting server.
+    from utils.common import PROVIDER_DIRS
+    playbook_path = os.path.join(
+        os.path.dirname(__file__), '..', '..', 'providers',
+        PROVIDER_DIRS.get(provider, ''), 'payload_server.yml')
+
     if not os.path.exists(playbook_path):
         print(f"{COLORS['RED']}Playbook not found: {playbook_path}{COLORS['RESET']}")
         return False

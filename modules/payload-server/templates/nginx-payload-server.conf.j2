@@ -1,0 +1,40 @@
+server {
+    listen 80 default_server;
+    server_name {{ payload_subdomain | default('cdn') }}.{{ domain }};
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl default_server;
+    server_name {{ payload_subdomain | default('cdn') }}.{{ domain }};
+    ssl_certificate /etc/nginx/ssl/payloads.crt;
+    ssl_certificate_key /etc/nginx/ssl/payloads.key;
+    root /var/www/payloads;
+    server_tokens off;
+    autoindex off;
+    access_log off;
+    error_log /dev/null crit;
+{% if enable_ip_filtering | default(false) | bool %}
+    allow {{ operator_ip }};
+{% for address in allowed_ips | default([]) %}
+    allow {{ address }};
+{% endfor %}
+    deny all;
+{% endif %}
+{% if enable_user_agent_filtering | default(false) | bool %}
+    if ($http_user_agent ~* "(curl|wget|python|nikto|nmap|sqlmap|masscan|scanner|bot|crawler)") {
+        return 444;
+    }
+{% endif %}
+
+    location / {
+{% if enable_rate_limiting | default(false) | bool %}
+        limit_req zone=payloads burst=20 nodelay;
+{% endif %}
+{% if enable_basic_auth | default(false) | bool %}
+        auth_basic "Restricted";
+        auth_basic_user_file /etc/nginx/.payloads.htpasswd;
+{% endif %}
+        try_files $uri $uri/ =404;
+    }
+}

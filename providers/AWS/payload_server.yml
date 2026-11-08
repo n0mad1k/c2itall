@@ -1,0 +1,160 @@
+---
+# AWS payload server: one Ubuntu VM in its own VPC, then the shared hosting tasks
+
+- name: Deploy payload server on AWS
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars_files:
+    - vars.yaml
+  vars:
+    resource_tags:
+      deployment_id: "{{ deployment_id }}"
+      DeploymentID: "{{ deployment_id }}"
+      Type: "payload-server"
+
+  tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        payload_server_name: "{{ payload_server_name | default('ps-' + deployment_id) }}"
+        aws_region: "{{ aws_region | default(aws_region_choices | random) }}"
+
+    - name: Validate AWS credentials
+      assert:
+        that:
+          - aws_access_key is defined and aws_access_key != ""
+          - aws_secret_key is defined and aws_secret_key != ""
+          - operator_ip is defined and (operator_ip | string) is match('^\d{1,3}(\.\d{1,3}){3}$')
+          - ssh_key_path is defined
+        fail_msg: "AWS credentials, a valid single-IPv4 operator_ip and ssh_key_path are required"
+
+    - name: Resolve the current Ubuntu 24.04 AMI
+      set_fact:
+        payload_server_ami: "{{ lookup('amazon.aws.ssm_parameter', '/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id', region=aws_region) }}"
+
+    - name: Create VPC
+      amazon.aws.ec2_vpc_net:
+        name: "{{ payload_server_name }}-vpc"
+        cidr_block: "10.0.0.0/16"
+        region: "{{ aws_region }}"
+        tags: "{{ resource_tags | combine({'Name': payload_server_name + '-vpc'}) }}"
+        state: present
+      register: vpc_result
+
+    - name: Create internet gateway for VPC
+      amazon.aws.ec2_vpc_igw:
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        region: "{{ aws_region }}"
+        state: present
+        tags: "{{ resource_tags | combine({'Name': payload_server_name + '-igw'}) }}"
+      register: igw_result
+
+    - name: Create subnet in VPC
+      amazon.aws.ec2_vpc_subnet:
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        cidr: "10.0.1.0/24"
+        region: "{{ aws_region }}"
+        az: "{{ aws_region }}a"
+        map_public: yes
+        tags: "{{ resource_tags | combine({'Name': payload_server_name + '-subnet'}) }}"
+      register: subnet_result
+
+    - name: Create routing table for internet access
+      amazon.aws.ec2_vpc_route_table:
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        region: "{{ aws_region }}"
+        tags: "{{ resource_tags | combine({'Name': payload_server_name + '-rtb'}) }}"
+        routes:
+          - dest: "0.0.0.0/0"
+            gateway_id: "{{ igw_result.gateway_id }}"
+        subnets:
+          - "{{ subnet_result.subnet.id }}"
+
+    - name: Import the deployment SSH key
+      amazon.aws.ec2_key:
+        name: "c2deploy_{{ deployment_id }}"
+        key_material: "{{ lookup('file', ssh_key_path) }}"
+        region: "{{ aws_region }}"
+        state: present
+
+    - name: Create security group for payload server
+      amazon.aws.ec2_security_group:
+        name: "{{ payload_server_name }}-sg"
+        description: "Security group for payload server {{ deployment_id }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        region: "{{ aws_region }}"
+        rules:
+          - proto: tcp
+            ports:
+              - 22
+            cidr_ip: "{{ operator_ip }}/32"
+            rule_desc: "SSH access from operator IP"
+          - proto: tcp
+            ports:
+              - 80
+              - 443
+            cidr_ip: 0.0.0.0/0
+            rule_desc: "Payload delivery"
+        rules_egress:
+          - proto: all
+            cidr_ip: 0.0.0.0/0
+        tags: "{{ resource_tags | combine({'Name': payload_server_name + '-sg'}) }}"
+        state: present
+      register: security_group
+
+    - name: Launch payload server EC2 instance
+      amazon.aws.ec2_instance:
+        name: "{{ payload_server_name }}"
+        key_name: "c2deploy_{{ deployment_id }}"
+        vpc_subnet_id: "{{ subnet_result.subnet.id }}"
+        security_groups:
+          - "{{ security_group.group_id }}"
+        instance_type: "{{ aws_instance_type | default('t3.small') }}"
+        image_id: "{{ payload_server_ami }}"
+        region: "{{ aws_region }}"
+        network:
+          assign_public_ip: true
+        wait: true
+        state: running
+        tags: "{{ resource_tags | combine({'Name': payload_server_name}) }}"
+      register: ec2_result
+
+    - name: Set payload server facts
+      set_fact:
+        payload_server_ip: "{{ ec2_result.instances[0].public_ip_address }}"
+
+    - name: Wait for SSH to be available
+      wait_for:
+        host: "{{ payload_server_ip }}"
+        port: 22
+        delay: 10
+        timeout: 300
+
+    - name: Add payload server to inventory
+      add_host:
+        name: "{{ payload_server_ip }}"
+        groups: payloadservers
+        ansible_host: "{{ payload_server_ip }}"
+        ansible_user: ubuntu
+        ansible_ssh_private_key_file: "{{ ssh_key_path | replace('.pub', '') }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes"
+        ansible_python_interpreter: /usr/bin/python3
+
+- name: Configure payload server
+  hosts: payloadservers
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Wait for the host to finish first boot
+      command: cloud-init status --wait
+      changed_when: false
+      failed_when: false
+
+    - name: Configure the payload hosting service
+      include_tasks: "{{ playbook_dir }}/../../modules/payload-server/tasks/configure_payload_server.yml"
+
+    - name: Print deployment summary
+      debug:
+        msg:
+          - "Payload server deployed: https://{{ inventory_hostname }}/"
+          - "Access details: /root/PAYLOAD_SERVER_GUIDE.txt on the server"

@@ -227,14 +227,14 @@ PROVIDER_SPECS = {
                               'attack_box': 'utils.azure_workload_adapter:azure_attack_box_adapter',
                               'redirector': 'utils.azure_workload_adapter:azure_redirector_adapter',
                               'c2': 'utils.azure_workload_adapter:azure_c2_adapter',
+                              'payload_server': 'utils.azure_workload_adapter:azure_payload_server_adapter',
                               'phantom': 'utils.azure_phantom_adapter:AzurePhantomAdapter',
                               'chat': 'utils.azure_phantom_adapter:AzurePhantomAdapter',
                           },
                           staged_routes={
                               workload: 'utils.azure_staged_adapter:azure_{0}_staged_adapter'.format(
                                   workload)
-                              for workload in (
-                                  'phishing', 'payload_server', 'webrunner')
+                              for workload in ('phishing', 'webrunner')
                           }),
 }
 

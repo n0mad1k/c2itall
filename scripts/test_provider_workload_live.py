@@ -551,7 +551,83 @@ class C2:
         return report
 
 
-WORKLOADS = {cls.name: cls for cls in (AttackBox, Redirector, C2)}
+class PayloadServer:
+    name = 'payload_server'
+    repeat = {'aws': True, 'linode': True, 'azure': True}
+    source_paths = ('modules/payload-server', 'providers/{dir}/payload_server.yml')
+
+    def config(self, provider, deployment_id, operator_ip):
+        config = {
+            'deployment_id': deployment_id, 'provider': provider,
+            'provider_workload': 'payload_server', 'deployment_type': 'secure_payload_server',
+            'payload_server_name': 'ps-' + deployment_id, 'domain': 'payload-lab.test',
+            'payload_subdomain': 'cdn', 'host_executables': True, 'host_scripts': True,
+            'host_documents': False, 'host_mobile': False, 'enable_basic_auth': True,
+            'enable_ip_filtering': True, 'enable_user_agent_filtering': True,
+            'enable_rate_limiting': True, 'auto_generate_payloads': False,
+            'auth_username': 'operator', 'auth_password': None,
+            'letsencrypt_email': 'admin@payload-lab.test', 'operator_ip': operator_ip,
+            'ssh_after_deploy': False,
+        }
+        config.update(provider_config(provider))
+        ready, _ = prepare_module_ssh_key(config, deployment_id)
+        require(ready, 'Could not generate the module SSH key')
+        return config
+
+    def identity(self, config):
+        deployment_id = config['deployment_id']
+        return {'deployment_id': deployment_id, 'names': ['ps-' + deployment_id],
+                'key_names': ['c2deploy_' + deployment_id],
+                'sg_names': ['ps-' + deployment_id + '-sg']}
+
+    def target(self, provider, config):
+        deployment_id = config['deployment_id']
+        user = {'aws': 'ubuntu', 'azure': 'azureuser'}.get(provider, 'root')
+        return 'ps-' + deployment_id, user, SSH_DIR / ('c2deploy_' + deployment_id)
+
+    def local_artifacts(self, provider, config):
+        deployment_id = config['deployment_id']
+        return key_files('c2deploy_' + deployment_id) + azure_artifacts(deployment_id)
+
+    def verify(self, context, config):
+        report = checks(context, [
+            ('nginx_active', 'test "$(systemctl is-active nginx)" = active'),
+            ('nginx_enabled', 'test "$(systemctl is-enabled nginx)" = enabled'),
+            ('https_listening', "ss -ltn | grep -q ':443 '"),
+            ('local_denied_by_allowlist',
+             'test "$(curl -ks -o /dev/null -w \'%{http_code}\' -A Mozilla/5.0 https://127.0.0.1/)" = 403'),
+            ('payload_dirs', 'sudo -n test -d /var/www/payloads/windows -a -d /var/www/payloads/scripts'),
+            ('go_donut_built', 'sudo -n test -x /root/Tools/go-donut/go-donut'),
+            ('guide', 'sudo -n test -s /root/PAYLOAD_SERVER_GUIDE.txt'),
+            ('sshd_no_password', "sudo -n /usr/sbin/sshd -T | grep -iq '^passwordauthentication no$'"),
+        ])
+        credentials = context.ssh("sudo -n sed -n 's/^Basic auth: //p' /root/PAYLOAD_SERVER_GUIDE.txt")
+        user, password = credentials.split(' / ')
+        base = ['curl', '-ks', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '20']
+        url = 'https://' + context.address + '/'
+        anonymous = context.run(base + ['-A', 'Mozilla/5.0', url])
+        require(anonymous == '401', 'Payload server did not demand basic auth: ' + anonymous)
+        authorized = context.run(base + ['-A', 'Mozilla/5.0', '-u', user + ':' + password, url])
+        require(authorized == '200', 'Payload server refused valid credentials: ' + authorized)
+        scanner = context.runner.run(base + [url], check=False)
+        require(scanner == '000', 'Payload server answered a tool user agent: ' + scanner)
+        report.update({'public_basic_auth': True, 'public_authorized': True,
+                       'tool_user_agent_dropped': True})
+        if context.provider == 'azure':
+            rules = context.cloud.inbound_rules(config['deployment_id'])
+            require(('tcp', '22', config['operator_ip'] + '/32') in rules and
+                    all(source == '*' for proto, port, source in rules if port != '22'),
+                    'Azure payload server rules are not operator-SSH plus public web: ' + str(rules))
+            report['security_group_rules'] = rules
+        if context.provider == 'aws':
+            rules = context.cloud.inbound_rules('ps-' + config['deployment_id'] + '-sg')
+            require(('tcp', 22, 22, config['operator_ip'] + '/32') in rules,
+                    'AWS payload server does not restrict SSH to the operator /32')
+            report['security_group_rules'] = rules
+        return report
+
+
+WORKLOADS = {cls.name: cls for cls in (AttackBox, Redirector, C2, PayloadServer)}
 
 
 class Context:

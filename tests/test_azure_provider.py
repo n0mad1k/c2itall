@@ -961,10 +961,10 @@ class RoutingAndTemplateTests(AzureFixture):
         validation = registry.validate_provider_registry(load_references=True)
         self.assertEqual(validation, {
             'providers': 4, 'workloads': 9, 'controllers': 9,
-            'pairs': 36, 'routes': 29, 'staged_routes': 3,
+            'pairs': 36, 'routes': 30, 'staged_routes': 2,
             'counts': {
-                'native': 6, 'transition': 23,
-                'legacy_fallback': 0, 'staged': 3, 'unsupported': 4,
+                'native': 7, 'transition': 23,
+                'legacy_fallback': 0, 'staged': 2, 'unsupported': 4,
             },
         })
         rows = registry.provider_support_matrix()
@@ -973,7 +973,8 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertEqual(
             {workload for provider, workload in lookup
              if provider == 'azure' and lookup[(provider, workload)] == 'native'},
-            {'infrastructure', 'attack_box', 'phantom', 'chat', 'redirector', 'c2'})
+            {'infrastructure', 'attack_box', 'phantom', 'chat', 'redirector', 'c2',
+             'payload_server'})
         self.assertEqual(
             {workload for provider, workload in lookup
              if provider == 'azure' and
@@ -983,7 +984,7 @@ class RoutingAndTemplateTests(AzureFixture):
             {workload for provider, workload in lookup
              if provider == 'azure' and
              lookup[(provider, workload)] == 'staged'},
-            {'phishing', 'payload_server', 'webrunner'})
+            {'phishing', 'webrunner'})
         self.assertEqual(lookup[('aws', 'c2')], 'transition')
         self.assertEqual(lookup[('linode', 'attack_box')], 'transition')
         self.assertEqual(lookup[('flokinet', 'attack_box')], 'unsupported')
@@ -1014,7 +1015,7 @@ class RoutingAndTemplateTests(AzureFixture):
                 contextlib.redirect_stderr(error):
             self.assertEqual(module.main(['--require-provider', 'azure']), 1)
             self.assertIn(
-                'staged (disabled): phishing, payload_server, webrunner',
+                'staged (disabled): phishing, webrunner',
                 error.getvalue())
             self.assertIn(
                 'partial: attack_box (missing kali, parrot, ubuntu)',
@@ -1085,7 +1086,7 @@ class RoutingAndTemplateTests(AzureFixture):
     def test_azure_staged_routes_prepare_but_cannot_deploy(self):
         from utils import azure_staged_adapter, azure_utils
 
-        staged = {'phishing', 'payload_server', 'webrunner'}
+        staged = {'phishing', 'webrunner'}
         dispatcher = registry.provider_dispatcher('azure')
         self.assertEqual(dispatcher.spec.staged_capabilities, staged)
         for workload in staged:
@@ -1653,6 +1654,34 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertEqual(adapter.inventory_group, 'c2servers')
         self.assertTrue(
             deployment_engine.determine_playbook(config).endswith('providers/Azure/c2.yml'))
+
+    def test_azure_payload_server_adapter_hosts_publicly_with_operator_ssh(self):
+        from utils.azure_workload_adapter import AzurePayloadServerAdapter
+
+        adapter = registry.provider_dispatcher('azure').route('payload_server')
+        self.assertIsInstance(adapter, AzurePayloadServerAdapter)
+        config = {
+            'provider': 'azure', 'provider_workload': 'payload_server',
+            'deployment_id': 'test-azure', 'deployment_type': 'secure_payload_server',
+            'domain': 'payload-lab.test', 'enable_basic_auth': True,
+            'auth_password': None, 'azure_subscription_id': smoke.SUBSCRIPTION,
+            'azure_location': 'eastus', 'azure_vm_size': smoke.SIZE,
+            'operator_ip': '8.8.8.8', 'azure_state_dir': str(self.state_dir),
+        }
+        infrastructure = adapter._infrastructure_config(config)
+        self.assertEqual(
+            [(rule['port'], rule['source']) for rule in infrastructure['azure_inbound_rules']],
+            [(80, '*'), (443, '*')])
+        self.assertNotIn('azure_image', infrastructure)
+        with self.assertRaisesRegex(ValueError, 'domain'):
+            adapter._infrastructure_config({**config, 'domain': ''})
+        service_vars = adapter._service_variables({**config, 'payload_server_ip': '1.1.1.1'})
+        self.assertNotIn('auth_password', service_vars)
+        self.assertTrue(service_vars['enable_basic_auth'])
+        self.assertEqual(adapter.inventory_group, 'payloadservers')
+        self.assertTrue(
+            deployment_engine.determine_playbook(config).endswith(
+                'providers/Azure/payload_server.yml'))
 
     def test_azure_single_vm_base_exposes_a_workload_only_extension_point(self):
         from utils.azure_workload_adapter import AzureSingleVmWorkloadAdapter
