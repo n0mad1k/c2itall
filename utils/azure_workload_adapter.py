@@ -161,12 +161,13 @@ class AzureSingleVmWorkloadAdapter(WorkloadAdapter):
         return True
 
     def deploy(self, config):
+        infrastructure = None
         try:
             infrastructure = self._infrastructure_config(config)
             azure_utils.prepare_state(infrastructure)
             azure_utils.prepare_ssh_key(infrastructure)
             if not azure_utils.deploy_azure(infrastructure):
-                return False
+                return self._recover(config, infrastructure)
             state = azure_utils.load_state(
                 infrastructure['deployment_id'], config.get('azure_state_dir'))
             address = state.get('outputs', {}).get('public_ip', {}).get('value', '')
@@ -179,13 +180,31 @@ class AzureSingleVmWorkloadAdapter(WorkloadAdapter):
                            'ssh_user': 'azureuser',
                            'ssh_key': infrastructure['ssh_private_key_path']})
             if not self._run_service_playbook(config):
-                return False
+                return self._recover(config, infrastructure)
             from .deployment_engine import save_deployment_info
             save_deployment_info(config)
             return True
-        except (Exception, KeyboardInterrupt) as exc:
-            logging.error('Azure %s deployment failed: %s', self._label(), exc)
+        except KeyboardInterrupt:
+            logging.error('Azure %s deployment interrupted; recovery state retained',
+                          self._label())
             return False
+        except Exception as exc:
+            logging.error('Azure %s deployment failed: %s', self._label(), exc)
+            return self._recover(config, infrastructure)
+
+    def _recover(self, config, infrastructure):
+        """Match the legacy route: verified cleanup before reporting failure."""
+        if infrastructure is None:
+            return False
+        logging.warning('Deployment failed; attempting verified provider cleanup')
+        cleanup = dict(config, deployment_id=infrastructure['deployment_id'])
+        for key in ('azure_state_dir', 'azure_subscription_id', 'azure_resource_group'):
+            if key in infrastructure:
+                cleanup[key] = infrastructure[key]
+        if not self.cleanup(cleanup):
+            logging.error(
+                'Failed deployment cleanup was not verified; retain recovery data')
+        return False
 
     def cleanup(self, config):
         cleanup = {'deployment_id': config['deployment_id']}

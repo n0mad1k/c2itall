@@ -1833,6 +1833,48 @@ class RoutingAndTemplateTests(AzureFixture):
         with self.assertRaisesRegex(TypeError, 'metadata is incomplete'):
             IncompleteAdapter().playbook(config)
 
+    def test_azure_single_vm_failure_enters_verified_cleanup(self):
+        from utils import azure_workload_adapter
+
+        adapter = azure_workload_adapter.AzureAttackBoxAdapter()
+        with tempfile.TemporaryDirectory() as temp:
+            key = Path(temp) / 'c2deploy_ab'
+            key.write_text('unit-test-private-key')
+            Path(str(key) + '.pub').write_text('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest test')
+            config = {
+                'provider': 'azure', 'provider_workload': 'attack_box',
+                'deployment_id': 'ab', 'deployment_type': 'quick_recon_box', 'attack_box_type': 'quick_recon',
+                'azure_subscription_id': smoke.SUBSCRIPTION, 'operator_ip': '8.8.8.8',
+                'ssh_key_path': str(key) + '.pub', 'ssh_private_key_path': str(key),
+                'azure_state_dir': temp,
+            }
+            with mock.patch.object(azure, 'prepare_state'), \
+                    mock.patch.object(azure, 'prepare_ssh_key'), \
+                    mock.patch.object(azure, 'deploy_azure', return_value=True), \
+                    mock.patch.object(azure, 'load_state', return_value={
+                        'outputs': {'public_ip': {'value': '8.8.8.8'}}}), \
+                    mock.patch.object(azure_workload_adapter.AzureSingleVmWorkloadAdapter,
+                                      '_run_service_playbook', return_value=False), \
+                    mock.patch.object(azure_workload_adapter.AzureSingleVmWorkloadAdapter,
+                                      'cleanup', return_value=True) as cleanup, \
+                    self.assertLogs(level='WARNING') as logs:
+                self.assertFalse(adapter.deploy(config))
+            self.assertEqual(cleanup.call_count, 1)
+            recovered = cleanup.call_args.args[0]
+            self.assertEqual(recovered['deployment_id'], 'ab')
+            self.assertEqual(recovered['azure_resource_group'], 'c2itall-ab')
+            self.assertEqual(recovered['azure_state_dir'], temp)
+            self.assertIn('verified provider cleanup', logs.output[0])
+
+            with mock.patch.object(azure, 'prepare_state'), \
+                    mock.patch.object(azure, 'prepare_ssh_key'), \
+                    mock.patch.object(azure, 'deploy_azure', side_effect=KeyboardInterrupt), \
+                    mock.patch.object(azure_workload_adapter.AzureSingleVmWorkloadAdapter,
+                                      'cleanup') as cleanup, \
+                    self.assertLogs(level='ERROR'):
+                self.assertFalse(adapter.deploy(dict(config)))
+            cleanup.assert_not_called()
+
     def test_azure_service_playbook_failure_keeps_its_log(self):
         from utils.azure_workload_adapter import AzureSingleVmWorkloadAdapter
 
