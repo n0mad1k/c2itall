@@ -20,6 +20,7 @@ class AzureSingleVmWorkloadAdapter(WorkloadAdapter):
     playbook_name = None
     service_log_suffix = None
     service_config_keys = ()
+    inventory_group = None
     manages_ssh_key = True
 
     def gather_config(self):
@@ -125,9 +126,15 @@ class AzureSingleVmWorkloadAdapter(WorkloadAdapter):
             variables = Path(temporary) / 'variables.json'
             variables.write_text(json.dumps(service_vars))
             variables.chmod(0o600)
+            inventory = str(address) + ','
+            if self.inventory_group:
+                # Shared service tasks classify hosts by their legacy group name.
+                inventory = str(Path(temporary) / 'inventory.ini')
+                Path(inventory).write_text(
+                    '[' + self.inventory_group + ']\n' + str(address) + '\n')
             result = azure_utils.run_command([
                 'ansible-playbook', self.playbook(config),
-                '-i', str(address) + ',', '-u', 'azureuser',
+                '-i', inventory, '-u', 'azureuser',
                 '--private-key', str(private_key),
                 '--extra-vars', '@' + str(variables),
             ], timeout=1800, deadline=deadline)
@@ -213,3 +220,48 @@ class AzureAttackBoxAdapter(AzureSingleVmWorkloadAdapter):
 
 def azure_attack_box_adapter():
     return AzureAttackBoxAdapter()
+
+
+class AzureRedirectorAdapter(AzureSingleVmWorkloadAdapter):
+    """Provision and configure an Azure redirector that fronts an operator backend."""
+
+    workload = 'redirector'
+    address_key = 'redirector_ip'
+    playbook_name = 'redirector.yml'
+    service_log_suffix = 'redirector'
+    inventory_group = 'redirectors'
+    service_config_keys = (
+        'redirector_name', 'domain', 'redirector_subdomain', 'backend_type',
+        'backend_ip', 'backend_port', 'redirector_type', 'letsencrypt_email',
+        'operator_ip', 'redirector_ip', 'c2_ip', 'shell_handler_port',
+        'havoc_teamserver_port', 'havoc_http_port', 'havoc_https_port',
+        'zero_logs', 'randomize_ports', 'legitimate_redirect',
+        'allowed_referrers',
+    )
+
+    def _validate_workload(self, config):
+        if not config.get('domain'):
+            raise ValueError('Azure redirector requires a domain')
+        backend = config.get('backend_ip') or config['operator_ip']
+        if ipaddress.ip_address(str(backend).removesuffix('/32')).version != 4:
+            raise ValueError('Azure redirector backend must be an IPv4 address')
+
+    def _inbound_rules(self, config):
+        return [
+            {'name': 'http', 'protocol': 'Tcp', 'port': 80, 'source': '*'},
+            {'name': 'https', 'protocol': 'Tcp', 'port': 443, 'source': '*'},
+            {'name': 'shell-handler', 'protocol': 'Tcp',
+             'port': int(config.get('shell_handler_port') or 4488),
+             'source': '*'},
+        ]
+
+    def _service_variables(self, config):
+        variables = super()._service_variables(config)
+        backend = config.get('backend_ip') or config['operator_ip']
+        variables.setdefault('c2_ip', str(backend).removesuffix('/32'))
+        variables.setdefault('shell_handler_port', 4488)
+        return variables
+
+
+def azure_redirector_adapter():
+    return AzureRedirectorAdapter()

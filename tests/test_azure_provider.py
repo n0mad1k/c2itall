@@ -958,10 +958,10 @@ class RoutingAndTemplateTests(AzureFixture):
         validation = registry.validate_provider_registry(load_references=True)
         self.assertEqual(validation, {
             'providers': 4, 'workloads': 9, 'controllers': 9,
-            'pairs': 36, 'routes': 27, 'staged_routes': 5,
+            'pairs': 36, 'routes': 28, 'staged_routes': 4,
             'counts': {
-                'native': 4, 'transition': 23,
-                'legacy_fallback': 0, 'staged': 5, 'unsupported': 4,
+                'native': 5, 'transition': 23,
+                'legacy_fallback': 0, 'staged': 4, 'unsupported': 4,
             },
         })
         rows = registry.provider_support_matrix()
@@ -970,7 +970,7 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertEqual(
             {workload for provider, workload in lookup
              if provider == 'azure' and lookup[(provider, workload)] == 'native'},
-            {'infrastructure', 'attack_box', 'phantom', 'chat'})
+            {'infrastructure', 'attack_box', 'phantom', 'chat', 'redirector'})
         self.assertEqual(
             {workload for provider, workload in lookup
              if provider == 'azure' and
@@ -980,7 +980,7 @@ class RoutingAndTemplateTests(AzureFixture):
             {workload for provider, workload in lookup
              if provider == 'azure' and
              lookup[(provider, workload)] == 'staged'},
-            {'c2', 'redirector', 'phishing', 'payload_server', 'webrunner'})
+            {'c2', 'phishing', 'payload_server', 'webrunner'})
         self.assertEqual(lookup[('aws', 'c2')], 'transition')
         self.assertEqual(lookup[('linode', 'attack_box')], 'transition')
         self.assertEqual(lookup[('flokinet', 'attack_box')], 'unsupported')
@@ -1011,8 +1011,8 @@ class RoutingAndTemplateTests(AzureFixture):
                 contextlib.redirect_stderr(error):
             self.assertEqual(module.main(['--require-provider', 'azure']), 1)
             self.assertIn(
-                'staged (disabled): c2, redirector, phishing, '
-                'payload_server, webrunner', error.getvalue())
+                'staged (disabled): c2, phishing, payload_server, webrunner',
+                error.getvalue())
             self.assertIn(
                 'partial: attack_box (missing kali, parrot, ubuntu)',
                 error.getvalue())
@@ -1082,7 +1082,7 @@ class RoutingAndTemplateTests(AzureFixture):
     def test_azure_staged_routes_prepare_but_cannot_deploy(self):
         from utils import azure_staged_adapter, azure_utils
 
-        staged = {'c2', 'redirector', 'phishing', 'payload_server', 'webrunner'}
+        staged = {'c2', 'phishing', 'payload_server', 'webrunner'}
         dispatcher = registry.provider_dispatcher('azure')
         self.assertEqual(dispatcher.spec.staged_capabilities, staged)
         for workload in staged:
@@ -1516,6 +1516,66 @@ class RoutingAndTemplateTests(AzureFixture):
                 mock.patch.object(cleanup_engine, 'archive_deployment_logs') as archive:
             self.assertTrue(adapter.cleanup(config))
         archive.assert_called_once_with('test-azure')
+
+    def test_azure_redirector_adapter_fronts_backend_with_public_web_rules(self):
+        from utils.azure_workload_adapter import (
+            AzureRedirectorAdapter, azure_redirector_adapter,
+        )
+
+        adapter = azure_redirector_adapter()
+        self.assertIsInstance(adapter, AzureRedirectorAdapter)
+        self.assertIs(registry.provider_dispatcher('azure').route('redirector').__class__,
+                      AzureRedirectorAdapter)
+        self.assertIn('azure', provider_utils.available_providers(
+            'redirector', legacy_fallback=True))
+        config = {
+            'provider': 'azure', 'provider_workload': 'redirector',
+            'deployment_id': 'test-azure', 'deployment_type': 'c2_redirector',
+            'redirector_only': True, 'domain': 'redirector-lab.test',
+            'redirector_subdomain': 'cdn', 'backend_type': 'c2',
+            'backend_ip': '9.9.9.9', 'backend_port': '443',
+            'azure_subscription_id': smoke.SUBSCRIPTION,
+            'azure_location': 'eastus', 'azure_vm_size': smoke.SIZE,
+            'operator_ip': '8.8.8.8', 'azure_state_dir': str(self.state_dir),
+            'linode_token': 'excluded',
+        }
+        infrastructure = adapter._infrastructure_config(config)
+        self.assertEqual(
+            [(rule['port'], rule['source']) for rule in infrastructure['azure_inbound_rules']],
+            [(80, '*'), (443, '*'), (4488, '*')])
+        self.assertEqual(
+            azure.validate_config(infrastructure, require_key=False)['operator_ip'],
+            '8.8.8.8/32')
+        with self.assertRaisesRegex(ValueError, 'domain'):
+            adapter._infrastructure_config({**config, 'domain': ''})
+        with self.assertRaisesRegex(ValueError, 'IPv4'):
+            adapter._infrastructure_config({**config, 'backend_ip': '2001:db8::1'})
+        self.assertEqual(
+            adapter.playbook(config), str(ROOT / 'providers/Azure/redirector.yml'))
+        self.assertEqual(adapter.inventory_group, 'redirectors')
+        service_vars = adapter._service_variables({**config, 'redirector_ip': '1.1.1.1'})
+        self.assertNotIn('linode_token', service_vars)
+        self.assertEqual(service_vars['c2_ip'], '9.9.9.9')
+        self.assertEqual(service_vars['shell_handler_port'], 4488)
+        self.assertEqual(service_vars['redirector_ip'], '1.1.1.1')
+        self.assertEqual(
+            adapter._service_variables({**config, 'backend_ip': ''})['c2_ip'],
+            '8.8.8.8')
+
+        state = dict(azure.validate_config(infrastructure, require_key=False),
+                     outputs={'public_ip': {'value': '1.1.1.1'}})
+        with mock.patch.object(azure, 'prepare_state'), mock.patch.object(
+                azure, 'prepare_ssh_key'), mock.patch.object(
+                    azure, 'deploy_azure', return_value=True), mock.patch.object(
+                        azure, 'load_state', return_value=state), mock.patch.object(
+                            adapter, '_run_service_playbook', return_value=True) as service, \
+                mock.patch.object(deployment_engine, 'save_deployment_info'):
+            self.assertTrue(adapter.deploy(config))
+        service.assert_called_once_with(config)
+        self.assertEqual(config['redirector_ip'], '1.1.1.1')
+        self.assertTrue(
+            deployment_engine.determine_playbook(config).endswith(
+                'providers/Azure/redirector.yml'))
 
     def test_azure_single_vm_base_exposes_a_workload_only_extension_point(self):
         from utils.azure_workload_adapter import AzureSingleVmWorkloadAdapter

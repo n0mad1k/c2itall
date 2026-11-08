@@ -40,6 +40,12 @@ CREDENTIAL_ENVIRONMENT = ('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY',
 SECRET_FRAGMENTS = ('token', 'secret', 'pass', 'access_key')
 LINODE_API = 'https://api.linode.com/v4'
 SSH_DIR = Path.home() / '.ssh'
+# Never fails; records why an sshd check could fail without a second deployment.
+SSHD_DIAGNOSTICS = (
+    "sudo -n /usr/sbin/sshd -T 2>&1 | grep -i '^passwordauthentication'; "
+    "grep -n -i 'passwordauthentication\\|^include' /etc/ssh/sshd_config; "
+    "ls -la /etc/ssh/sshd_config.d/ 2>&1; "
+    "sudo -n sh -c 'head -20 /etc/ssh/sshd_config.d/*.conf' 2>&1; true")
 
 
 class LiveError(RuntimeError):
@@ -561,6 +567,7 @@ def activate(provider, workload_name, operator_ip=None, repeat=None):
         require(key.is_file(), 'Expected SSH key is missing: ' + str(key))
         address = cloud.address(identity, name)
         context = Context(runner, cloud, provider, address, user, key)
+        runner.record('host-diagnostics.json', {'sshd': context.ssh(SSHD_DIAGNOSTICS)})
         service = workload.verify(context, config)
         runner.record('first-deployment.json', {'cloud': first, 'address': address, 'service': service})
 
