@@ -190,7 +190,7 @@
     content: |
       passdb {
         driver = passwd-file
-        args = scheme=sha512_crypt /etc/dovecot/passwd
+        args = scheme=SHA512-CRYPT /etc/dovecot/passwd
       }
       
       userdb {
