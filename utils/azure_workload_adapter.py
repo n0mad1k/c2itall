@@ -163,8 +163,11 @@ class AzureSingleVmWorkloadAdapter(WorkloadAdapter):
     def deploy(self, config):
         infrastructure = None
         try:
-            infrastructure = self._infrastructure_config(config)
-            azure_utils.prepare_state(infrastructure)
+            planned = self._infrastructure_config(config)
+            # Recovery may only retire state this call created; a conflict
+            # with an existing deployment must leave that deployment alone.
+            azure_utils.prepare_state(planned)
+            infrastructure = planned
             azure_utils.prepare_ssh_key(infrastructure)
             if not azure_utils.deploy_azure(infrastructure):
                 return self._recover(config, infrastructure)

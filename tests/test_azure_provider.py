@@ -1145,10 +1145,19 @@ class RoutingAndTemplateTests(AzureFixture):
                 keys.reset_mock()
                 self.assertTrue(adapter.cleanup({'deployment_id': 'ph-gophish', 'azure_state_dir': temp,
                                                  'azure_resource_group': 'c2itall-ph-gophish',
+                                                 'ownership_marker': 'state-only',
                                                  'ssh_key_path': str(key)}))
                 self.assertEqual(cleanup.call_args_list,
                                  [mock.call({'deployment_id': 'ph-gophish', 'azure_state_dir': temp})])
                 keys.assert_not_called()
+                cleanup.reset_mock()
+                # A deployed component copies its resource group into the shared
+                # config; that record-like config still retires every component.
+                self.assertTrue(adapter.cleanup({'deployment_id': 'ph', 'azure_state_dir': temp,
+                                                 'azure_resource_group': 'c2itall-ph-mta',
+                                                 'ssh_key_path': str(key), 'preserve_local_keys': True}))
+                self.assertEqual([call.args[0]['deployment_id'] for call in cleanup.call_args_list],
+                                 ['ph-mta', 'ph-gophish'])
 
             # A failed component enters verified cleanup instead of leaving half a deployment.
             with mock.patch.object(azure, 'prepare_state'), \
@@ -1159,9 +1168,18 @@ class RoutingAndTemplateTests(AzureFixture):
                     mock.patch.object(azure_workload_adapter.AzureSingleVmWorkloadAdapter,
                                       '_run_service_playbook', return_value=True), \
                     mock.patch.object(deployment_engine, 'save_deployment_info'), \
-                    mock.patch.object(adapter, 'cleanup', return_value=True) as partial:
-                self.assertFalse(adapter.deploy(dict(config)))
-            self.assertTrue(partial.call_args.args[0]['preserve_local_keys'])
+                    mock.patch.object(azure, 'list_states', return_value=states), \
+                    mock.patch.object(azure, 'cleanup_azure', return_value=True) as cleanup, \
+                    mock.patch.object(cleanup_engine, 'cleanup_ssh_keys_for_deployment') as keys, \
+                    mock.patch.object(cleanup_engine, 'archive_deployment_logs'), \
+                    self.assertLogs(level='ERROR'):
+                shared = dict(config)
+                self.assertFalse(adapter.deploy(shared))
+            # The MTA front copied its resource group into the shared config
+            # before GoPhish failed; the deployed MTA must still be retired.
+            self.assertEqual(shared['azure_resource_group'], 'c2itall-ph-mta')
+            self.assertIn('ph-mta', [call.args[0]['deployment_id'] for call in cleanup.call_args_list])
+            keys.assert_not_called()
 
     def test_workload_catalog_matches_provider_backed_controllers(self):
         expected = {
@@ -1406,6 +1424,7 @@ class RoutingAndTemplateTests(AzureFixture):
                     mock.patch.object(cleanup_engine, 'archive_deployment_logs'):
                 self.assertTrue(adapter.cleanup({'deployment_id': 'x-n01', 'azure_state_dir': temp,
                                                  'azure_resource_group': 'c2itall-x-n01',
+                                                 'ownership_marker': 'state-only',
                                                  'ssh_key_path': config['ssh_key_path']}))
                 self.assertEqual(cleanup.call_args_list,
                                  [mock.call({'deployment_id': 'x-n01', 'azure_state_dir': temp})])
@@ -1874,6 +1893,32 @@ class RoutingAndTemplateTests(AzureFixture):
                     self.assertLogs(level='ERROR'):
                 self.assertFalse(adapter.deploy(dict(config)))
             cleanup.assert_not_called()
+
+    def test_azure_state_conflict_leaves_existing_deployment_alone(self):
+        from utils import azure_workload_adapter
+
+        adapter = azure_workload_adapter.AzureAttackBoxAdapter()
+        with tempfile.TemporaryDirectory() as temp:
+            key = Path(temp) / 'c2deploy_ab'
+            key.write_text('unit-test-private-key')
+            Path(str(key) + '.pub').write_text('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest test')
+            config = {
+                'provider': 'azure', 'provider_workload': 'attack_box',
+                'deployment_id': 'ab', 'deployment_type': 'quick_recon_box', 'attack_box_type': 'quick_recon',
+                'azure_subscription_id': smoke.SUBSCRIPTION, 'operator_ip': '8.8.8.8',
+                'ssh_key_path': str(key) + '.pub', 'ssh_private_key_path': str(key),
+                'azure_state_dir': temp,
+            }
+            with mock.patch.object(azure, 'prepare_state',
+                                   side_effect=ValueError('conflicts with deployment ab')), \
+                    mock.patch.object(azure, 'deploy_azure') as deploy, \
+                    mock.patch.object(azure_workload_adapter.AzureSingleVmWorkloadAdapter,
+                                      'cleanup') as cleanup, \
+                    self.assertLogs(level='ERROR') as logs:
+                self.assertFalse(adapter.deploy(config))
+            deploy.assert_not_called()
+            cleanup.assert_not_called()
+            self.assertIn('conflicts with deployment ab', logs.output[0])
 
     def test_azure_service_playbook_failure_keeps_its_log(self):
         from utils.azure_workload_adapter import AzureSingleVmWorkloadAdapter

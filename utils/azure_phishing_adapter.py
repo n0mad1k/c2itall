@@ -103,8 +103,10 @@ class AzurePhishingAdapter(WorkloadAdapter):
 
     def cleanup(self, config):
         wanted = config['deployment_id']
-        # A component state cleans itself; the deployment record retires every component.
-        ids = {wanted} if 'azure_resource_group' in config else {
+        # Only a component's own state carries an ownership marker and cleans
+        # itself; a record or module config retires every component, even
+        # after a deployed component copied its resource group into it.
+        ids = {wanted} if 'ownership_marker' in config else {
             wanted + '-' + component for component in COMPONENTS}
         verified = True
         for state in azure_utils.list_states(config.get('azure_state_dir')):
@@ -118,7 +120,7 @@ class AzurePhishingAdapter(WorkloadAdapter):
         if not verified:
             return False
         from .cleanup_engine import archive_deployment_logs, cleanup_ssh_keys_for_deployment
-        if not config.get('preserve_local_keys') and 'azure_resource_group' not in config:
+        if not config.get('preserve_local_keys') and 'ownership_marker' not in config:
             cleanup_ssh_keys_for_deployment(wanted, config.get('ssh_key_path'))
         archive_deployment_logs(wanted)
         return True

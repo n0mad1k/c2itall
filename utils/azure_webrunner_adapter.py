@@ -110,8 +110,8 @@ class AzureWebrunnerAdapter(WorkloadAdapter):
         if not self._remove_nodes(config):
             return False
         from .cleanup_engine import archive_deployment_logs, cleanup_ssh_keys_for_deployment
-        if not config.get('preserve_local_keys') and 'azure_resource_group' not in config:
-            # Only the composite record retires the key every provider's nodes share.
+        if not config.get('preserve_local_keys') and 'ownership_marker' not in config:
+            # Only the composite record, never a node state, retires the shared key.
             cleanup_ssh_keys_for_deployment(config['deployment_id'], config.get('ssh_key_path'))
         archive_deployment_logs(config['deployment_id'])
         return True
