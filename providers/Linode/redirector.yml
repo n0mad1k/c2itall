@@ -16,6 +16,10 @@
       set_fact:
         redirector_name: "{{ redirector_name | default('r-' + deployment_id) }}"
 
+    - name: Resolve the backend the redirector proxies to
+      set_fact:
+        c2_ip: "{{ (backend_ip | default(c2_ip, true) | default(operator_ip, true) | default('127.0.0.1', true)) | regex_replace('/32$', '') }}"
+
     - name: Validate required Linode token
       assert:
         that:

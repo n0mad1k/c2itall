@@ -263,7 +263,7 @@ class AzureRedirectorAdapter(AzureSingleVmWorkloadAdapter):
     inventory_group = 'redirectors'
     service_config_keys = (
         'redirector_name', 'domain', 'redirector_subdomain', 'backend_type',
-        'backend_ip', 'backend_port', 'redirector_type', 'letsencrypt_email',
+        'backend_ip', 'redirector_type', 'letsencrypt_email',
         'operator_ip', 'redirector_ip', 'c2_ip', 'shell_handler_port',
         'havoc_teamserver_port', 'havoc_http_port', 'havoc_https_port',
         'zero_logs', 'randomize_ports', 'legitimate_redirect',

@@ -147,6 +147,11 @@
         redirector_vpc_id: "{{ vpc_result.vpc.id }}"  # Store for cleanup reference
       when: not (use_shared_infra | bool and infra_state_file.stat.exists | default(false))
 
+    - name: Use the backend address supplied by the redirector module
+      set_fact:
+        c2_ip: "{{ backend_ip | regex_replace('/32$', '') }}"
+      when: backend_ip is defined and backend_ip | length > 0
+
     - name: Set default c2_ip for redirector-only deployments
       set_fact:
         c2_ip: "{{ operator_ip }}"

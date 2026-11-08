@@ -68,28 +68,11 @@ def gather_redirector_parameters():
             print(f"{COLORS['RED']}Backend server IP is required{COLORS['RESET']}")
             return None
         config['backend_ip'] = backend_ip
-        
-        backend_port = input(f"Backend {backend_type} server port [default: 443]: ") or "443"
-        config['backend_port'] = backend_port
     
-    # Redirector type
-    print(f"\n{COLORS['BLUE']}Redirector Type:{COLORS['RESET']}")
-    print(f"1) HTTPS Redirector")
-    print(f"2) DNS Redirector")
-    print(f"3) SMTP Redirector")
-    
-    redirector_choice = input("Select redirector type [default: 1]: ") or "1"
-    redirector_types = {
-        "1": "https",
-        "2": "dns", 
-        "3": "smtp"
-    }
-    config['redirector_type'] = redirector_types.get(redirector_choice, "https")
-    
-    # Email for Let's Encrypt (for HTTPS redirectors)
-    if config['redirector_type'] == 'https':
-        default_email = f"admin@{config['domain']}"
-        config['letsencrypt_email'] = input(f"Email for Let's Encrypt [default: {default_email}]: ") or default_email
+    # Every redirector is the nginx HTTPS proxy the provider plays configure.
+    config['redirector_type'] = 'https'
+    default_email = f"admin@{config['domain']}"
+    config['letsencrypt_email'] = input(f"Email for Let's Encrypt [default: {default_email}]: ") or default_email
     
     # Get operator IP for security
     suggested_ip = get_public_ip()
@@ -121,8 +104,6 @@ def redirector_menu():
         print(f"2) HTTPS Redirector {COLORS['GRAY']}(Web traffic redirection){COLORS['RESET']}")
         print(f"3) Payload Redirector {COLORS['GRAY']}(Payload delivery redirection){COLORS['RESET']}")
         print(f"4) Phishing Redirector {COLORS['GRAY']}(Phishing traffic redirection){COLORS['RESET']}")
-        print(f"5) DNS Redirector {COLORS['GRAY']}(DNS-based redirection){COLORS['RESET']}")
-        print(f"6) SMTP Redirector {COLORS['GRAY']}(Email traffic redirection){COLORS['RESET']}")
         print(f"99) Return to Main Menu")
         
         choice = input(f"\nSelect an option: ")
@@ -135,10 +116,6 @@ def redirector_menu():
             deploy_payload_redirector()
         elif choice == "4":
             deploy_phishing_redirector()
-        elif choice == "5":
-            deploy_dns_redirector()
-        elif choice == "6":
-            deploy_smtp_redirector()
         elif choice == "99":
             return
         else:
@@ -155,30 +132,6 @@ def deploy_https_redirector():
     config['deployment_type'] = 'https_redirector'
     
     print(f"\n{COLORS['GREEN']}Deploying HTTPS redirector...{COLORS['RESET']}")
-    execute_redirector_deployment(config)
-
-def deploy_dns_redirector():
-    """Deploy DNS redirector"""
-    config = gather_redirector_parameters()
-    if not config:
-        return
-    
-    config['redirector_type'] = 'dns'
-    config['deployment_type'] = 'dns_redirector'
-    
-    print(f"\n{COLORS['GREEN']}Deploying DNS redirector...{COLORS['RESET']}")
-    execute_redirector_deployment(config)
-
-def deploy_smtp_redirector():
-    """Deploy SMTP redirector"""
-    config = gather_redirector_parameters()
-    if not config:
-        return
-    
-    config['redirector_type'] = 'smtp'
-    config['deployment_type'] = 'smtp_redirector'
-    
-    print(f"\n{COLORS['GREEN']}Deploying SMTP redirector...{COLORS['RESET']}")
     execute_redirector_deployment(config)
 
 def deploy_payload_redirector():

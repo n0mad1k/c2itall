@@ -1655,7 +1655,7 @@ class RoutingAndTemplateTests(AzureFixture):
             'deployment_id': 'test-azure', 'deployment_type': 'c2_redirector',
             'redirector_only': True, 'domain': 'redirector-lab.test',
             'redirector_subdomain': 'cdn', 'backend_type': 'c2',
-            'backend_ip': '9.9.9.9', 'backend_port': '443',
+            'backend_ip': '9.9.9.9',
             'azure_subscription_id': smoke.SUBSCRIPTION,
             'azure_location': 'eastus', 'azure_vm_size': smoke.SIZE,
             'operator_ip': '8.8.8.8', 'azure_state_dir': str(self.state_dir),

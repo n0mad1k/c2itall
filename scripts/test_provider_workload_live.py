@@ -457,7 +457,7 @@ class Redirector:
             'deployment_id': deployment_id, 'provider': provider,
             'provider_workload': 'redirector', 'domain': 'redirector-lab.test',
             'redirector_subdomain': 'cdn', 'backend_type': 'c2',
-            'backend_ip': operator_ip, 'backend_port': '443',
+            'backend_ip': operator_ip,
             'redirector_type': 'https', 'letsencrypt_email': 'admin@redirector-lab.test',
             'operator_ip': operator_ip, 'ssh_after_deploy': False,
             'deployment_type': 'c2_redirector', 'redirector_only': True,
