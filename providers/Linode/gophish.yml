@@ -109,6 +109,8 @@
           set_fact:
             deployment_region: "{{ item }}"
           loop: "{{ fallback_regions }}"
+          loop_control:
+            extended: true
           when: gophish_instance.results is defined and gophish_instance.results[ansible_loop.index0] is defined and not gophish_instance.results[ansible_loop.index0].failed
 
         - name: Fail if all regions are restricted

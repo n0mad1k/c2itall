@@ -313,6 +313,12 @@
     mode: '0700'
   when: zero_logs | default(false) | bool
 
+- name: Ensure cron is installed for log cleaning
+  apt:
+    name: cron
+    state: present
+  when: zero_logs | default(false) | bool
+
 - name: Create cron job for log cleaning if enabled
   cron:
     name: "Clean operational logs"
