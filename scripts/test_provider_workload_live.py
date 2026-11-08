@@ -705,6 +705,11 @@ def activate(provider, workload_name, operator_ip=None, repeat=None):
     live_passed = cleanup_passed = deployed = False
     failure = None
     try:
+        # The project venv carries Ansible plus the AWS and Linode SDKs its
+        # controller lookups import; prefer it over a system ansible-playbook.
+        venv_bin = Path(sys.executable).parent
+        if (venv_bin / 'ansible-playbook').is_file():
+            os.environ['PATH'] = str(venv_bin) + os.pathsep + os.environ.get('PATH', '')
         for executable in ('ansible-playbook', 'ssh', 'ssh-keygen', 'curl', 'git'):
             require(shutil.which(executable), 'Required tool unavailable: ' + executable)
         runner.record('source.json', {'commit': verify_committed_source(runner, provider, workload)})
