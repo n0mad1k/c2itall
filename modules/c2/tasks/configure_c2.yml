@@ -340,7 +340,12 @@
               User {{ ssh_user | default('root') }}
               IdentityFile /root/.ssh/redirector_key
               StrictHostKeyChecking no
-  when: not (redirector_only | default(false) | bool) and redirector_ip is defined
+  # A C2-only deployment points redirector_ip at the operator for its firewall
+  # rules; there is no redirector host to hand a key to or reach over SSH.
+  when:
+    - not (redirector_only | default(false) | bool)
+    - not (c2_only | default(false) | bool)
+    - redirector_ip is defined
 
 # Include integrated tracker tasks if requested
 - name: Include integrated tracker setup
