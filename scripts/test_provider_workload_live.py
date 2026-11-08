@@ -321,6 +321,15 @@ def provider_config(provider):
     }
 
 
+def checks(context, items, timeout=90):
+    """Run named host checks; the first failure names itself on stderr."""
+    script = 'set -u; ' + ' '.join(
+        '{ ' + command + '; } || { echo "FAILED CHECK: ' + label + '" >&2; exit 1; };'
+        for label, command in items)
+    context.ssh(script, timeout=timeout)
+    return {label: True for label, _ in items}
+
+
 def key_files(stem):
     return [SSH_DIR / stem, SSH_DIR / (stem + '.pub'), SSH_DIR / (stem + '.pem')]
 
@@ -380,22 +389,18 @@ class AttackBox:
 
     def verify(self, context, config):
         deployment_id = config['deployment_id']
-        command = (
-            "set -eu; grep -Eq '^ID=(kali|ubuntu)' /etc/os-release; "
-            "sudo -n test -d /root/" + deployment_id + "/scans; "
-            "sudo -n test -s /root/QUICK_RECON_GUIDE.txt; "
-            "command -v nmap >/dev/null; command -v dig >/dev/null; "
-            "command -v tor >/dev/null; command -v torsocks >/dev/null; "
-            "command -v proxychains4 >/dev/null; "
-            "test \"$(systemctl is-enabled tor)\" = enabled; "
-            "systemctl is-active tor >/dev/null; "
-            "sudo -n grep -Fq \"alias qr='cd /root/" + deployment_id + "'\" /root/.bashrc; "
-            "sudo -n /usr/sbin/sshd -T | grep -iq '^passwordauthentication no$'"
-        )
-        context.ssh(command)
-        report = {'os_verified': True, 'workspace': True, 'quick_guide': True, 'nmap': True,
-                  'dnsutils': True, 'tor': True, 'torsocks': True, 'proxychains': True,
-                  'tor_enabled': True, 'tor_active': True, 'ssh_password_authentication': False}
+        report = checks(context, [
+            ('os', "grep -Eq '^ID=(kali|ubuntu)' /etc/os-release"),
+            ('workspace', 'sudo -n test -d /root/' + deployment_id + '/scans'),
+            ('quick_guide', 'sudo -n test -s /root/QUICK_RECON_GUIDE.txt'),
+            ('nmap', 'command -v nmap >/dev/null'), ('dig', 'command -v dig >/dev/null'),
+            ('tor', 'command -v tor >/dev/null'), ('torsocks', 'command -v torsocks >/dev/null'),
+            ('proxychains', 'command -v proxychains4 >/dev/null'),
+            ('tor_enabled', 'test "$(systemctl is-enabled tor)" = enabled'),
+            ('tor_active', 'systemctl is-active tor >/dev/null'),
+            ('alias', "sudo -n grep -Fq \"alias qr='cd /root/" + deployment_id + "'\" /root/.bashrc"),
+            ('sshd_no_password', "sudo -n /usr/sbin/sshd -T | grep -iq '^passwordauthentication no$'"),
+        ])
         if context.provider == 'azure':
             rules = context.cloud.inbound_rules(deployment_id)
             require(rules == [('tcp', '22', config['operator_ip'] + '/32')],
@@ -452,24 +457,20 @@ class Redirector:
             ROOT / ('infrastructure_state_' + deployment_id + '.json')]
 
     def verify(self, context, config):
-        command = (
-            "set -eu; "
-            "test \"$(systemctl is-active nginx)\" = active; "
-            "test \"$(systemctl is-enabled nginx)\" = enabled; "
-            "test \"$(systemctl is-enabled shell-handler)\" = enabled; "
-            "ss -ltn | grep -q ':80 '; ss -ltn | grep -q ':443 '; "
-            "test \"$(curl -ks -o /dev/null -w '%{http_code}' https://127.0.0.1/)\" = 200; "
-            "sudo -n test -x /root/Tools/post_install_redirector.sh; "
-            "sudo -n /usr/sbin/sshd -T | grep -iq '^passwordauthentication no$'"
-        )
-        context.ssh(command)
+        report = checks(context, [
+            ('nginx_active', 'test "$(systemctl is-active nginx)" = active'),
+            ('nginx_enabled', 'test "$(systemctl is-enabled nginx)" = enabled'),
+            ('shell_handler_enabled', 'test "$(systemctl is-enabled shell-handler)" = enabled'),
+            ('http_listening', "ss -ltn | grep -q ':80 '"),
+            ('https_listening', "ss -ltn | grep -q ':443 '"),
+            ('local_https', 'test "$(curl -ks -o /dev/null -w \'%{http_code}\' https://127.0.0.1/)" = 200'),
+            ('post_install_script', 'sudo -n test -x /root/Tools/post_install_redirector.sh'),
+            ('sshd_no_password', "sudo -n /usr/sbin/sshd -T | grep -iq '^passwordauthentication no$'"),
+        ])
         status = context.run([
             'curl', '-ks', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '20',
             'https://' + context.address + '/'])
         require(status == '200', 'Redirector HTTPS front page is not public: ' + status)
-        report = {'nginx_active': True, 'nginx_enabled': True, 'shell_handler_enabled': True,
-                  'http_listening': True, 'https_listening': True, 'local_https': True,
-                  'public_https': True, 'ssh_password_authentication': False}
         if context.provider == 'azure':
             rules = context.cloud.inbound_rules(config['deployment_id'])
             require(('tcp', '22', config['operator_ip'] + '/32') in rules and
@@ -531,21 +532,17 @@ class C2:
             ROOT / ('infrastructure_state_' + deployment_id + '.json')]
 
     def verify(self, context, config):
-        command = (
-            "set -eu; grep -q '^ID=kali' /etc/os-release; "
-            "sudo -n test -x /root/Tools/Havoc/havoc; "
-            "sudo -n test -s /root/Tools/Havoc/data/havoc.yaotl; "
-            "sudo -n test -s /root/havoc-guide.txt; "
-            "sudo -n test -x /root/Tools/havoc_installer.sh; "
-            "test \"$(systemctl is-active postfix)\" = active; "
-            "test \"$(systemctl is-active dovecot)\" = active; "
-            "test \"$(systemctl is-active opendkim)\" = active; "
-            "sudo -n /usr/sbin/sshd -T | grep -iq '^passwordauthentication no$'"
-        )
-        context.ssh(command, timeout=120)
-        report = {'kali': True, 'havoc_teamserver': True, 'havoc_config': True,
-                  'havoc_guide': True, 'postfix_active': True, 'dovecot_active': True,
-                  'opendkim_active': True, 'ssh_password_authentication': False}
+        report = checks(context, [
+            ('kali', "grep -q '^ID=kali' /etc/os-release"),
+            ('havoc_teamserver', 'sudo -n test -x /root/Tools/Havoc/havoc'),
+            ('havoc_config', 'sudo -n test -s /root/Tools/Havoc/data/havoc.yaotl'),
+            ('havoc_guide', 'sudo -n test -s /root/havoc-guide.txt'),
+            ('havoc_installer', 'sudo -n test -x /root/Tools/havoc_installer.sh'),
+            ('postfix_active', 'test "$(systemctl is-active postfix)" = active'),
+            ('dovecot_active', 'test "$(systemctl is-active dovecot)" = active'),
+            ('opendkim_active', 'test "$(systemctl is-active opendkim)" = active'),
+            ('sshd_no_password', "sudo -n /usr/sbin/sshd -T | grep -iq '^passwordauthentication no$'"),
+        ], timeout=120)
         if context.provider == 'aws':
             rules = context.cloud.inbound_rules(config['c2_name'] + '-sg')
             require(('tcp', 22, 22, config['operator_ip'] + '/32') in rules,
