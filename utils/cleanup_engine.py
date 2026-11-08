@@ -120,6 +120,8 @@ def parse_deployment_info(info_file):
                     value = False
                 elif value.lower() == 'none':
                     value = None
+                elif key == 'providers':
+                    value = [item for item in value.split(',') if item]
                 
                 config[key] = value
         
@@ -130,6 +132,11 @@ def parse_deployment_info(info_file):
 
 def execute_teardown(config):
     """Execute teardown based on configuration"""
+    providers = config.get('providers')
+    if providers and not config.get('provider'):
+        # A composite deployment owns one verified lifecycle per provider.
+        return all([execute_teardown(dict(config, provider=provider))
+                    for provider in providers])
     provider = config.get('provider')
     adapter = workload_route(config)
     legacy = uses_legacy_routes(provider, requested_workload(config))

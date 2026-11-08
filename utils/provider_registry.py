@@ -230,11 +230,10 @@ PROVIDER_SPECS = {
                               'payload_server': 'utils.azure_workload_adapter:azure_payload_server_adapter',
                               'phantom': 'utils.azure_phantom_adapter:AzurePhantomAdapter',
                               'chat': 'utils.azure_phantom_adapter:AzurePhantomAdapter',
+                              'webrunner': 'utils.azure_webrunner_adapter:azure_webrunner_adapter',
                           },
                           staged_routes={
-                              workload: 'utils.azure_staged_adapter:azure_{0}_staged_adapter'.format(
-                                  workload)
-                              for workload in ('phishing', 'webrunner')
+                              'phishing': 'utils.azure_staged_adapter:azure_phishing_staged_adapter',
                           }),
 }
 

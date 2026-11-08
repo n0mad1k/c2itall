@@ -53,6 +53,14 @@ def main():
     else:
         interactive_mode()
 
+def recoverable_from_log(config, provider):
+    """Only legacy and bridged routes recover from a log; native ones need state."""
+    if uses_legacy_routes(provider):
+        return True
+    adapter = workload_route(dict(config, provider=provider))
+    return callable(getattr(type(adapter), 'deploy_with_legacy', None))
+
+
 def discover_deployments():
     """Combine recovery state and legacy logs before any destructive action.
 
@@ -73,15 +81,17 @@ def discover_deployments():
             deployments.append(config)
         for info_file in glob.glob("logs/deployment_info_*.txt"):
             config = parse_deployment_info(info_file)
-            if not config or not config.get('deployment_id') or not config.get('provider'):
+            if not config or not config.get('deployment_id') or not (
+                    config.get('provider') or config.get('providers')):
                 raise ValueError('Cannot identify deployment in ' + info_file)
             deployment_id = config['deployment_id']
             if deployment_id in by_id:
                 if (deployment_id in adapter_ids and
-                        config['provider'] == by_id[deployment_id]['provider']):
+                        config.get('provider') == by_id[deployment_id]['provider']):
                     continue
                 raise ValueError('Ambiguous deployment ID: ' + deployment_id)
-            if not uses_legacy_routes(config['provider']):
+            providers = config.get('providers') or [config['provider']]
+            if not all(recoverable_from_log(config, provider) for provider in providers):
                 raise ValueError('Missing adapter recovery state for ' + deployment_id)
             by_id[deployment_id] = config
             deployments.append(config)
@@ -126,7 +136,7 @@ def list_deployments():
     
     for i, config in enumerate(deployments, 1):
         deployment_id = config.get('deployment_id', 'unknown')
-        provider = config.get('provider', 'unknown')
+        provider = config.get('provider') or ','.join(config.get('providers') or ['unknown'])
         domain = config.get('domain', 'N/A')
         status = config.get('status', 'unknown')
         
@@ -205,7 +215,7 @@ def teardown_deployment(deployment_id, force=False):
         return False
     
     # Show what will be torn down
-    provider = config.get('provider', 'unknown')
+    provider = config.get('provider') or ','.join(config.get('providers') or ['unknown'])
     print(f"Provider: {provider}")
     
     instances_to_delete = []
@@ -438,7 +448,7 @@ def select_and_teardown_deployment():
     # Display deployments with selection numbers
     for i, config in enumerate(deployments, 1):
         deployment_id = config.get('deployment_id', 'unknown')
-        provider = config.get('provider', 'unknown')
+        provider = config.get('provider') or ','.join(config.get('providers') or ['unknown'])
         domain = config.get('domain', 'N/A')
         
         print(f"{i}. {COLORS['WHITE']}{deployment_id}{COLORS['RESET']}")

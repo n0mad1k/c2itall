@@ -3,6 +3,7 @@
 Deployment engine for C2ingRed infrastructure deployments
 """
 
+import functools
 import os
 import sys
 import subprocess
@@ -59,14 +60,18 @@ def dispatch_composite_workload(config, legacy_deploy):
     if len(registered) != len(routes):
         logging.error('Composite workload cannot mix new and legacy provider routes')
         return False
-    adapter_types = {type(adapter) for _, adapter in registered}
-    if len(adapter_types) != 1:
+    adapters = [adapter for _, adapter in registered]
+    if all(_is_legacy_bridge(adapter) for adapter in adapters):
+        # Every bridge wraps the single preserved executor exactly once, so a
+        # provider that must provision before the playbook can join any mix.
+        executor = legacy_deploy
+        for adapter in reversed(adapters):
+            executor = functools.partial(adapter.deploy_with_legacy, legacy_deploy=executor)
+        return executor(config)
+    if len({type(adapter) for adapter in adapters}) != 1:
         logging.error('Composite workload providers use incompatible handlers')
         return False
-    adapter = registered[0][1]
-    if _is_legacy_bridge(adapter):
-        return adapter.deploy_with_legacy(config, legacy_deploy)
-    return adapter.deploy(config)
+    return adapters[0].deploy(config)
 
 
 def deploy_infrastructure(config):
@@ -396,10 +401,12 @@ def save_deployment_info(config):
 
             # Write key configuration items
             keys_to_save = [
-                'provider', 'deployment_id', 'deployment_type',
+                'provider', 'providers', 'deployment_id', 'deployment_type',
                 'provider_workload',
                 'attack_box_name', 'c2_name', 'redirector_name', 'tracker_name',
-                'chat_server_name',
+                'chat_server_name', 'payload_server_name', 'payload_redirector_name',
+                'webrunner_name', 'phantom_name', 'mta_name', 'gophish_name',
+                'webserver_name',
                 'domain', 'c2_subdomain', 'redirector_subdomain',
                 'c2_framework', 'redirector_type',
                 'linode_region', 'aws_region',
@@ -413,7 +420,10 @@ def save_deployment_info(config):
                     # Don't save sensitive data
                     if 'password' in key.lower() or 'token' in key.lower() or 'secret' in key.lower():
                         continue
-                    f.write(f"{key}: {config[key]}\n")
+                    value = config[key]
+                    if isinstance(value, (list, tuple)):
+                        value = ','.join(str(item) for item in value)
+                    f.write(f"{key}: {value}\n")
 
             f.write(f"\n")
             f.write(f"Access Information:\n")

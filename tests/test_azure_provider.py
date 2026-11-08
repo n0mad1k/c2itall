@@ -961,10 +961,10 @@ class RoutingAndTemplateTests(AzureFixture):
         validation = registry.validate_provider_registry(load_references=True)
         self.assertEqual(validation, {
             'providers': 4, 'workloads': 9, 'controllers': 9,
-            'pairs': 36, 'routes': 30, 'staged_routes': 2,
+            'pairs': 36, 'routes': 31, 'staged_routes': 1,
             'counts': {
-                'native': 7, 'transition': 23,
-                'legacy_fallback': 0, 'staged': 2, 'unsupported': 4,
+                'native': 8, 'transition': 23,
+                'legacy_fallback': 0, 'staged': 1, 'unsupported': 4,
             },
         })
         rows = registry.provider_support_matrix()
@@ -974,7 +974,7 @@ class RoutingAndTemplateTests(AzureFixture):
             {workload for provider, workload in lookup
              if provider == 'azure' and lookup[(provider, workload)] == 'native'},
             {'infrastructure', 'attack_box', 'phantom', 'chat', 'redirector', 'c2',
-             'payload_server'})
+             'payload_server', 'webrunner'})
         self.assertEqual(
             {workload for provider, workload in lookup
              if provider == 'azure' and
@@ -984,7 +984,7 @@ class RoutingAndTemplateTests(AzureFixture):
             {workload for provider, workload in lookup
              if provider == 'azure' and
              lookup[(provider, workload)] == 'staged'},
-            {'phishing', 'webrunner'})
+            {'phishing'})
         self.assertEqual(lookup[('aws', 'c2')], 'transition')
         self.assertEqual(lookup[('linode', 'attack_box')], 'transition')
         self.assertEqual(lookup[('flokinet', 'attack_box')], 'unsupported')
@@ -1015,7 +1015,7 @@ class RoutingAndTemplateTests(AzureFixture):
                 contextlib.redirect_stderr(error):
             self.assertEqual(module.main(['--require-provider', 'azure']), 1)
             self.assertIn(
-                'staged (disabled): phishing, webrunner',
+                'staged (disabled): phishing',
                 error.getvalue())
             self.assertIn(
                 'partial: attack_box (missing kali, parrot, ubuntu)',
@@ -1086,7 +1086,7 @@ class RoutingAndTemplateTests(AzureFixture):
     def test_azure_staged_routes_prepare_but_cannot_deploy(self):
         from utils import azure_staged_adapter, azure_utils
 
-        staged = {'phishing', 'webrunner'}
+        staged = {'phishing'}
         dispatcher = registry.provider_dispatcher('azure')
         self.assertEqual(dispatcher.spec.staged_capabilities, staged)
         for workload in staged:
@@ -1315,6 +1315,68 @@ class RoutingAndTemplateTests(AzureFixture):
             self.assertTrue(module._execute_webrunner_legacy(config))
         self.assertFalse(self.key.exists())
         self.assertFalse(public.exists())
+
+    def test_azure_webrunner_route_provisions_nodes_around_the_composite_executor(self):
+        from utils import azure_webrunner_adapter
+        with tempfile.TemporaryDirectory() as temp:
+            chunks = Path(temp) / 'chunks.json'
+            chunks.write_text(json.dumps([
+                {'idx': 0, 'node_name': 'wr-x-01', 'provider': 'linode', 'region': 'us-east',
+                 'cidrs': ['198.51.100.1/32'], 'ip_count': 1},
+                {'idx': 1, 'node_name': 'wr-x-02', 'provider': 'azure', 'region': 'eastus',
+                 'cidrs': ['198.51.100.2/32'], 'ip_count': 1}]))
+            config = {
+                'providers': ['linode', 'azure'], 'provider_workload': 'webrunner',
+                'deployment_id': 'x', 'azure_subscription_id': smoke.SUBSCRIPTION,
+                'operator_ip': '203.0.113.5', 'node_chunks_file': str(chunks),
+                'ssh_key_path': str(Path(temp) / 'c2deploy_wr-x.pub'),
+                'azure_state_dir': temp, 'teardown_after_scan': True,
+            }
+            expected_nodes = [{'node_name': 'wr-x-02', 'ip': '20.42.0.9', 'idx': 1,
+                               'cidrs': ['198.51.100.2/32'], 'ip_count': 1,
+                               'deployment_id': 'x-n02'}]
+            provisioned = {}
+            legacy = mock.Mock(side_effect=lambda cfg: cfg['azure_nodes'] == expected_nodes)
+            states = [{'deployment_id': 'x-n02', 'provider_workload': 'webrunner'},
+                      {'deployment_id': 'x-n01', 'provider_workload': 'webrunner'},
+                      {'deployment_id': 'xy-n01', 'provider_workload': 'webrunner'},
+                      {'deployment_id': 'x-n03', 'provider_workload': 'infrastructure'}]
+            with mock.patch.object(azure, 'ensure_azure_auth'), \
+                    mock.patch.object(azure, 'prepare_state'), \
+                    mock.patch.object(azure, 'deploy_azure',
+                                      side_effect=lambda node: provisioned.update(node) or True), \
+                    mock.patch.object(azure, 'load_state', return_value={
+                        'outputs': {'public_ip': {'value': '20.42.0.9'}}}), \
+                    mock.patch.object(azure, 'list_states', return_value=states), \
+                    mock.patch.object(azure, 'cleanup_azure', return_value=True) as cleanup:
+                self.assertTrue(deployment_engine.dispatch_composite_workload(config, legacy))
+            legacy.assert_called_once_with(config)
+            self.assertEqual(provisioned['deployment_id'], 'x-n02')
+            self.assertEqual(provisioned['azure_resource_group'], 'c2itall-x-n02')
+            self.assertEqual(provisioned['provider_workload'], 'webrunner')
+            self.assertFalse(provisioned['ssh_key_generated'])
+            self.assertEqual(provisioned['azure_inbound_rules'], [])
+            self.assertEqual(provisioned['ssh_private_key_path'], str(Path(temp) / 'c2deploy_wr-x'))
+            # The composite in-play teardown removes every <id>-nNN WEBRUNNER node.
+            self.assertEqual(cleanup.call_args_list, [
+                mock.call({'deployment_id': 'x-n02', 'azure_state_dir': temp}),
+                mock.call({'deployment_id': 'x-n01', 'azure_state_dir': temp})])
+
+            adapter = azure_webrunner_adapter.azure_webrunner_adapter()
+            with mock.patch.object(azure, 'list_states', return_value=states), \
+                    mock.patch.object(azure, 'cleanup_azure', return_value=True) as cleanup, \
+                    mock.patch.object(cleanup_engine, 'cleanup_ssh_keys_for_deployment') as keys, \
+                    mock.patch.object(cleanup_engine, 'archive_deployment_logs'):
+                self.assertTrue(adapter.cleanup({'deployment_id': 'x-n01', 'azure_state_dir': temp,
+                                                 'azure_resource_group': 'c2itall-x-n01',
+                                                 'ssh_key_path': config['ssh_key_path']}))
+                self.assertEqual(cleanup.call_args_list,
+                                 [mock.call({'deployment_id': 'x-n01', 'azure_state_dir': temp})])
+                keys.assert_not_called()
+                self.assertTrue(adapter.cleanup({'deployment_id': 'x', 'providers': ['linode', 'azure'],
+                                                 'azure_state_dir': temp,
+                                                 'ssh_key_path': config['ssh_key_path']}))
+                keys.assert_called_once_with('x', config['ssh_key_path'])
 
     def test_existing_routes_remain_and_azure_routes_only_implemented_workloads(self):
         for provider, dirname in (("aws", "AWS"), ("linode", "Linode")):

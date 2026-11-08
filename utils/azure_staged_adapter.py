@@ -8,7 +8,7 @@ executing a workload deployment.
 from .azure_workload_adapter import AzureSingleVmWorkloadAdapter
 
 
-STAGED_AZURE_WORKLOADS = frozenset({'phishing', 'webrunner'})
+STAGED_AZURE_WORKLOADS = frozenset({'phishing'})
 
 
 class AzureStagedWorkloadAdapter(AzureSingleVmWorkloadAdapter):
@@ -54,7 +54,3 @@ class AzureStagedWorkloadAdapter(AzureSingleVmWorkloadAdapter):
 
 def azure_phishing_staged_adapter():
     return AzureStagedWorkloadAdapter('phishing')
-
-
-def azure_webrunner_staged_adapter():
-    return AzureStagedWorkloadAdapter('webrunner')

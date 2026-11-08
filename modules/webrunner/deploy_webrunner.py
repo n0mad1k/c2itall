@@ -485,6 +485,8 @@ def gather_webrunner_parameters() -> dict | None:
             provider_regions[p] = config.get('aws_regions', [config.get('aws_region', 'us-east-1')])
         elif p == 'flokinet':
             provider_regions[p] = [config.get('flokinet_region', 'default')]
+        elif p == 'azure':
+            provider_regions[p] = [config.get('azure_location', 'eastus')]
         else:
             provider_regions[p] = ['default']
 
@@ -508,7 +510,7 @@ def gather_webrunner_parameters() -> dict | None:
     print(f"{COLORS['GREEN']}Nodes: {len(node_chunks)} ({preset_key}, {fmt_ip_count(chunk_size)}/node){COLORS['RESET']}")
 
     # Warn if any provider's node count exceeds safe per-region quota
-    _PROVIDER_CAPS = {'linode': 20, 'aws': 32, 'flokinet': 10}
+    _PROVIDER_CAPS = {'linode': 20, 'aws': 32, 'flokinet': 10, 'azure': 10}
     provider_node_counts: dict[str, int] = {}
     for nc in node_chunks:
         provider_node_counts[nc['provider']] = provider_node_counts.get(nc['provider'], 0) + 1

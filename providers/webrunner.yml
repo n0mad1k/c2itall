@@ -244,6 +244,41 @@
 
       when: aws_chunks | length > 0
 
+    # ── Azure — nodes are provisioned by the registered Azure route before this play ──
+
+    - name: Require the Azure route to have provisioned every Azure node
+      assert:
+        that:
+          - (azure_nodes | default([]) | length) == (all_node_chunks | selectattr('provider', 'equalto', 'azure') | list | length)
+        fail_msg: "Azure WEBRUNNER nodes must be provisioned by the registered Azure route"
+
+    - name: Add pre-provisioned Azure nodes to inventory
+      add_host:
+        name: "{{ item.ip }}"
+        groups: webrunner_nodes
+        ansible_host: "{{ item.ip }}"
+        ansible_user: azureuser
+        ansible_ssh_private_key_file: "~/.ssh/{{ ssh_key_name }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+        node_name: "{{ item.node_name }}"
+        node_cidrs: "{{ item.cidrs }}"
+        node_ip_count: "{{ item.ip_count }}"
+        node_idx: "{{ item.idx }}"
+        azure_deployment_id: "{{ item.deployment_id }}"
+        provider: azure
+      loop: "{{ azure_nodes | default([]) }}"
+      loop_control:
+        label: "{{ item.node_name }}"
+
+    - name: Log Azure scanner IPs
+      lineinfile:
+        path: "{{ scanner_ip_log }}"
+        line: "{{ item.node_name }}: {{ item.ip }}"
+        create: true
+      loop: "{{ azure_nodes | default([]) }}"
+      loop_control:
+        label: "{{ item.node_name }}"
+
     # ── FlokiNET ──────────────────────────────────────────────────────────────
 
     - name: Provision FlokiNET nodes

@@ -19,6 +19,11 @@ INSTANCE_RATES = {
         'vps-2': 0.0139,
         'vps-4': 0.0278,
     },
+    'azure': {
+        'Standard_B2s':     0.0416,
+        'Standard_D2as_v4': 0.086,
+        'Standard_D4as_v4': 0.172,
+    },
 }
 
 SCAN_MODES = {
@@ -39,12 +44,14 @@ DEFAULT_INSTANCE = {
     'linode':   'g6-nanode-1',
     'aws':      't3.small',
     'flokinet': 'vps-2',
+    'azure':    'Standard_D2as_v4',
 }
 
 BILLING_MINIMUM = {
     'linode':   1.0,
     'aws':      0.017,  # billed per second, ~1 min minimum in practice
     'flokinet': 1.0,
+    'azure':    0.017,  # billed per second
 }
 
 

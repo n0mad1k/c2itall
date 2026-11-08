@@ -9,10 +9,12 @@ Nothing is scanned or attacked: verification only inspects the deployed host.
 """
 
 import argparse
+import importlib.util
 import ipaddress
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import signal
@@ -29,7 +31,7 @@ for path in (SCRIPT_DIR, ROOT):
         sys.path.insert(0, str(path))
 
 from utils.common import load_vars_file, setup_logging
-from utils.deployment_engine import deploy_infrastructure
+from utils.deployment_engine import deploy_infrastructure, dispatch_composite_workload
 from utils.provider_registry import prepare_provider_environment
 from utils.provider_utils import apply_provider_profile, prepare_module_ssh_key
 
@@ -638,6 +640,104 @@ class PayloadServer:
 WORKLOADS = {cls.name: cls for cls in (AttackBox, Redirector, C2, PayloadServer)}
 
 
+class Webrunner:
+    """One composite scan node per provider, scanning only the operator's own /32."""
+    name = 'webrunner'
+    source_paths = ('modules/webrunner', 'providers/webrunner.yml', 'providers/{dir}')
+
+    def config(self, provider, deployment_id, operator_ip, keep_nodes):
+        name = 'wr-' + deployment_id
+        config = {
+            'deployment_id': deployment_id, 'engagement': 'livetest',
+            'deployment_type': 'webrunner', 'provider_workload': 'webrunner',
+            'webrunner_deployment': True, 'webrunner_name': name, 'providers': [provider],
+            'scan_mode': 'masscan-only', 'ports': [22], 'ports_str': '22', 'masscan_rate': 1000,
+            'use_tor': False, 'targets_file': '', 'total_ips': 1, 'preset': 'sprint',
+            'chunk_size': 500000, 'operator_ip': operator_ip, 'enhanced_opsec': False,
+            'teardown_after_scan': not keep_nodes,
+        }
+        config.update(provider_config(provider))
+        # Every provider's scan nodes share the module key, so Azure must not own one.
+        config.pop('provider_manages_ssh_key', None)
+        ready, private = prepare_module_ssh_key(config, name)
+        require(ready and private, 'Could not generate the module SSH key')
+        config['ssh_key_name'] = Path(private).name
+        logs = ROOT / 'logs'
+        chunks = logs / ('node_chunks_' + deployment_id + '.json')
+        chunks.write_text(json.dumps([{
+            'idx': 0, 'node_name': name + '-01', 'provider': provider,
+            'region': REGIONS[provider], 'cidrs': [operator_ip + '/32'], 'ip_count': 1}]))
+        chunks.chmod(0o600)
+        config['node_chunks_file'] = str(chunks)
+        config['scanner_ip_log'] = str(logs / ('scanner_ips_' + name + '.txt'))
+        config['results_dir'] = str(logs / ('webrunner_' + deployment_id))
+        return config
+
+    def identity(self, provider, deployment_id):
+        name = 'wr-' + deployment_id
+        if provider == 'azure':
+            return {'deployment_id': deployment_id + '-n01', 'names': [name + '-01']}
+        return {'deployment_id': deployment_id, 'names': [name + '-01'],
+                'key_names': [name], 'sg_names': ['webrunner-' + name]}
+
+    def target(self, provider, config):
+        user = {'aws': 'admin', 'azure': 'azureuser'}.get(provider, 'root')
+        return config['webrunner_name'] + '-01', user, SSH_DIR / ('c2deploy_' + config['webrunner_name'])
+
+    def local_artifacts(self, provider, config):
+        deployment_id = config['deployment_id']
+        return (key_files('c2deploy_wr-' + deployment_id) +
+                [AZURE_STATE_DIR / (deployment_id + '-n01.json')])
+
+    def verify(self, runner, cloud, provider, config, identity, keep_nodes):
+        node, user, key = self.target(provider, config)
+        merged = json.loads((Path(config['results_dir']) / 'merged_results.json').read_text())
+        require([item['node_name'] for item in merged['nodes']] == [node] and
+                merged['nodes'][0]['scan_mode'] == 'masscan-only',
+                'Merged results do not describe the single scan node: ' + json.dumps(merged['nodes']))
+        logged = re.search('^' + re.escape(node) + r': (\S+)$',
+                           Path(config['scanner_ip_log']).read_text(), re.MULTILINE)
+        require(logged, 'Scanner IP log does not list the node')
+        address = public_ipv4(logged.group(1))
+        report = {'nodes': merged['nodes'], 'total_results': merged['total_results'],
+                  'scanner_ip': address, 'target': config['operator_ip'] + '/32 tcp/22'}
+        inventory = cloud.inventory(identity)
+        if keep_nodes:
+            require(len(inventory['instances']) == 1 and inventory['instances'][0]['state'] == 'running',
+                    'Expected exactly one running scan node')
+            require(cloud.address(identity, node) == address, 'Scanner IP log disagrees with the cloud inventory')
+            require(key.is_file(), 'Module SSH key is missing: ' + str(key))
+            context = Context(runner, cloud, provider, address, user, key)
+            report['host'] = checks(context, [
+                ('masscan_installed', 'command -v masscan'),
+                ('scanner_present', 'sudo -n test -s /root/webrunner/node_scanner.py'),
+                ('results_present', 'sudo -n test -s /root/webrunner/results.json'),
+                ('sshd_no_password', "sudo -n /usr/sbin/sshd -T | grep -iq '^passwordauthentication no$'"),
+            ])
+            if provider == 'azure':
+                rules = cloud.inbound_rules(identity['deployment_id'])
+                require(rules == [('tcp', '22', config['operator_ip'] + '/32')],
+                        'Azure scan node allows more than operator SSH: ' + str(rules))
+                report['security_group_rules'] = rules
+            if provider == 'aws':
+                rules = cloud.inbound_rules('webrunner-' + config['webrunner_name'])
+                require(rules == [('tcp', 22, 22, config['operator_ip'] + '/32')],
+                        'AWS scan node allows more than operator SSH: ' + str(rules))
+                report['security_group_rules'] = rules
+        else:
+            require(empty(inventory), 'Scan node remains after the in-play teardown')
+            require(not key.exists(), 'Module key remains after the in-play teardown')
+            report['in_play_teardown'] = True
+        report['cloud'] = inventory
+        return report
+
+    def collect(self, runner, config, label):
+        for source in (Path(config['results_dir']), Path(config['scanner_ip_log']),
+                       Path(config['node_chunks_file'])):
+            if source.exists():
+                shutil.move(str(source), str(runner.evidence / (label + '-' + source.name)))
+
+
 class Context:
     def __init__(self, runner, cloud, provider, address, user, key):
         self.runner = runner
@@ -825,10 +925,105 @@ def cleanup(runner, cloud, provider, workload, config, identity, deployed):
     return True
 
 
+def activate_webrunner(provider, operator_ip=None):
+    """Keep the first run's node for inspection and routed teardown; the second
+    run exercises the module's own in-play teardown. Both scan only the
+    operator's /32 on tcp/22."""
+    workload = Webrunner()
+    os.chdir(ROOT)
+    deployment_id = 'lt-{0}-webrun-{1}'.format(provider, uuid.uuid4().hex[:6])
+    evidence = ROOT / 'logs' / (provider + '-webrunner-live') / deployment_id
+    evidence.mkdir(parents=True, mode=0o700)
+    runner = Runner(evidence)
+    previous = {sig: signal.signal(sig, runner.handle_signal)
+                for sig in (signal.SIGINT, signal.SIGTERM)}
+    cloud = None
+    pending = []
+    live_passed = cleanup_passed = False
+    failure = None
+    try:
+        venv_bin = Path(sys.executable).parent
+        if (venv_bin / 'ansible-playbook').is_file():
+            os.environ['PATH'] = str(venv_bin) + os.pathsep + os.environ.get('PATH', '')
+        for executable in ('ansible-playbook', 'ssh', 'ssh-keygen', 'curl', 'git'):
+            require(shutil.which(executable), 'Required tool unavailable: ' + executable)
+        runner.record('source.json', {'commit': verify_committed_source(runner, provider, workload)})
+        prepare_provider_environment({'provider': provider})
+        cloud = build_cloud(provider, evidence)
+        operator_ip = public_ipv4(operator_ip or runner.run([
+            'curl', '-4', '--fail', '--silent', '--show-error', '--max-time', '15',
+            'https://api.ipify.org']))
+        spec = importlib.util.spec_from_file_location(
+            'deploy_webrunner_live', ROOT / 'modules/webrunner/deploy_webrunner.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        baseline = None
+        for label, run_id, keep in (('kept', deployment_id, True),
+                                    ('self-teardown', deployment_id + '-r', False)):
+            identity = workload.identity(provider, run_id)
+            require(empty(cloud.inventory(identity)), 'Live-test identity already owns cloud resources')
+            require(not [path for path in workload.local_artifacts(provider, {'deployment_id': run_id})
+                         if path.exists()], 'Unexpected local artifacts exist for the live-test identity')
+            if baseline is None:
+                baseline = cloud.totals()
+                runner.record('baseline.json', {'identity': identity, 'totals': baseline,
+                                                'operator_ip': operator_ip})
+            config = workload.config(provider, run_id, operator_ip, keep)
+            runner.record(label + '-config.json', redacted(config))
+            setup_logging(run_id, 'live_test')
+            pending.append((label, config, identity))
+            require(dispatch_composite_workload(config, module._execute_webrunner_legacy),
+                    'Routed WEBRUNNER deployment failed (' + label + ')')
+            report = workload.verify(runner, cloud, provider, config, identity, keep)
+            runner.record(label + '-deployment.json', report)
+            workload.collect(runner, config, label)
+            runner.cleaning = True
+            require(cleanup(runner, cloud, provider, workload, config, identity, True),
+                    'Cleanup did not verify (' + label + ')')
+            for name in ('final-cleanup.json', 'standalone-teardown.json'):
+                if (runner.evidence / name).exists():
+                    (runner.evidence / name).rename(runner.evidence / (label + '-' + name))
+            runner.cleaning = False
+            pending.pop()
+        live_passed = True
+    except BaseException as exc:
+        failure = str(exc)
+        runner.record('failure.json', {'error': failure})
+        print('{0} webrunner live test did not pass: {1}'.format(provider, failure), file=sys.stderr)
+    finally:
+        runner.cleaning = True
+        cleanup_passed = True
+        for label, config, identity in pending:
+            try:
+                workload.collect(runner, config, label)
+                node_state = AZURE_STATE_DIR / (config['deployment_id'] + '-n01.json')
+                if node_state.exists() and not (
+                        ROOT / 'logs' / ('deployment_info_' + config['deployment_id'] + '.txt')).exists():
+                    # Provisioning failed before the playbook recorded the run.
+                    runner.run([sys.executable, 'teardown.py', '--deployment-id',
+                                config['deployment_id'] + '-n01', '--force'], timeout=1800)
+                cleanup_passed = cleanup(runner, cloud, provider, workload, config, identity, True) and cleanup_passed
+            except BaseException as exc:
+                cleanup_passed = False
+                runner.record('cleanup-failure.json', {'error': str(exc)})
+                print('{0} webrunner cleanup failed: {1}'.format(provider, exc), file=sys.stderr)
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+    passed = live_passed and cleanup_passed and not runner.interrupted
+    runner.record('result.json', {
+        'passed': passed, 'live_workflow_passed': live_passed,
+        'cleanup_passed': cleanup_passed, 'failure': failure,
+        'deployment_id': deployment_id, 'provider': provider, 'workload': 'webrunner',
+    })
+    print('Evidence: ' + str(evidence))
+    return 0 if passed else 1
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--provider', choices=sorted(REGIONS), required=True)
-    parser.add_argument('--workload', choices=sorted(WORKLOADS), required=True)
+    parser.add_argument('--workload', choices=sorted(WORKLOADS) + ['webrunner'], required=True)
     parser.add_argument('--activate', action='store_true')
     parser.add_argument('--operator-ip')
     parser.add_argument('--repeat', dest='repeat', action='store_true', default=None)
@@ -838,6 +1033,8 @@ def main(argv=None):
         print('DRY RUN: no cloud mutations. Target: {0} / {1} / {2}'.format(
             args.provider, REGIONS[args.provider], args.workload))
         return 0
+    if args.workload == 'webrunner':
+        return activate_webrunner(args.provider, args.operator_ip)
     return activate(args.provider, args.workload, args.operator_ip, args.repeat)
 
 
