@@ -437,6 +437,22 @@
         while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; do sleep 5; done
       changed_when: false
 
+    - name: Report first-boot package state (diagnostic)
+      shell: |
+        echo "== dpkg audit"; dpkg --audit
+        echo "== cloud-init"; cloud-init status --long || true
+        echo "== kernel packages"; dpkg -l 'linux-image*' | tail -n +6
+        echo "== cloud-init kernel activity"; grep -n -i 'linux-image\|run-parts\|dpkg: error\|upgrade' /var/log/cloud-init-output.log | head -20
+        echo "== hooks"; ls /etc/kernel/postinst.d; grep -ln run-parts /etc/kernel/postinst.d/* /var/lib/dpkg/info/linux-image-*.postinst 2>/dev/null
+        echo "== rust simulation (stale lists)"; apt-get install -s cargo rustc libssl-dev pkg-config 2>&1 | grep -i 'linux-image\|^Inst linux\|^Remv\|^Conf linux\|^E:' | head
+      register: first_boot_state
+      changed_when: false
+      failed_when: false
+
+    - name: Display first-boot package state (diagnostic)
+      debug:
+        var: first_boot_state.stdout_lines
+
     - name: Download Kali archive keyring to temporary location
       get_url:
         url: https://archive.kali.org/archive-keyring.gpg
@@ -456,6 +472,16 @@
       until: apt_result is success
       retries: 10
       delay: 10
+
+    - name: Simulate the Rust install after refreshing apt (diagnostic)
+      shell: apt-get install -s cargo rustc libssl-dev pkg-config 2>&1 | grep -i 'linux-image\|^Inst linux\|^Remv\|^Conf linux\|^E:' | head
+      register: rust_simulation
+      changed_when: false
+      failed_when: false
+
+    - name: Display the Rust install simulation (diagnostic)
+      debug:
+        var: rust_simulation.stdout_lines
 
     - name: Install Rust compiler
       apt:
