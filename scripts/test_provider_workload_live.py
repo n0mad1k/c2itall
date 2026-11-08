@@ -390,7 +390,7 @@ class AttackBox:
             "test \"$(systemctl is-enabled tor)\" = enabled; "
             "systemctl is-active tor >/dev/null; "
             "sudo -n grep -Fq \"alias qr='cd /root/" + deployment_id + "'\" /root/.bashrc; "
-            "sudo -n /usr/sbin/sshd -T | grep -q '^passwordauthentication no$'"
+            "sudo -n /usr/sbin/sshd -T | grep -iq '^passwordauthentication no$'"
         )
         context.ssh(command)
         report = {'os_verified': True, 'workspace': True, 'quick_guide': True, 'nmap': True,
@@ -460,7 +460,7 @@ class Redirector:
             "ss -ltn | grep -q ':80 '; ss -ltn | grep -q ':443 '; "
             "test \"$(curl -ks -o /dev/null -w '%{http_code}' https://127.0.0.1/)\" = 200; "
             "sudo -n test -x /root/Tools/post_install_redirector.sh; "
-            "sudo -n /usr/sbin/sshd -T | grep -q '^passwordauthentication no$'"
+            "sudo -n /usr/sbin/sshd -T | grep -iq '^passwordauthentication no$'"
         )
         context.ssh(command)
         status = context.run([
@@ -540,7 +540,7 @@ class C2:
             "test \"$(systemctl is-active postfix)\" = active; "
             "test \"$(systemctl is-active dovecot)\" = active; "
             "test \"$(systemctl is-active opendkim)\" = active; "
-            "sudo -n /usr/sbin/sshd -T | grep -q '^passwordauthentication no$'"
+            "sudo -n /usr/sbin/sshd -T | grep -iq '^passwordauthentication no$'"
         )
         context.ssh(command, timeout=120)
         report = {'kali': True, 'havoc_teamserver': True, 'havoc_config': True,
