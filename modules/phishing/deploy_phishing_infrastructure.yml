@@ -116,14 +116,14 @@
     # Phase 4: Save deployment state
     - name: Ensure logs directory exists
       file:
-        path: "../../logs"
+        path: "{{ playbook_dir }}/../../logs"
         state: directory
         mode: '0755'
 
     - name: Save phishing deployment state
       template:
         src: "templates/phishing_deployment_state.j2"
-        dest: "{{ playbook_dir }}/logs/phishing_deployment_{{ deployment_id }}.json"
+        dest: "{{ playbook_dir }}/../../logs/phishing_deployment_{{ deployment_id }}.json"
         mode: '0600'
       vars:
         deployment_components:

@@ -45,7 +45,7 @@
     
     - name: Ensure logs directory exists
       file:
-        path: "../../logs"
+        path: "{{ playbook_dir }}/../../logs"
         state: directory
         mode: '0755'
       delegate_to: localhost
@@ -53,7 +53,7 @@
     - name: Save deployment information
       template:
         src: phishing_deployment_info.j2
-        dest: "{{ playbook_dir }}/logs/phishing_deployment_{{ deployment_id }}.json"
+        dest: "{{ playbook_dir }}/../../logs/phishing_deployment_{{ deployment_id }}.json"
       delegate_to: localhost
       
     - name: Display success message

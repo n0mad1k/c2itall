@@ -308,6 +308,7 @@ def archive_deployment_logs(deployment_id):
         log_patterns = [
             f"logs/deployment_{deployment_id}*",
             f"logs/deployment_info_{deployment_id}*",
+            f"logs/phishing_deployment_{deployment_id}*",
             f"logs/teardown_{deployment_id}*"
         ]
         
