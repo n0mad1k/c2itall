@@ -255,19 +255,6 @@
       ignore_errors: yes
       register: deleted_rtbs
 
-    # Add this after your existing route table deletion
-    - name: Delete main route tables with AWS CLI
-      shell: |
-        for rtb in $(aws ec2 describe-route-tables --region {{ aws_region }} --filters "Name=vpc-id,Values={{ item.vpc_id }}" --query 'RouteTables[?Associations[?Main==`true`]].RouteTableId' --output text); do
-          aws ec2 delete-route --route-table-id $rtb --destination-cidr-block 0.0.0.0/0 --region {{ aws_region }} || true
-        done
-      environment:
-        AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
-        AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
-      loop: "{{ all_vpcs_to_delete }}"
-      ignore_errors: yes
-      when: all_vpcs_to_delete | length > 0
-
     # STEP 11: Find and delete Subnets
     - name: Find subnets for each VPC
       amazon.aws.ec2_vpc_subnet_info:
@@ -308,116 +295,22 @@
       register: deleted_endpoints
       when: endpoint_results.results is defined
 
-    # Add before STEP 13
-    - name: Check for remaining VPC dependencies
-      shell: |
-        aws ec2 describe-network-interfaces --region {{ aws_region }} --filters "Name=vpc-id,Values={{ item.vpc_id }}" --output json
-      environment:
-        AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
-        AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
-      register: remaining_deps
-      loop: "{{ all_vpcs_to_delete }}"
-      when: all_vpcs_to_delete | length > 0
-      
-    - name: Display any remaining dependencies
-      debug:
-        msg: "VPC {{ item.item.vpc_id }} still has dependencies that need to be removed"
-      loop: "{{ remaining_deps.results }}"
-      when: item.stdout | from_json | json_query('NetworkInterfaces') | length > 0
-
-    # Add this before the force delete of network interfaces
-    - name: Detach remaining network interfaces
-      shell: |
-        aws ec2 detach-network-interface --attachment-id $(aws ec2 describe-network-interfaces --network-interface-ids {{ item.1 }} --query 'NetworkInterfaces[0].Attachment.AttachmentId' --output text) --region {{ aws_region }} --force
-      environment:
-        AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
-        AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
-      loop: "{{ remaining_deps.results | selectattr('stdout', 'defined') | 
-                map('attr', 'stdout') | map('from_json') | 
-                map('json_query', 'NetworkInterfaces[?Status==`in-use`].NetworkInterfaceId') | 
-                zip(remaining_deps.results | map('attr', 'item')) | list }}"
-      ignore_errors: yes
-      when: item.0 | length > 0
-      
-    - name: Force delete any remaining network interfaces
-      shell: |
-        aws ec2 delete-network-interface --network-interface-id {{ item.1 }} --region {{ aws_region }}
-      environment:
-        AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
-        AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
-      loop: "{{ remaining_deps.results | selectattr('stdout', 'defined') | 
-                map('attr', 'stdout') | map('from_json') | 
-                map('json_query', 'NetworkInterfaces[].NetworkInterfaceId') | 
-                zip(remaining_deps.results | map('attr', 'item')) | list }}"
-      ignore_errors: yes
-      when: item.0 | length > 0
-
-    # STEP 13: Final VPC deletion with multiple retries
-    - name: Wait for all dependencies to clear
-      pause:
-        seconds: 20
-      when: all_vpcs_to_delete | length > 0
-      
-    # First attempt with normal module - with error display
-    - name: Delete all VPCs (first attempt)
+    # STEP 13: Delete VPCs, retrying while AWS releases their dependencies
+    - name: Delete all VPCs
       amazon.aws.ec2_vpc_net:
         vpc_id: "{{ item.vpc_id }}"
         region: "{{ aws_region }}"
         state: absent
       loop: "{{ all_vpcs_to_delete }}"
       register: vpc_deletion
-      when: all_vpcs_to_delete | length > 0
-      ignore_errors: yes
-      
-    - name: Display VPC deletion errors
-      debug:
-        msg: "Failed to delete VPC {{ item.item.vpc_id }}: {{ item.msg }}"
-      loop: "{{ vpc_deletion.results | default([]) }}"
-      when: item.failed is defined and item.failed
-
-    # Direct API call for any VPCs that failed
-    - name: Find which VPCs still exist
-      amazon.aws.ec2_vpc_net_info:
-        region: "{{ aws_region }}"
-        vpc_ids: "{{ all_vpcs_to_delete | map(attribute='vpc_id') | list }}"
-      register: remaining_vpcs
-      when: all_vpcs_to_delete | length > 0
-      
-    # Forcibly delete with direct AWS CLI command
-    - name: Force delete remaining VPCs with CLI
-      shell: |
-        aws ec2 delete-vpc --vpc-id {{ item.vpc_id }} --region {{ aws_region }}
-      environment:
-        AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
-        AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
-      loop: "{{ remaining_vpcs.vpcs }}" 
-      ignore_errors: yes
-      when: remaining_vpcs is defined and remaining_vpcs.vpcs | length > 0
-      register: force_vpc_delete
-
-    # Add after the VPC deletion attempts - more aggressive approach
-    - name: Force delete remaining VPCs with AWS CLI and debug output
-      shell: |
-        aws ec2 delete-vpc --vpc-id {{ item.vpc_id }} --region {{ aws_region }} 2>&1 || echo "Failed with: $?"
-      environment:
-        AWS_ACCESS_KEY_ID: "{{ aws_access_key }}"
-        AWS_SECRET_ACCESS_KEY: "{{ aws_secret_key }}"
-      loop: "{{ remaining_vpcs.vpcs }}" 
-      register: force_vpc_delete_debug
-      when: remaining_vpcs is defined and remaining_vpcs.vpcs | length > 0
-      
-    - name: Display debug output from force delete
-      debug:
-        msg: "{{ item.stdout }}"
-      loop: "{{ force_vpc_delete_debug.results | default([]) }}"
-      when: item.stdout is defined and item.stdout | trim != ""
+      until: vpc_deletion is not failed
+      retries: 12
+      delay: 10
 
     # Track deleted VPCs in summary
     - name: Set VPC deletion results in summary
       set_fact:
-        cleanup_summary: "{{ cleanup_summary | combine({
-          'vpcs_deleted': ((vpc_deletion.results | default([]) | selectattr('failed', 'undefined') | list | length) + (force_vpc_delete.results | default([]) | selectattr('failed', 'undefined') | list | length))}) }}"
-      when: all_vpcs_to_delete | length > 0
+        cleanup_summary: "{{ cleanup_summary | combine({'vpcs_deleted': vpc_deletion.results | default([]) | rejectattr('failed') | list | length}) }}"
     
     # Add these tasks to confirm VPC deletion
     - name: Verify VPC deletion
