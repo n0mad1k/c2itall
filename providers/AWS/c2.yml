@@ -16,10 +16,6 @@
     use_shared_infra: "{{ not split_regions and not c2_only | default(false) | bool and not redirector_only | default(false) | bool }}"
     # Set correct region variable
     aws_c2_region: "{{ c2_region | default(aws_region) }}"
-    # AMI map comes from vars.yaml - add fallback for safety
-    kali_ami_map_fallback:
-      us-east-1: "ami-061b17d332829ab1c"
-      us-east-2: "ami-061b17d332829ab1c"  # Fallback to us-east-1 AMI
 
   tasks:
     - name: Default inputs the controller may not supply
@@ -60,35 +56,20 @@
         aws_c2_region: "{{ c2_region | default(aws_region) }}"
       when: not (use_shared_infra | bool and infra_state_file.stat.exists | default(false))
 
-    - name: Check if ami_map is provided in vars.yaml
-      debug:
-        msg: "ami_map is {{ 'defined' if ami_map is defined else 'NOT defined' }} in vars.yaml"
+    - name: Resolve the Kali AMI for the C2 region
+      include_tasks: kali_ami.yml
+      vars:
+        kali_ami_region: "{{ aws_c2_region }}"
 
-    - name: Set AMI ID for selected region (from vars.yaml)
+    - name: Record the C2 image and its login user
       set_fact:
-        ami_id: "{{ ami_map[aws_c2_region] | default(ami_map['us-east-1']) }}"
-      when: ami_map is defined and ami_map | length > 0
-
-    - name: Set AMI ID for selected region (fallback)
-      set_fact:
-        ami_id: "{{ kali_ami_map_fallback[aws_c2_region] | default(kali_ami_map_fallback['us-east-1']) }}"
-      when: ami_id is not defined or ami_id == ""
-
-    - name: Ensure we have a valid AMI ID
-      assert:
-        that:
-          - ami_id is defined and ami_id != ""
-        fail_msg: "Could not determine a valid AMI ID for region {{ aws_c2_region }}. Please add it to ami_map in vars.yaml."
-
-    # Add AMI username mapping - improved with better detection
-    - name: Determine correct SSH user for the AMI
-      set_fact:
-        ami_ssh_user: "{{ 'kali' if (ami_id is defined and ami_id is search('-kali-')) or (ami_id is defined and ami_id == 'ami-061b17d332829ab1c') else 'ubuntu' }}"
+        ami_id: "{{ kali_ami }}"
+        ami_ssh_user: kali
 
     - name: Display AMI and user information for debugging
       debug:
-        msg: 
-          - "Using AMI ID: {{ ami_id | default('AMI not defined') }}"
+        msg:
+          - "Using AMI ID: {{ ami_id }}"
           - "Detected SSH user: {{ ami_ssh_user }}"
 
     # Create new infrastructure only if not using shared
@@ -445,22 +426,6 @@
       changed_when: "'set on hold' in kernel_hold.stdout"
       failed_when: false
 
-    - name: Report first-boot package state (diagnostic)
-      shell: |
-        echo "== dpkg audit"; dpkg --audit
-        echo "== cloud-init"; cloud-init status --long || true
-        echo "== kernel packages"; dpkg -l 'linux-image*' | tail -n +6
-        echo "== cloud-init kernel activity"; grep -n -i 'linux-image\|run-parts\|dpkg: error\|upgrade' /var/log/cloud-init-output.log | head -20
-        echo "== hooks"; ls /etc/kernel/postinst.d; grep -ln run-parts /etc/kernel/postinst.d/* /var/lib/dpkg/info/linux-image-*.postinst 2>/dev/null
-        echo "== holds"; apt-mark showhold
-      register: first_boot_state
-      changed_when: false
-      failed_when: false
-
-    - name: Display first-boot package state (diagnostic)
-      debug:
-        var: first_boot_state.stdout_lines
-
     - name: Download Kali archive keyring to temporary location
       get_url:
         url: https://archive.kali.org/archive-keyring.gpg
@@ -480,16 +445,6 @@
       until: apt_result is success
       retries: 10
       delay: 10
-
-    - name: Simulate the build dependency install with the kernel held (diagnostic)
-      shell: apt-get install -s build-essential libssl-dev python3-pip pipx 2>&1 | grep -i 'linux-\|held\|^E:' | head
-      register: build_simulation
-      changed_when: false
-      failed_when: false
-
-    - name: Display the build dependency simulation (diagnostic)
-      debug:
-        var: build_simulation.stdout_lines
 
     - name: Clean up any failed pipx installations
       file:

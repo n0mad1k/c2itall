@@ -14,7 +14,6 @@
     instance_type: "{{ aws_instance_type | default('t3.small') }}"
     ssh_key_name: "attack-box-{{ deployment_id }}"
     attack_box_ssh_user: "kali"
-    kali_ami_fallback: "ami-061b17d332829ab1c"
     attack_box_info_file: "{{ playbook_dir }}/../../logs/attack_box_{{ deployment_id }}_info.txt"
     resource_tags:
       deployment_id: "{{ deployment_id }}"
@@ -36,9 +35,14 @@
           - operator_ip is defined and (operator_ip | string) is match('^\d{1,3}(\.\d{1,3}){3}$')
         fail_msg: "AWS credentials and a valid single-IPv4 operator_ip are required"
 
+    - name: Resolve the Kali AMI for the attack box region
+      include_tasks: kali_ami.yml
+      vars:
+        kali_ami_region: "{{ aws_region }}"
+
     - name: Set attack box AMI
       set_fact:
-        attack_box_ami: "{{ (ami_map | default({}))[aws_region] | default(kali_ami_fallback) }}"
+        attack_box_ami: "{{ kali_ami }}"
 
     - name: Debug attack box deployment
       debug:
