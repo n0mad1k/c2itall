@@ -31,16 +31,7 @@ RANDOMIZED_BUILD_ID=$(random_string 16)
 # Install required dependencies
 log "Installing dependencies..."
 apt-get update >/dev/null 2>&1
-apt-get install -y git build-essential apt-utils cmake libfontconfig1 libglu1-mesa-dev libgtest-dev libspdlog-dev libboost-all-dev libncurses5-dev libgdbm-dev libssl-dev libreadline-dev libffi-dev libsqlite3-dev libbz2-dev mesa-common-dev qtbase5-dev qtchooser qt5-qmake qtbase5-dev-tools libqt5websockets5 libqt5websockets5-dev qtdeclarative5-dev golang-go qtbase5-dev libqt5websockets5-dev python3-dev libboost-all-dev mingw-w64 nasm >/dev/null 2>&1
-
-# Fix for JSON dependency
-log "Installing nlohmann-json manually..."
-mkdir -p /tmp/json
-cd /tmp/json
-wget -q https://github.com/nlohmann/json/releases/download/v3.11.2/json.hpp
-mkdir -p /usr/include/nlohmann
-cp json.hpp /usr/include/nlohmann/
-cd - > /dev/null
+apt-get install -y git build-essential apt-utils cmake libfontconfig1 libglu1-mesa-dev libgtest-dev libspdlog-dev libboost-all-dev libncurses5-dev libgdbm-dev libssl-dev libreadline-dev libffi-dev libsqlite3-dev libbz2-dev mesa-common-dev qtbase5-dev qtchooser qt5-qmake qtbase5-dev-tools libqt5websockets5 libqt5websockets5-dev qtdeclarative5-dev golang-go qtbase5-dev libqt5websockets5-dev python3-dev libboost-all-dev mingw-w64 nasm nlohmann-json3-dev >/dev/null 2>&1
 
 # Setup Go environment
 log "Setting up Go environment..."
