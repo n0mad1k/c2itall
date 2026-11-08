@@ -180,7 +180,9 @@ def execute_legacy_teardown(config):
         
         if success:
             # Clean up local SSH keys
-            cleanup_ssh_keys_for_deployment(deployment_id)
+            if not config.get('preserve_local_keys'):
+                cleanup_ssh_keys_for_deployment(
+                    deployment_id, config.get('ssh_key_path'))
             
             # Move deployment logs to cleanup folder
             archive_deployment_logs(deployment_id)
@@ -269,12 +271,19 @@ def create_teardown_vars(config):
     
     return json.dumps(teardown_vars)
 
-def cleanup_ssh_keys_for_deployment(deployment_id):
-    """Clean up SSH keys for a specific deployment"""
+def cleanup_ssh_keys_for_deployment(deployment_id, ssh_key_path=None):
+    """Remove the deployment's generated keys, including a module-named key."""
     ssh_dir = os.path.expanduser("~/.ssh")
     key_pattern = f"c2deploy_{deployment_id}*"
-    
-    for key_file in glob.glob(os.path.join(ssh_dir, key_pattern)):
+    key_files = set(glob.glob(os.path.join(ssh_dir, key_pattern)))
+    if ssh_key_path:
+        private = os.path.expanduser(str(ssh_key_path)).removesuffix('.pub')
+        if (os.path.dirname(private) == ssh_dir and
+                os.path.basename(private).startswith('c2deploy_')):
+            key_files.update(path for path in (private, private + '.pub')
+                             if os.path.lexists(path))
+
+    for key_file in sorted(key_files):
         try:
             os.remove(key_file)
             logging.info(f"Removed SSH key: {key_file}")

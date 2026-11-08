@@ -381,7 +381,7 @@
         # Add these lines to pass all required variables:
         smtp_auth_user: "{{ smtp_auth_user }}"
         smtp_auth_pass: "{{ smtp_auth_pass }}"
-        gophish_admin_port: "{{ gophish_admin_port }}"
+        gophish_admin_port: "{{ gophish_admin_port | default('2222') }}"
         domain: "{{ domain }}"
         redirector_subdomain: "{{ redirector_subdomain }}"
         letsencrypt_email: "{{ letsencrypt_email }}"
@@ -542,6 +542,6 @@
           - "-----------------------------"
           - "C2 Server IP: {{ ansible_host }}"
           - "C2 Server Domain: {{ c2_subdomain }}.{{ domain }} (Update DNS A record)"
-          - "GoPhish Admin Port: {{ gophish_admin_port }}"
+          - "GoPhish Admin Port: {{ gophish_admin_port | default('2222') }}"
           - "SSH Key: ~/.ssh/c2deploy_{{ hostvars['localhost']['deployment_id'] }}.pem"
       when: not disable_summary | default(false)

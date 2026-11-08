@@ -201,5 +201,5 @@
           - "-----------------------------"
           - "C2 Server IP: {{ ansible_host }}"
           - "C2 Server Domain: {{ domain }}"
-          - "GoPhish Admin Port: {{ gophish_admin_port }}"
+          - "GoPhish Admin Port: {{ gophish_admin_port | default('2222') }}"
       when: not disable_summary | default(false)
