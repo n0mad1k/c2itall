@@ -24,6 +24,7 @@ def framework(config):
 
 class C2Profile(WorkloadProfile):
     workload = 'c2'
+    frameworks = FRAMEWORKS
     address_key = 'c2_ip'
     service_playbook = 'modules/c2/service.yml'
     log_suffix = 'c2'

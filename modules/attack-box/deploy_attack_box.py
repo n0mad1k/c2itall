@@ -97,14 +97,6 @@ def gather_attack_box_parameters(attack_box_type="kali"):
         prefix='a-'
     )
     
-    # Attack box image mapping
-    if attack_box_type == "kali":
-        config['attack_box_image'] = "linode/kali"
-    elif attack_box_type == "ubuntu":
-        config['attack_box_image'] = "linode/ubuntu22.04"
-    else:
-        config['attack_box_image'] = "linode/ubuntu22.04"  # Default fallback
-    
     # Instance sizing based on attack box type
     print(f"\n{COLORS['GREEN']}Instance Size Selection:{COLORS['RESET']}")
     print(f"1) Small (2 CPU, 4GB RAM) - Basic reconnaissance")
@@ -208,7 +200,6 @@ def deploy_kali_attack_box():
     if not config:
         return
     
-    config['attack_box_image'] = 'linode/kali'
     config['default_user'] = 'root'
     
     print(f"\n{COLORS['GREEN']}Deploying Kali Linux attack box...{COLORS['RESET']}")
@@ -220,7 +211,6 @@ def deploy_ubuntu_attack_box():
     if not config:
         return
     
-    config['attack_box_image'] = 'linode/ubuntu22.04'
     config['default_user'] = 'root'
     
     print(f"\n{COLORS['GREEN']}Deploying Ubuntu attack box...{COLORS['RESET']}")
@@ -232,7 +222,6 @@ def deploy_quick_recon_box():
     if not config:
         return
     
-    config['attack_box_image'] = 'linode/kali'  # Kali Linux base
     config['default_user'] = 'root'
     config['deployment_type'] = 'quick_recon_box'
     config['attack_box_type'] = 'quick_recon'

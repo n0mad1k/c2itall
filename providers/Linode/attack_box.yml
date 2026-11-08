@@ -12,8 +12,10 @@
     ssh_key_name: "{{ ssh_key_path | default('c2deploy_' + attack_box_name) | basename | regex_replace('\\.pub$', '') }}"
     
     # Attack box image mapping (headless versions)
+    # The provider owns its image names; modules only name the subtype.
     attack_box_images:
       kali: "linode/kali"
+      ubuntu: "linode/ubuntu22.04"
       custom: "linode/kali"  # Use Kali as base for custom builds
       quick_recon: "linode/kali"  # Kali Linux for easy tool expansion
     

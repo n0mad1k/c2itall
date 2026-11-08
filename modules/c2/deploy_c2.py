@@ -19,6 +19,7 @@ from utils.provider_utils import (
     select_provider, gather_provider_config, prepare_module_ssh_key,
 )
 from utils.naming_utils import get_deployment_name_with_options
+from utils.workloads import load_profile
 
 def gather_c2_parameters():
     """Collect parameters specific to C2 deployments"""
@@ -74,23 +75,15 @@ def gather_c2_parameters():
         prefix='s-'
     )
     
-    # C2 Framework selection
+    # C2 Framework selection: the module profile owns the catalog
+    frameworks = list(load_profile('c2').frameworks.items())
     print(f"\n{COLORS['BLUE']}C2 Framework Selection:{COLORS['RESET']}")
-    print(f"1) Havoc")
-    print(f"2) Cobalt Strike")
-    print(f"3) Sliver")
-    print(f"4) Mythic")
-    print(f"5) Custom")
-    
-    framework_choice = input("Select C2 framework [default: 1]: ") or "1"
-    frameworks = {
-        "1": "havoc",
-        "2": "cobaltstrike", 
-        "3": "sliver",
-        "4": "mythic",
-        "5": "custom"
-    }
-    config['c2_framework'] = frameworks.get(framework_choice, "havoc")
+    for i, (_, framework) in enumerate(frameworks, 1):
+        print(f"{i}) {framework['label']}")
+
+    framework_choice = input("Select C2 framework [default: 1]: ").strip() or "1"
+    selected = int(framework_choice) - 1 if framework_choice.isdigit() else -1
+    config['c2_framework'] = frameworks[selected if 0 <= selected < len(frameworks) else 0][0]
     
     # Email for Let's Encrypt
     default_email = f"admin@{config['domain']}"
@@ -147,25 +140,18 @@ def c2_menu():
         print_banner()
         print(f"{COLORS['WHITE']}C2 INFRASTRUCTURE MENU{COLORS['RESET']}")
         print(f"{COLORS['WHITE']}======================={COLORS['RESET']}")
+        frameworks = list(load_profile('c2').frameworks.items())
         print(f"1) C2 Server Only {COLORS['GREEN']}*QUICK*{COLORS['RESET']} {COLORS['GRAY']}(Basic setup){COLORS['RESET']}")
-        print(f"2) Havoc C2 Server {COLORS['GRAY']}(Modern C2 framework){COLORS['RESET']}")
-        print(f"3) Sliver Server {COLORS['GRAY']}(Go-based C2){COLORS['RESET']}")
-        print(f"4) Cobalt Strike Server {COLORS['GRAY']}(Commercial C2){COLORS['RESET']}")
-        print(f"5) Mythic Server {COLORS['GRAY']}(Cross-platform C2){COLORS['RESET']}")
+        for i, (_, framework) in enumerate(frameworks, 2):
+            print(f"{i}) {framework['label']} C2 Server")
         print(f"99) Return to Main Menu")
         
-        choice = input(f"\nSelect an option: ")
+        choice = input(f"\nSelect an option: ").strip()
         
         if choice == "1":
             deploy_c2_only()
-        elif choice == "2":
-            deploy_havoc_c2()
-        elif choice == "3":
-            deploy_sliver_c2()
-        elif choice == "4":
-            deploy_cobaltstrike_c2()
-        elif choice == "5":
-            deploy_mythic_c2()
+        elif choice.isdigit() and 2 <= int(choice) < len(frameworks) + 2:
+            deploy_framework_c2(frameworks[int(choice) - 2][0])
         elif choice == "99":
             return
         else:
@@ -183,57 +169,17 @@ def deploy_c2_only():
     print(f"\n{COLORS['GREEN']}Deploying C2 server only...{COLORS['RESET']}")
     execute_c2_deployment(config)
 
-def deploy_havoc_c2():
-    """Deploy Havoc C2 server specifically"""
+def deploy_framework_c2(framework):
+    """Deploy a C2 server running one framework from the module profile"""
     config = gather_c2_parameters()
     if not config:
         return
     
-    config['c2_framework'] = 'havoc'
-    config['deployment_type'] = 'havoc_c2'
+    config['c2_framework'] = framework
+    config['deployment_type'] = framework + '_c2'
     
-    print(f"\n{COLORS['GREEN']}Deploying Havoc C2 server...{COLORS['RESET']}")
-    execute_c2_deployment(config)
-
-def deploy_cobaltstrike_c2():
-    """Deploy Cobalt Strike server specifically"""
-    config = gather_c2_parameters()
-    if not config:
-        return
-    
-    config['c2_framework'] = 'cobaltstrike'
-    config['deployment_type'] = 'cobaltstrike_c2'
-    
-    # Cobalt Strike specific configuration
-    license_path = input("Path to Cobalt Strike license file [optional]: ")
-    if license_path:
-        config['cobaltstrike_license'] = license_path
-    
-    print(f"\n{COLORS['GREEN']}Deploying Cobalt Strike server...{COLORS['RESET']}")
-    execute_c2_deployment(config)
-
-def deploy_sliver_c2():
-    """Deploy Sliver C2 server specifically"""
-    config = gather_c2_parameters()
-    if not config:
-        return
-    
-    config['c2_framework'] = 'sliver'
-    config['deployment_type'] = 'sliver_c2'
-    
-    print(f"\n{COLORS['GREEN']}Deploying Sliver C2 server...{COLORS['RESET']}")
-    execute_c2_deployment(config)
-
-def deploy_mythic_c2():
-    """Deploy Mythic C2 server specifically"""
-    config = gather_c2_parameters()
-    if not config:
-        return
-    
-    config['c2_framework'] = 'mythic'
-    config['deployment_type'] = 'mythic_c2'
-    
-    print(f"\n{COLORS['GREEN']}Deploying Mythic C2 server...{COLORS['RESET']}")
+    label = load_profile('c2').frameworks[framework]['label']
+    print(f"\n{COLORS['GREEN']}Deploying {label} C2 server...{COLORS['RESET']}")
     execute_c2_deployment(config)
 
 def execute_c2_deployment(config):
