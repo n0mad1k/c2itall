@@ -84,7 +84,7 @@
   vars:
     gophish_admin_cert: "{{ '/etc/letsencrypt/live/' + domain + '/fullchain.pem' if gophish_le_cert.stat.exists else '/opt/gophish/admin-cert.pem' }}"
     gophish_admin_key: "{{ '/etc/letsencrypt/live/' + domain + '/privkey.pem' if gophish_le_cert.stat.exists else '/opt/gophish/admin-key.pem' }}"
-    gophish_phish_port: "{{ gophish_phish_port | default(80) }}"
+    gophish_listen_port: "{{ gophish_phish_port | default(80) }}"
 
 - name: Install the GoPhish service
   copy:

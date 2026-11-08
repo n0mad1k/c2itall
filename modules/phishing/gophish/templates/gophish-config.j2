@@ -7,7 +7,7 @@
                 "trusted_origins": []
         },
         "phish_server": {
-                "listen_url": "0.0.0.0:{{ gophish_phish_port | default(8081) }}",
+                "listen_url": "0.0.0.0:{{ gophish_listen_port | default(gophish_phish_port | default(8081)) }}",
                 "use_tls": false,
                 "cert_path": "/etc/letsencrypt/live/{{ domain }}/fullchain.pem",
                 "key_path": "/etc/letsencrypt/live/{{ domain }}/privkey.pem"
