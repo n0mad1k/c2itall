@@ -128,8 +128,8 @@ server {
     server_name {{ redirector_subdomain }}.{{ domain }};
     
     # SSL Configuration
-    ssl_certificate /etc/letsencrypt/live/{{ redirector_subdomain }}.{{ domain }}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/{{ redirector_subdomain }}.{{ domain }}/privkey.pem;
+    ssl_certificate {{ redirector_cert }};
+    ssl_certificate_key {{ redirector_key }};
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_prefer_server_ciphers on;
     ssl_ciphers 'ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305';
@@ -225,7 +225,7 @@ server {
         # Process the PHP file
         root /var/www;
         include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/var/run/php/php7.4-fpm.sock;
+        fastcgi_pass unix:/run/php/php-fpm.sock;
     }
 
     # Block direct access to sensitive files
