@@ -310,6 +310,20 @@ class ProviderDispatcher:
         return _load(self.spec.config_loader)()
 
 
+def provider_label(provider):
+    """Human-readable provider name for menus and summaries."""
+    return PROVIDER_SPECS[provider].directory
+
+
+def provider_driver(provider):
+    """The provider's CloudDriver instance, or None for transition providers."""
+    spec = PROVIDER_SPECS[provider]
+    if spec.driver is None:
+        return None
+    from .vm_workloads import load_driver
+    return load_driver(spec.driver)
+
+
 def provider_dispatcher(provider):
     return ProviderDispatcher(provider) if provider in PROVIDER_SPECS else None
 

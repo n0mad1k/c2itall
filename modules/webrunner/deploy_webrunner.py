@@ -22,6 +22,7 @@ from utils.provider_utils import (
     available_providers, gather_provider_config, prepare_module_ssh_key,
 )
 from utils.naming_utils import show_naming_relationship
+from utils.provider_registry import provider_driver, provider_label
 from utils.deployment_engine import (
     dispatch_composite_workload, execute_playbook, set_provider_environment,
 )
@@ -33,9 +34,28 @@ from utils.provider_rates import (
 
 WEBRUNNER_INPUTS = Path(__file__).parent / 'inputs'
 
-PROVIDER_LABELS = {
-    'linode': 'Linode', 'aws': 'AWS', 'flokinet': 'FlokiNET', 'azure': 'Azure',
+# Transition providers keep their region and quota knowledge here until they
+# move to a CloudDriver; driver providers answer for themselves.
+_LEGACY_REGIONS = {
+    'linode': lambda config: config.get('linode_regions', [config.get('linode_region', 'us-east')]),
+    'aws': lambda config: config.get('aws_regions', [config.get('aws_region', 'us-east-1')]),
+    'flokinet': lambda config: [config.get('flokinet_region', 'default')],
 }
+_LEGACY_NODE_QUOTA = {'linode': 20, 'aws': 32, 'flokinet': 10}
+
+
+def _provider_regions(provider, config):
+    driver = provider_driver(provider)
+    if driver is not None:
+        return [driver.region(config)]
+    return _LEGACY_REGIONS.get(provider, lambda config: ['default'])(config)
+
+
+def _provider_node_quota(provider):
+    driver = provider_driver(provider)
+    if driver is not None:
+        return driver.node_quota
+    return _LEGACY_NODE_QUOTA.get(provider, 20)
 
 
 # ── menu ──────────────────────────────────────────────────────────────────────
@@ -58,7 +78,7 @@ def _select_providers() -> list[str]:
         return []
     print(f"\n{COLORS['BLUE']}Provider Selection (multi-select):{COLORS['RESET']}")
     for i, key in enumerate(providers, 1):
-        print(f"  {i}) {PROVIDER_LABELS.get(key, key.capitalize())}")
+        print(f"  {i}) {provider_label(key)}")
 
     raw = input("Select providers (e.g. 1 or 1,2) [1]: ").strip() or "1"
     selected = []
@@ -285,7 +305,7 @@ def _show_estimate_table(total_ips: int, n_ports: int, providers: list[str], sca
     print(f"\n{C}{'─' * 70}{R}")
     print(f"{C}  WEBRUNNER — Cost & Time Estimate{R}")
     print(f"{W}  Total: {fmt_ip_count(total_ips)} IPs   {n_ports} ports   Mode: {scan_mode}{R}")
-    print(f"{W}  Providers: {', '.join(PROVIDER_LABELS[p] for p in providers)}{Y}{tor_note}{R}")
+    print(f"{W}  Providers: {', '.join(provider_label(p) for p in providers)}{Y}{tor_note}{R}")
     if tuning:
         bits = []
         if 'masscan_rate' in tuning:
@@ -351,7 +371,7 @@ def gather_webrunner_parameters() -> dict | None:
             return None
         config.update(provider_config)
 
-    print(f"{COLORS['GREEN']}Providers: {', '.join(PROVIDER_LABELS[p] for p in providers)}{COLORS['RESET']}")
+    print(f"{COLORS['GREEN']}Providers: {', '.join(provider_label(p) for p in providers)}{COLORS['RESET']}")
 
     # Deployment type
     config['deployment_type'] = 'webrunner'
@@ -477,18 +497,8 @@ def gather_webrunner_parameters() -> dict | None:
     chunks = chunk_cidrs(all_cidrs, chunk_size)
 
     # Build per-provider region pools for round-robin assignment
-    provider_regions: dict[str, list[str]] = {}
-    for p in providers:
-        if p == 'linode':
-            provider_regions[p] = config.get('linode_regions', [config.get('linode_region', 'us-east')])
-        elif p == 'aws':
-            provider_regions[p] = config.get('aws_regions', [config.get('aws_region', 'us-east-1')])
-        elif p == 'flokinet':
-            provider_regions[p] = [config.get('flokinet_region', 'default')]
-        elif p == 'azure':
-            provider_regions[p] = [config.get('azure_location', 'eastus')]
-        else:
-            provider_regions[p] = ['default']
+    provider_regions: dict[str, list[str]] = {
+        p: _provider_regions(p, config) for p in providers}
 
     provider_counters: dict[str, int] = {p: 0 for p in providers}
     node_chunks = []
@@ -510,16 +520,15 @@ def gather_webrunner_parameters() -> dict | None:
     print(f"{COLORS['GREEN']}Nodes: {len(node_chunks)} ({preset_key}, {fmt_ip_count(chunk_size)}/node){COLORS['RESET']}")
 
     # Warn if any provider's node count exceeds safe per-region quota
-    _PROVIDER_CAPS = {'linode': 20, 'aws': 32, 'flokinet': 10, 'azure': 10}
     provider_node_counts: dict[str, int] = {}
     for nc in node_chunks:
         provider_node_counts[nc['provider']] = provider_node_counts.get(nc['provider'], 0) + 1
     for p, count in provider_node_counts.items():
         n_regions = len(provider_regions.get(p, ['default']))
-        cap = _PROVIDER_CAPS.get(p, 20)
+        cap = _provider_node_quota(p)
         per_region = (count + n_regions - 1) // n_regions
         if per_region > cap:
-            print(f"{COLORS['YELLOW']}  Warning: {count} {PROVIDER_LABELS[p]} nodes across {n_regions} region(s) "
+            print(f"{COLORS['YELLOW']}  Warning: {count} {provider_label(p)} nodes across {n_regions} region(s) "
                   f"= ~{per_region}/region; default quota is ~{cap}/region.{COLORS['RESET']}")
 
     # Operator IP
@@ -572,7 +581,7 @@ def execute_webrunner_deployment(config: dict):
         print(f"  └─ {naming_info['relationship_text']}")
 
     print(f"  Engagement:     {config['engagement']}")
-    print(f"  Providers:      {', '.join(PROVIDER_LABELS[p] for p in config['providers'])}")
+    print(f"  Providers:      {', '.join(provider_label(p) for p in config['providers'])}")
     print(f"  Nodes:          {n_nodes} ({config['preset']}, {fmt_ip_count(config['chunk_size'])}/node)")
     print(f"  Scan mode:      {config['scan_mode']}")
     print(f"  Ports:          {', '.join(str(p) for p in config['ports'][:8])}{'...' if len(config['ports']) > 8 else ''}")
@@ -618,7 +627,7 @@ def execute_webrunner_deployment(config: dict):
     config['results_dir'] = os.path.join(logs_dir, f"webrunner_{config['deployment_id']}")
 
     print(f"\n{COLORS['CYAN']}[*] Launching WEBRUNNER — {n_nodes} nodes across "
-          f"{', '.join(PROVIDER_LABELS[p] for p in config['providers'])}{COLORS['RESET']}")
+          f"{', '.join(provider_label(p) for p in config['providers'])}{COLORS['RESET']}")
     print(f"{COLORS['YELLOW']}    Provisioning may take several minutes per node.{COLORS['RESET']}\n")
 
     success = dispatch_composite_workload(config, _execute_webrunner_legacy)

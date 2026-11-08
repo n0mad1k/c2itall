@@ -100,7 +100,6 @@ def _gather_tak_config(config):
         tak_federation=input("Expose TAK federation? [y/N]: ").strip().lower()
         in ("y", "yes", "true"),
     )
-    config.setdefault("azure_os_disk_gb", 64)
     return _validate_tak_config(config)
 
 

@@ -363,51 +363,59 @@ def generate_ssh_keys():
     wait_for_input()
 
 def test_provider_connectivity():
-    """Check the authenticated Azure subscription without creating resources."""
+    """Probe every driver-backed provider read-only without creating resources."""
     print(f"\n{COLORS['BLUE']}Provider Connectivity Test{COLORS['RESET']}")
-    from utils.azure_utils import check_connection
-    try:
-        result = check_connection()
-        print(f"{COLORS['GREEN']}Azure connected: {result['subscription_id']} "
-              f"({result['resource_group_count']} resource groups){COLORS['RESET']}")
-    except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
-        print(f"{COLORS['RED']}Azure connectivity failed: {error}{COLORS['RESET']}")
-    print('Connectivity checks for AWS, Linode and FlokiNET are not implemented here.')
+    from utils.provider_registry import PROVIDER_SPECS, provider_driver, provider_label
+    unchecked = []
+    for provider in PROVIDER_SPECS:
+        driver = provider_driver(provider)
+        if driver is None:
+            unchecked.append(provider_label(provider))
+            continue
+        try:
+            result = driver.check_connection()
+            details = ', '.join(f'{key}={value}' for key, value in result.items())
+            print(f"{COLORS['GREEN']}{provider_label(provider)} connected: {details}{COLORS['RESET']}")
+        except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
+            print(f"{COLORS['RED']}{provider_label(provider)} connectivity failed: {error}{COLORS['RESET']}")
+    if unchecked:
+        print(f"Connectivity checks for {', '.join(unchecked)} are not implemented here.")
     wait_for_input()
 
 def validate_configurations():
     """Validate configuration files"""
     print(f"\n{COLORS['BLUE']}Configuration Validation{COLORS['RESET']}")
     
-    root = os.path.dirname(os.path.abspath(__file__))
-    config_dirs = ['providers/AWS', 'providers/Linode', 'providers/FlokiNET']
-    
-    for config_dir in config_dirs:
-        vars_file = os.path.join(root, config_dir, 'vars.yaml')
-        if os.path.exists(vars_file):
-            print(f"{COLORS['GREEN']}✓{COLORS['RESET']} Found: {vars_file}")
-        else:
-            print(f"{COLORS['RED']}✗{COLORS['RESET']} Missing: {vars_file}")
+    import yaml
+    from utils.provider_registry import PROVIDER_SPECS, provider_driver, provider_label
 
-    azure_file = os.path.join(root, 'providers', 'Azure', 'vars.yaml')
-    if os.path.isfile(azure_file):
-        import yaml
-        from utils.azure_utils import validate_config
+    root = os.path.dirname(os.path.abspath(__file__))
+    for provider, spec in PROVIDER_SPECS.items():
+        label = provider_label(provider)
+        vars_file = os.path.join(root, 'providers', spec.directory, 'vars.yaml')
+        driver = provider_driver(provider)
+        if driver is None:
+            if os.path.exists(vars_file):
+                print(f"{COLORS['GREEN']}✓{COLORS['RESET']} Found: {vars_file}")
+            else:
+                print(f"{COLORS['RED']}✗{COLORS['RESET']} Missing: {vars_file}")
+            continue
+        if not os.path.isfile(vars_file):
+            print(f'{label} uses interactive configuration; no saved vars.yaml found. '
+                  f'See providers/{spec.directory}/vars.example.yaml for required inputs.')
+            continue
         try:
-            with open(azure_file) as stream:
+            with open(vars_file) as stream:
                 config = yaml.safe_load(stream)
             if not isinstance(config, dict):
-                raise ValueError('Azure configuration must be a mapping')
-            validate_config(config)
-            print(f"{COLORS['GREEN']}Valid Azure configuration and public key: {azure_file}{COLORS['RESET']}")
+                raise ValueError(f'{label} configuration must be a mapping')
+            driver.validate_config(config)
+            print(f"{COLORS['GREEN']}Valid {label} configuration and public key: {vars_file}{COLORS['RESET']}")
         except yaml.YAMLError:
-            print(f"{COLORS['RED']}Invalid Azure YAML: {azure_file}{COLORS['RESET']}")
+            print(f"{COLORS['RED']}Invalid {label} YAML: {vars_file}{COLORS['RESET']}")
         except (OSError, ValueError, KeyError, TypeError) as error:
-            print(f"{COLORS['RED']}Invalid Azure configuration: {error}{COLORS['RESET']}")
-    else:
-        print('Azure uses interactive configuration; no saved vars.yaml found. '
-              'See providers/Azure/vars.example.yaml for required inputs.')
-    
+            print(f"{COLORS['RED']}Invalid {label} configuration: {error}{COLORS['RESET']}")
+
     wait_for_input()
 
 def infrastructure_health_check():

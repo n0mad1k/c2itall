@@ -36,6 +36,8 @@ class CloudDriver:
     identity_keys = ()
     # Keys that only tune a lifecycle call (state directory, deadlines).
     option_keys = ()
+    # Safe number of pool nodes per region before a default quota bites.
+    node_quota = 10
 
     def check(self):
         for name in ('provider', 'ssh_user', 'prefix'):
