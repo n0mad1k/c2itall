@@ -399,6 +399,7 @@
           AWS Security Group Update: {{ 'SUCCESS' if sg_update_result.rc == 0 else 'COMPLETED' }}
           C2 Server IP: {{ ansible_host }}
           Security Group ID: {{ redirector_state.security_group_id | default('NOT FOUND') }}
+      when: sg_update_result is not skipped
 
   when: is_aws_provider | bool
 
