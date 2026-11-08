@@ -532,6 +532,7 @@ class C2:
         config = {
             'deployment_id': deployment_id, 'provider': provider,
             'provider_workload': 'c2', 'domain': 'c2-lab.test', 'c2_subdomain': 'mail',
+            'redirector_subdomain': 'cdn',
             'redirector_name': 'r-' + deployment_id, 'c2_name': 's-' + deployment_id,
             'c2_framework': 'havoc', 'letsencrypt_email': 'admin@c2-lab.test',
             'operator_ip': operator_ip, 'smtp_auth_user': 'admin',
