@@ -184,7 +184,14 @@
     regexp: '^!include auth-system.conf.ext'
     line: '#!include auth-system.conf.ext'
 
-- name: Create custom auth configuration file
+- name: Read the installed Dovecot version
+  command: dovecot --version
+  register: dovecot_version
+  changed_when: false
+
+# Dovecot 2.4 (kali-rolling) renamed the passdb/userdb syntax; 2.3 (Debian
+# stable, Ubuntu LTS) still needs the driver/args form.
+- name: Create custom auth configuration file (Dovecot 2.3)
   copy:
     dest: /etc/dovecot/conf.d/auth-c2itall.conf.ext
     content: |
@@ -200,6 +207,27 @@
     mode: '0644'
     owner: root
     group: root
+  when: dovecot_version.stdout | regex_search('^[0-9.]+') is version('2.4', '<')
+
+- name: Create custom auth configuration file (Dovecot 2.4)
+  copy:
+    dest: /etc/dovecot/conf.d/auth-c2itall.conf.ext
+    content: |
+      passdb passwd-file {
+        passwd_file_path = /etc/dovecot/passwd
+      }
+      
+      userdb static {
+        fields {
+          uid = vmail
+          gid = vmail
+          home = /var/vmail/%{user}
+        }
+      }
+    mode: '0644'
+    owner: root
+    group: root
+  when: dovecot_version.stdout | regex_search('^[0-9.]+') is version('2.4', '>=')
 
 - name: Include custom auth configuration
   lineinfile:
