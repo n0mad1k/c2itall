@@ -49,6 +49,7 @@
       - tor
       - crackmapexec
       - jq
+      - cron
       - build-essential
       - zip
       - unzip
