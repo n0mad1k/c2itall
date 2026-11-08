@@ -15,6 +15,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
+    from utils.cleanup_engine import execute_teardown, parse_deployment_info
     from utils.common import COLORS, PROVIDER_DIRS, setup_logging
     from utils.provider_registry import (
         prepare_provider_environment, provider_cleanup_guidance,
@@ -288,55 +289,6 @@ def teardown_all_deployments(force=False):
             print(f"{COLORS['RED']}{deployment_id} teardown failed{COLORS['RESET']}")
     print(f"\n{COLORS['BLUE']}Summary: {success_count}/{len(deployments)} deployments torn down{COLORS['RESET']}")
     return success_count == len(deployments)
-
-def parse_deployment_info(info_file):
-    """Parse deployment info file"""
-    try:
-        config = {}
-        with open(info_file, 'r') as f:
-            lines = f.readlines()
-        
-        for line in lines:
-            line = line.strip()
-            if ": " in line and not line.startswith("-"):
-                parts = line.split(": ", 1)
-                if len(parts) == 2:
-                    key, value = parts
-                    
-                    # Convert string values
-                    if value.lower() == 'true':
-                        value = True
-                    elif value.lower() == 'false':
-                        value = False
-                    elif value.lower() == 'none':
-                        value = None
-                    
-                    config[key] = value
-        
-        return config
-    except Exception as e:
-        print(f"{COLORS['RED']}Error parsing {info_file}: {e}{COLORS['RESET']}")
-        return None
-
-def execute_teardown(config):
-    """Prefer the registered workload cleanup, then preserve legacy behavior."""
-    provider = config.get('provider')
-
-    if not provider:
-        print(f"{COLORS['RED']}No provider specified in configuration{COLORS['RESET']}")
-        return False
-
-    adapter = workload_route(config)
-    if adapter is not None:
-        cleanup_with_legacy = getattr(type(adapter), 'cleanup_with_legacy', None)
-        if callable(cleanup_with_legacy):
-            return adapter.cleanup_with_legacy(config, execute_legacy_teardown)
-        return adapter.cleanup(config)
-    if not uses_legacy_routes(provider, requested_workload(config)):
-        print(f"{COLORS['RED']}Provider has no cleanup route for this workload{COLORS['RESET']}")
-        return False
-    return execute_legacy_teardown(config)
-
 
 def execute_legacy_teardown(config):
     """Use the same provider-owned legacy cleanup path as the main tool."""

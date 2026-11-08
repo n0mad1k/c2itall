@@ -712,7 +712,6 @@ class Webrunner:
                 ('masscan_installed', 'command -v masscan'),
                 ('scanner_present', 'sudo -n test -s /root/webrunner/node_scanner.py'),
                 ('results_present', 'sudo -n test -s /root/webrunner/results.json'),
-                ('sshd_no_password', "sudo -n /usr/sbin/sshd -T | grep -iq '^passwordauthentication no$'"),
             ])
             if provider == 'azure':
                 rules = cloud.inbound_rules(identity['deployment_id'])

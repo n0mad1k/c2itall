@@ -2292,7 +2292,7 @@ class ProviderContractTests(AzureFixture):
         config = {'provider': 'aws', 'provider_workload': 'c2',
                   'deployment_id': 'legacy-1'}
         with mock.patch.object(
-                standalone, 'execute_legacy_teardown', return_value=False) as legacy:
+                cleanup_engine, 'execute_legacy_teardown', return_value=False) as legacy:
             self.assertFalse(standalone.execute_teardown(config))
         legacy.assert_called_once_with(config)
 
@@ -2301,7 +2301,7 @@ class ProviderContractTests(AzureFixture):
             routes={'c2': 'synthetic:Adapter'})
         with mock.patch.dict(registry.PROVIDER_SPECS, {'aws': spec}), \
                 mock.patch.object(registry, '_load', return_value=lambda: native), \
-                mock.patch.object(standalone, 'execute_legacy_teardown') as legacy:
+                mock.patch.object(cleanup_engine, 'execute_legacy_teardown') as legacy:
             native.cleanup.return_value = False
             self.assertFalse(standalone.execute_teardown(config))
             legacy.assert_not_called()
@@ -2312,7 +2312,7 @@ class ProviderContractTests(AzureFixture):
 
         missing = {**config, 'provider_workload': 'unmigrated'}
         with mock.patch.object(
-                standalone, 'execute_legacy_teardown', return_value=True) as legacy:
+                cleanup_engine, 'execute_legacy_teardown', return_value=True) as legacy:
             self.assertTrue(standalone.execute_teardown(missing))
         legacy.assert_called_once_with(missing)
 
