@@ -149,7 +149,79 @@
             region: "{{ item }}"
             state: present
           loop: "{{ aws_unique_regions }}"
-          ignore_errors: true
+
+        # Accounts without a default VPC need a deployment-owned network.
+        - name: Create a VPC per region
+          amazon.aws.ec2_vpc_net:
+            access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') }}"
+            secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') }}"
+            name: "wr-{{ deployment_id }}-vpc"
+            cidr_block: 10.0.0.0/16
+            region: "{{ item }}"
+            tags:
+              deployment_id: "{{ deployment_id }}"
+              webrunner: "{{ webrunner_name }}"
+            state: present
+          loop: "{{ aws_unique_regions }}"
+          register: wr_aws_vpcs
+
+        - name: Attach an internet gateway per region
+          amazon.aws.ec2_vpc_igw:
+            access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') }}"
+            secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') }}"
+            vpc_id: "{{ item.vpc.id }}"
+            region: "{{ item.item }}"
+            tags:
+              Name: "wr-{{ deployment_id }}-igw"
+              deployment_id: "{{ deployment_id }}"
+            state: present
+          loop: "{{ wr_aws_vpcs.results }}"
+          loop_control:
+            label: "{{ item.item }}"
+          register: wr_aws_igws
+
+        - name: Create a public subnet per region
+          amazon.aws.ec2_vpc_subnet:
+            access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') }}"
+            secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') }}"
+            vpc_id: "{{ item.vpc.id }}"
+            cidr: 10.0.1.0/24
+            region: "{{ item.item }}"
+            map_public: true
+            tags:
+              Name: "wr-{{ deployment_id }}-subnet"
+              deployment_id: "{{ deployment_id }}"
+            state: present
+          loop: "{{ wr_aws_vpcs.results }}"
+          loop_control:
+            label: "{{ item.item }}"
+          register: wr_aws_subnets
+
+        - name: Route each subnet to its internet gateway
+          amazon.aws.ec2_vpc_route_table:
+            access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') }}"
+            secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') }}"
+            vpc_id: "{{ item.0.vpc.id }}"
+            region: "{{ item.0.item }}"
+            subnets:
+              - "{{ item.1.subnet.id }}"
+            routes:
+              - dest: 0.0.0.0/0
+                gateway_id: "{{ item.2.gateway_id }}"
+            tags:
+              Name: "wr-{{ deployment_id }}-rt"
+              deployment_id: "{{ deployment_id }}"
+            state: present
+          loop: "{{ wr_aws_vpcs.results | zip(wr_aws_subnets.results, wr_aws_igws.results) | list }}"
+          loop_control:
+            label: "{{ item.0.item }}"
+
+        - name: Map each region to its network
+          set_fact:
+            wr_aws_networks: "{{ wr_aws_networks | default({}) | combine({item.0.item: {'vpc_id': item.0.vpc.id, 'subnet_id': item.1.subnet.id}}) }}"
+          loop: "{{ wr_aws_vpcs.results | zip(wr_aws_subnets.results) | list }}"
+          loop_control:
+            label: "{{ item.0.item }}"
 
         - name: Create security group per region
           amazon.aws.ec2_security_group:
@@ -157,6 +229,7 @@
             secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') }}"
             name: "webrunner-{{ webrunner_name }}"
             description: "WEBRUNNER scan node SG"
+            vpc_id: "{{ wr_aws_networks[item].vpc_id }}"
             region: "{{ item }}"
             rules:
               - proto: tcp
@@ -171,7 +244,6 @@
               webrunner: "{{ webrunner_name }}"
             state: present
           loop: "{{ aws_unique_regions }}"
-          ignore_errors: true
 
         - name: Fire all AWS instance creates
           amazon.aws.ec2_instance:
@@ -182,6 +254,7 @@
             region: "{{ item.region }}"
             image_id: "{{ ami_map[item.region] }}"
             key_name: "{{ webrunner_name }}"
+            vpc_subnet_id: "{{ wr_aws_networks[item.region].subnet_id }}"
             security_groups:
               - "webrunner-{{ webrunner_name }}"
             network:
@@ -517,6 +590,92 @@
           - "{{ webrunner_name }}"
       register: wr_aws_key_absence
       until: wr_aws_key_absence.keypairs | length == 0
+      retries: 12
+      delay: 5
+      loop: "{{ aws_cleanup_regions }}"
+      when:
+        - teardown_after_scan | default(true) | bool
+        - aws_chunks | length > 0
+
+    - name: Find WEBRUNNER VPCs per region
+      amazon.aws.ec2_vpc_net_info:
+        access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') }}"
+        secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') }}"
+        region: "{{ item }}"
+        filters:
+          "tag:Name": "wr-{{ deployment_id }}-vpc"
+          "tag:deployment_id": "{{ deployment_id }}"
+      register: wr_aws_vpc_info
+      loop: "{{ aws_cleanup_regions }}"
+      when:
+        - teardown_after_scan | default(true) | bool
+        - aws_chunks | length > 0
+
+    - name: List WEBRUNNER VPCs to remove
+      set_fact:
+        wr_aws_vpcs_to_delete: "{{ wr_aws_vpcs_to_delete | default([]) + [{'region': item.item, 'vpc_id': item.vpcs[0].vpc_id}] }}"
+      loop: "{{ wr_aws_vpc_info.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item | default('') }}"
+      when:
+        - teardown_after_scan | default(true) | bool
+        - aws_chunks | length > 0
+        - item.vpcs | default([]) | length > 0
+
+    - name: Delete WEBRUNNER route tables
+      amazon.aws.ec2_vpc_route_table:
+        access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') }}"
+        secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') }}"
+        vpc_id: "{{ item.vpc_id }}"
+        region: "{{ item.region }}"
+        tags:
+          Name: "wr-{{ deployment_id }}-rt"
+        lookup: tag
+        state: absent
+      loop: "{{ wr_aws_vpcs_to_delete | default([]) }}"
+
+    - name: Delete WEBRUNNER subnets
+      amazon.aws.ec2_vpc_subnet:
+        access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') }}"
+        secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') }}"
+        vpc_id: "{{ item.vpc_id }}"
+        cidr: 10.0.1.0/24
+        region: "{{ item.region }}"
+        state: absent
+      loop: "{{ wr_aws_vpcs_to_delete | default([]) }}"
+
+    - name: Detach and delete WEBRUNNER internet gateways
+      amazon.aws.ec2_vpc_igw:
+        access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') }}"
+        secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') }}"
+        vpc_id: "{{ item.vpc_id }}"
+        region: "{{ item.region }}"
+        state: absent
+      loop: "{{ wr_aws_vpcs_to_delete | default([]) }}"
+
+    - name: Delete WEBRUNNER VPCs
+      amazon.aws.ec2_vpc_net:
+        access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') }}"
+        secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') }}"
+        vpc_id: "{{ item.vpc_id }}"
+        region: "{{ item.region }}"
+        state: absent
+      loop: "{{ wr_aws_vpcs_to_delete | default([]) }}"
+      register: wr_aws_vpc_delete
+      until: wr_aws_vpc_delete is success
+      retries: 5
+      delay: 15
+
+    - name: Verify WEBRUNNER VPCs are absent
+      amazon.aws.ec2_vpc_net_info:
+        access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') }}"
+        secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') }}"
+        region: "{{ item }}"
+        filters:
+          "tag:Name": "wr-{{ deployment_id }}-vpc"
+          "tag:deployment_id": "{{ deployment_id }}"
+      register: wr_aws_vpc_absence
+      until: wr_aws_vpc_absence.vpcs | length == 0
       retries: 12
       delay: 5
       loop: "{{ aws_cleanup_regions }}"
