@@ -134,8 +134,7 @@ LEGACY_TRANSITION_CAPABILITIES = {
         'redirector', 'webrunner',
     }),
     'flokinet': frozenset({
-        'c2', 'chat', 'payload_server', 'phishing', 'phantom', 'redirector',
-        'webrunner',
+        'c2', 'chat', 'phishing', 'phantom', 'redirector', 'webrunner',
     }),
 }
 WORKLOAD_SPECS = {

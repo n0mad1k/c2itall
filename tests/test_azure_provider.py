@@ -891,8 +891,8 @@ class RoutingAndTemplateTests(AzureFixture):
                     'phantom', 'redirector', 'webrunner'},
             'linode': {'attack_box', 'c2', 'chat', 'payload_server',
                        'phishing', 'phantom', 'redirector', 'webrunner'},
-            'flokinet': {'c2', 'chat', 'payload_server', 'phishing',
-                         'phantom', 'redirector', 'webrunner'},
+            'flokinet': {'c2', 'chat', 'phishing', 'phantom', 'redirector',
+                         'webrunner'},
         }
         for provider, workloads in expected.items():
             with self.subTest(provider=provider):
@@ -974,10 +974,10 @@ class RoutingAndTemplateTests(AzureFixture):
         validation = registry.validate_provider_registry(load_references=True)
         self.assertEqual(validation, {
             'providers': 4, 'workloads': 9, 'controllers': 9,
-            'pairs': 36, 'routes': 32, 'staged_routes': 0,
+            'pairs': 36, 'routes': 31, 'staged_routes': 0,
             'counts': {
-                'native': 9, 'transition': 23,
-                'legacy_fallback': 0, 'staged': 0, 'unsupported': 4,
+                'native': 9, 'transition': 22,
+                'legacy_fallback': 0, 'staged': 0, 'unsupported': 5,
             },
         })
         rows = registry.provider_support_matrix()
@@ -1001,6 +1001,7 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertEqual(lookup[('aws', 'c2')], 'transition')
         self.assertEqual(lookup[('linode', 'attack_box')], 'transition')
         self.assertEqual(lookup[('flokinet', 'attack_box')], 'unsupported')
+        self.assertEqual(lookup[('flokinet', 'payload_server')], 'unsupported')
         self.assertEqual(lookup[('aws', 'chat')], 'transition')
         self.assertEqual(lookup[('aws', 'infrastructure')], 'unsupported')
         azure_attack_box = next(

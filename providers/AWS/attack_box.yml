@@ -13,7 +13,7 @@
     deployment_type: "attack_box"
     instance_type: "{{ aws_instance_type | default('t3.small') }}"
     ssh_key_name: "attack-box-{{ deployment_id }}"
-    attack_box_ssh_user: "kali"
+    attack_box_ssh_user: "{{ 'ubuntu' if attack_box_type | default('kali') == 'ubuntu' else 'kali' }}"
     attack_box_info_file: "{{ playbook_dir }}/../../logs/attack_box_{{ deployment_id }}_info.txt"
     resource_tags:
       deployment_id: "{{ deployment_id }}"
@@ -39,10 +39,17 @@
       include_tasks: kali_ami.yml
       vars:
         kali_ami_region: "{{ aws_region }}"
+      when: attack_box_type != 'ubuntu'
 
     - name: Set attack box AMI
       set_fact:
         attack_box_ami: "{{ kali_ami }}"
+      when: attack_box_type != 'ubuntu'
+
+    - name: Set the Ubuntu attack box AMI
+      set_fact:
+        attack_box_ami: "{{ lookup('amazon.aws.ssm_parameter', '/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id', region=aws_region) }}"
+      when: attack_box_type == 'ubuntu'
 
     - name: Debug attack box deployment
       debug:

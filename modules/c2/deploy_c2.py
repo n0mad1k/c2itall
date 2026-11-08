@@ -38,6 +38,8 @@ def gather_c2_parameters():
     if not provider:
         return None
     config['provider'] = provider
+    # Every C2 route provisions one C2 host; redirectors come from their module.
+    config['c2_only'] = True
     
     # Get provider-specific configuration
     provider_config = gather_provider_config(provider, 'c2', legacy_fallback=True)
@@ -150,8 +152,6 @@ def c2_menu():
         print(f"3) Sliver Server {COLORS['GRAY']}(Go-based C2){COLORS['RESET']}")
         print(f"4) Cobalt Strike Server {COLORS['GRAY']}(Commercial C2){COLORS['RESET']}")
         print(f"5) Mythic Server {COLORS['GRAY']}(Cross-platform C2){COLORS['RESET']}")
-        print(f"6) C2 + Redirector {COLORS['GRAY']}(C2 with traffic redirection){COLORS['RESET']}")
-        print(f"7) Full C2 Infrastructure {COLORS['GRAY']}(Complete multi-tier setup){COLORS['RESET']}")
         print(f"99) Return to Main Menu")
         
         choice = input(f"\nSelect an option: ")
@@ -166,10 +166,6 @@ def c2_menu():
             deploy_cobaltstrike_c2()
         elif choice == "5":
             deploy_mythic_c2()
-        elif choice == "6":
-            deploy_c2_with_redirector()
-        elif choice == "7":
-            deploy_full_c2()
         elif choice == "99":
             return
         else:
@@ -183,40 +179,8 @@ def deploy_c2_only():
         return
     
     config['deployment_type'] = 'c2_only'
-    config['c2_only'] = True
     
     print(f"\n{COLORS['GREEN']}Deploying C2 server only...{COLORS['RESET']}")
-    execute_c2_deployment(config)
-
-def deploy_c2_with_redirector():
-    """Deploy C2 server with redirector"""
-    config = gather_c2_parameters()
-    if not config:
-        return
-    
-    # Additional redirector configuration
-    config['redirector_subdomain'] = input("Redirector subdomain [default: cdn]: ") or "cdn"
-    
-    config['deployment_type'] = 'c2_with_redirector'
-    config['deploy_redirector'] = True
-    
-    print(f"\n{COLORS['GREEN']}Deploying C2 server with redirector...{COLORS['RESET']}")
-    execute_c2_deployment(config)
-
-def deploy_full_c2():
-    """Deploy full C2 infrastructure"""
-    config = gather_c2_parameters()
-    if not config:
-        return
-    
-    # Additional configuration for full deployment
-    config['redirector_subdomain'] = input("Redirector subdomain [default: cdn]: ") or "cdn"
-    
-    config['deployment_type'] = 'full_c2'
-    config['deploy_redirector'] = True
-    config['deploy_tracker'] = confirm_action("Deploy email tracker?", default=False)
-    
-    print(f"\n{COLORS['GREEN']}Deploying full C2 infrastructure...{COLORS['RESET']}")
     execute_c2_deployment(config)
 
 def deploy_havoc_c2():

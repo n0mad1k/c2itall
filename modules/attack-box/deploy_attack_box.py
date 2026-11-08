@@ -214,18 +214,6 @@ def deploy_kali_attack_box():
     print(f"\n{COLORS['GREEN']}Deploying Kali Linux attack box...{COLORS['RESET']}")
     execute_attack_box_deployment(config)
 
-def deploy_parrot_attack_box():
-    """Deploy Parrot Security attack box"""
-    config = gather_attack_box_parameters("parrot")
-    if not config:
-        return
-    
-    config['attack_box_image'] = 'linode/debian11'  # Will install Parrot tools
-    config['default_user'] = 'root'
-    
-    print(f"\n{COLORS['GREEN']}Deploying Parrot Security attack box...{COLORS['RESET']}")
-    execute_attack_box_deployment(config)
-
 def deploy_ubuntu_attack_box():
     """Deploy custom Ubuntu attack box"""
     config = gather_attack_box_parameters("ubuntu")

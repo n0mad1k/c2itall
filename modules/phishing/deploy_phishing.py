@@ -70,31 +70,35 @@ def gather_phishing_parameters():
     
     # MTA Front naming
     config['mta_name'] = get_deployment_name_with_options(
-        deployment_type='phishing',
-        component_type='MTA Front Server',
-        default_suffix='mta'
+        deployment_type='phishing mta',
+        deployment_id=config['deployment_id'],
+        prefix='mta-'
     )
     
     # GoPhish server naming  
     config['gophish_name'] = get_deployment_name_with_options(
-        deployment_type='phishing',
-        component_type='GoPhish Server', 
-        default_suffix='gophish'
+        deployment_type='phishing gophish',
+        deployment_id=config['deployment_id'],
+        prefix='gophish-'
     )
     
     # Phishing redirector naming
     config['phishing_redirector_name'] = get_deployment_name_with_options(
-        deployment_type='phishing',
-        component_type='Phishing Redirector',
-        default_suffix='redirector'
+        deployment_type='phishing redirector',
+        deployment_id=config['deployment_id'],
+        prefix='phr-'
     )
     
     # Phishing webserver naming
     config['phishing_webserver_name'] = get_deployment_name_with_options(
-        deployment_type='phishing', 
-        component_type='Phishing Webserver',
-        default_suffix='webserver'
+        deployment_type='phishing webserver',
+        deployment_id=config['deployment_id'],
+        prefix='pw-'
     )
+    
+    # The provider redirector and webserver plays name instances by these keys.
+    config['redirector_name'] = config['phishing_redirector_name']
+    config['webserver_name'] = config['phishing_webserver_name']
     
     # MTA Authentication
     config['smtp_auth_user'] = input("SMTP auth username [default: admin]: ") or "admin"
