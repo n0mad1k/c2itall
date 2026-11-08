@@ -12,6 +12,10 @@
     redirector_image_static: "linode/debian12"
 
   tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        redirector_name: "{{ redirector_name | default('r-' + deployment_id) }}"
+
     - name: Validate required Linode token
       assert:
         that:
@@ -81,6 +85,8 @@
           set_fact:
             deployment_region: "{{ item }}"
           loop: "{{ fallback_regions }}"
+          loop_control:
+            extended: true
           when: redirector_instance.results is defined and redirector_instance.results[ansible_loop.index0] is defined and not redirector_instance.results[ansible_loop.index0].failed
           
         - name: Fail if all regions are restricted
