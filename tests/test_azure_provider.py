@@ -456,13 +456,14 @@ class RoutingAndTemplateTests(AzureFixture):
             ['aws', 'linode', 'flokinet', 'azure'])
         self.assertEqual(
             provider_utils.available_providers('phishing', legacy_fallback=True),
-            ['aws', 'linode', 'flokinet'])
+            ['aws', 'linode', 'flokinet', 'azure'])
         azure_spec = registry.PROVIDER_SPECS['azure']._replace(
-            routes=dict(registry.PROVIDER_SPECS['azure'].routes, phishing='fake:Adapter'))
+            routes={key: value for key, value in registry.PROVIDER_SPECS['azure'].routes.items()
+                    if key != 'phishing'})
         with mock.patch.dict(registry.PROVIDER_SPECS, {'azure': azure_spec}):
             self.assertEqual(
                 provider_utils.available_providers('phishing', legacy_fallback=True),
-                ['aws', 'linode', 'flokinet', 'azure'])
+                ['aws', 'linode', 'flokinet'])
         self.assertEqual(
             provider_utils.available_providers('attack_box', legacy_fallback=True),
             ['aws', 'linode', 'azure'])
@@ -499,7 +500,7 @@ class RoutingAndTemplateTests(AzureFixture):
             loader.assert_called_once_with()
 
         with self.assertRaisesRegex(ValueError, 'No configuration route'):
-            provider_utils.gather_provider_config('azure', 'phishing', legacy_fallback=True)
+            provider_utils.gather_provider_config('flokinet', 'attack_box', legacy_fallback=True)
 
     def test_adapter_key_ownership_is_explicit_and_shared_by_modules(self):
         from utils.azure_workload_adapter import AzureAttackBoxAdapter
@@ -961,10 +962,10 @@ class RoutingAndTemplateTests(AzureFixture):
         validation = registry.validate_provider_registry(load_references=True)
         self.assertEqual(validation, {
             'providers': 4, 'workloads': 9, 'controllers': 9,
-            'pairs': 36, 'routes': 31, 'staged_routes': 1,
+            'pairs': 36, 'routes': 32, 'staged_routes': 0,
             'counts': {
-                'native': 8, 'transition': 23,
-                'legacy_fallback': 0, 'staged': 1, 'unsupported': 4,
+                'native': 9, 'transition': 23,
+                'legacy_fallback': 0, 'staged': 0, 'unsupported': 4,
             },
         })
         rows = registry.provider_support_matrix()
@@ -974,7 +975,7 @@ class RoutingAndTemplateTests(AzureFixture):
             {workload for provider, workload in lookup
              if provider == 'azure' and lookup[(provider, workload)] == 'native'},
             {'infrastructure', 'attack_box', 'phantom', 'chat', 'redirector', 'c2',
-             'payload_server', 'webrunner'})
+             'payload_server', 'webrunner', 'phishing'})
         self.assertEqual(
             {workload for provider, workload in lookup
              if provider == 'azure' and
@@ -984,7 +985,7 @@ class RoutingAndTemplateTests(AzureFixture):
             {workload for provider, workload in lookup
              if provider == 'azure' and
              lookup[(provider, workload)] == 'staged'},
-            {'phishing'})
+            set())
         self.assertEqual(lookup[('aws', 'c2')], 'transition')
         self.assertEqual(lookup[('linode', 'attack_box')], 'transition')
         self.assertEqual(lookup[('flokinet', 'attack_box')], 'unsupported')
@@ -1014,9 +1015,7 @@ class RoutingAndTemplateTests(AzureFixture):
         with contextlib.redirect_stdout(io.StringIO()), \
                 contextlib.redirect_stderr(error):
             self.assertEqual(module.main(['--require-provider', 'azure']), 1)
-            self.assertIn(
-                'staged (disabled): phishing',
-                error.getvalue())
+            self.assertNotIn('staged (disabled)', error.getvalue())
             self.assertIn(
                 'partial: attack_box (missing kali, parrot, ubuntu)',
                 error.getvalue())
@@ -1072,59 +1071,97 @@ class RoutingAndTemplateTests(AzureFixture):
                 self.assertRaisesRegex(ValueError, 'routes overlap'):
             registry.validate_provider_registry(load_references=False)
 
-        staged_routes = dict(azure.staged_routes)
-        staged_phishing = staged_routes.pop('phishing')
-        promoted_without_implementation = azure._replace(
-            routes=dict(azure.routes, phishing=staged_phishing),
-            staged_routes=staged_routes)
-        with mock.patch.dict(
-                registry.PROVIDER_SPECS,
-                {'azure': promoted_without_implementation}), \
+        class Disabled(registry.WorkloadAdapter):
+            deployment_enabled = False
+
+        with mock.patch.object(registry, '_load', return_value=Disabled), \
                 self.assertRaisesRegex(TypeError, 'Active provider route is disabled'):
             registry.validate_provider_registry(load_references=True)
 
-    def test_azure_staged_routes_prepare_but_cannot_deploy(self):
-        from utils import azure_staged_adapter, azure_utils
+    def test_azure_phishing_route_deploys_two_recoverable_components(self):
+        from utils import azure_phishing_adapter, azure_workload_adapter
+        adapter = azure_phishing_adapter.azure_phishing_adapter()
+        self.assertFalse(adapter.manages_ssh_key)
+        self.assertTrue(adapter.recovers_from_log)
+        with tempfile.TemporaryDirectory() as temp:
+            key = Path(temp) / 'c2deploy_ph.pub'
+            key.write_text('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGxr test\n')
+            config = {
+                'provider': 'azure', 'provider_workload': 'phishing', 'deployment_id': 'ph',
+                'deployment_type': 'basic_phishing', 'phishing_deployment': True,
+                'deploy_mta_front': True, 'deploy_gophish': True,
+                'domain': 'lab.test', 'phishing_domain': 'lab.test',
+                'azure_subscription_id': smoke.SUBSCRIPTION, 'operator_ip': '203.0.113.5',
+                'ssh_key_path': str(key), 'azure_state_dir': temp,
+                'gophish_admin_port': '3333', 'smtp_auth_user': 'operator', 'smtp_auth_pass': None,
+            }
+            deployed = []
+            addresses = {'ph-mta': '20.42.0.11', 'ph-gophish': '20.42.0.12'}
+            with mock.patch.object(azure, 'prepare_state'), \
+                    mock.patch.object(azure, 'prepare_ssh_key'), \
+                    mock.patch.object(azure, 'deploy_azure',
+                                      side_effect=lambda infra: deployed.append(dict(infra)) or True), \
+                    mock.patch.object(azure, 'load_state', side_effect=lambda did, directory=None: {
+                        'outputs': {'public_ip': {'value': addresses[did]}}}), \
+                    mock.patch.object(azure_workload_adapter.AzureSingleVmWorkloadAdapter,
+                                      '_run_service_playbook', return_value=True), \
+                    mock.patch.object(deployment_engine, 'save_deployment_info'):
+                self.assertTrue(adapter.deploy(config))
+            self.assertEqual([item['deployment_id'] for item in deployed], ['ph-mta', 'ph-gophish'])
+            self.assertEqual([item['azure_resource_group'] for item in deployed],
+                             ['c2itall-ph-mta', 'c2itall-ph-gophish'])
+            for item in deployed:
+                self.assertFalse(item['ssh_key_generated'])
+                self.assertEqual(item['ssh_key_path'], str(key))
+                self.assertEqual(item['ssh_private_key_path'], str(Path(temp) / 'c2deploy_ph'))
+                self.assertEqual(item['provider_workload'], 'phishing')
+            self.assertEqual([(rule['port'], rule['source']) for rule in deployed[0]['azure_inbound_rules']],
+                             [(25, '*'), (587, '*')])
+            self.assertEqual([(rule['port'], rule['source']) for rule in deployed[1]['azure_inbound_rules']],
+                             [(80, '*'), (3333, '203.0.113.5')])
+            self.assertEqual((config['mta_ip'], config['gophish_ip']), ('20.42.0.11', '20.42.0.12'))
+            self.assertTrue(config['smtp_auth_pass'])
+            variables = azure_phishing_adapter.AzureGophishServer()._service_variables(config)
+            self.assertEqual(variables['mta_ip'], '20.42.0.11')
+            self.assertEqual(variables['smtp_auth_pass'], config['smtp_auth_pass'])
+            self.assertNotIn('ssh_key_path', variables)
 
-        staged = {'phishing'}
-        dispatcher = registry.provider_dispatcher('azure')
-        self.assertEqual(dispatcher.spec.staged_capabilities, staged)
-        for workload in staged:
-            with self.subTest(workload=workload):
-                self.assertIsNone(dispatcher.route(workload))
-                self.assertNotIn(
-                    'azure', provider_utils.available_providers(
-                        workload, legacy_fallback=True))
-                adapter = dispatcher.staged_route(workload)
-                self.assertIsInstance(
-                    adapter, azure_staged_adapter.AzureStagedWorkloadAdapter)
-                self.assertEqual(adapter.readiness['workload'], workload)
-                self.assertFalse(adapter.readiness['deployment_enabled'])
-                self.assertTrue(adapter.readiness['configuration_ready'])
-                self.assertTrue(adapter.readiness['cleanup_ready'])
-                with mock.patch.object(azure_utils, 'prepare_state') as prepare, \
-                        mock.patch.object(azure_utils, 'deploy_azure') as deploy, \
-                        self.assertRaisesRegex(RuntimeError, 'disabled'):
-                    adapter.deploy({'provider': 'azure'})
-                prepare.assert_not_called()
-                deploy.assert_not_called()
+            states = [{'deployment_id': 'ph-mta', 'provider_workload': 'phishing'},
+                      {'deployment_id': 'ph-gophish', 'provider_workload': 'phishing'},
+                      {'deployment_id': 'ph-n01', 'provider_workload': 'webrunner'},
+                      {'deployment_id': 'phx-mta', 'provider_workload': 'phishing'}]
+            with mock.patch.object(azure, 'list_states', return_value=states), \
+                    mock.patch.object(azure, 'cleanup_azure', return_value=True) as cleanup, \
+                    mock.patch.object(cleanup_engine, 'cleanup_ssh_keys_for_deployment') as keys, \
+                    mock.patch.object(cleanup_engine, 'archive_deployment_logs') as archive:
+                self.assertTrue(adapter.cleanup({'deployment_id': 'ph', 'azure_state_dir': temp,
+                                                 'ssh_key_path': str(key)}))
+                self.assertEqual(cleanup.call_args_list, [
+                    mock.call({'deployment_id': 'ph-mta', 'azure_state_dir': temp}),
+                    mock.call({'deployment_id': 'ph-gophish', 'azure_state_dir': temp})])
+                keys.assert_called_once_with('ph', str(key))
+                archive.assert_called_once_with('ph')
+                cleanup.reset_mock()
+                keys.reset_mock()
+                self.assertTrue(adapter.cleanup({'deployment_id': 'ph-gophish', 'azure_state_dir': temp,
+                                                 'azure_resource_group': 'c2itall-ph-gophish',
+                                                 'ssh_key_path': str(key)}))
+                self.assertEqual(cleanup.call_args_list,
+                                 [mock.call({'deployment_id': 'ph-gophish', 'azure_state_dir': temp})])
+                keys.assert_not_called()
 
-        with mock.patch.object(
-                azure_utils, 'gather_azure_config',
-                return_value={'azure_location': 'eastus'}):
-            self.assertEqual(
-                dispatcher.staged_route('phishing').gather_config(),
-                {'azure_location': 'eastus'})
-        cleanup = {
-            'deployment_id': 'staged-cleanup',
-            'azure_subscription_id': smoke.SUBSCRIPTION,
-            'azure_resource_group': 'c2itall-staged-cleanup',
-        }
-        with mock.patch.object(
-                azure_utils, 'cleanup_azure', return_value=True) as execute, \
-                mock.patch.object(cleanup_engine, 'archive_deployment_logs'):
-            self.assertTrue(dispatcher.staged_route('phishing').cleanup(cleanup))
-        execute.assert_called_once_with(cleanup)
+            # A failed component enters verified cleanup instead of leaving half a deployment.
+            with mock.patch.object(azure, 'prepare_state'), \
+                    mock.patch.object(azure, 'prepare_ssh_key'), \
+                    mock.patch.object(azure, 'deploy_azure', side_effect=[True, False]), \
+                    mock.patch.object(azure, 'load_state', side_effect=lambda did, directory=None: {
+                        'outputs': {'public_ip': {'value': addresses[did]}}}), \
+                    mock.patch.object(azure_workload_adapter.AzureSingleVmWorkloadAdapter,
+                                      '_run_service_playbook', return_value=True), \
+                    mock.patch.object(deployment_engine, 'save_deployment_info'), \
+                    mock.patch.object(adapter, 'cleanup', return_value=True) as partial:
+                self.assertFalse(adapter.deploy(dict(config)))
+            self.assertTrue(partial.call_args.args[0]['preserve_local_keys'])
 
     def test_workload_catalog_matches_provider_backed_controllers(self):
         expected = {

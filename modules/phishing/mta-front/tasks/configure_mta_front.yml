@@ -1,10 +1,6 @@
 ---
-# Configure MTA Front server for email relay and SMTP smuggling
-
-- name: Update system packages
-  apt:
-    update_cache: yes
-    upgrade: dist
+# MTA front: an authenticated submission relay for the GoPhish server.
+# Postfix, Dovecot SASL and OpenDKIM come from the shared mail tasks.
 
 - name: Install MTA packages
   apt:
@@ -12,126 +8,55 @@
       - postfix
       - postfix-pcre
       - dovecot-core
-      - dovecot-imapd
       - opendkim
       - opendkim-tools
-      - python3-pip
-      - python3-venv
-      - nginx
-      - certbot
-      - python3-certbot-nginx
-      - dnsutils
       - swaks
-      - telnet
+      - dnsutils
+      - ufw
     state: present
+    update_cache: yes
+  register: mta_packages
+  until: mta_packages is success
+  retries: 5
+  delay: 10
 
-- name: Configure Postfix for MTA fronting
-  template:
-    src: "../templates/phishing/postfix-mta-front.j2"
-    dest: /etc/postfix/main.cf
-    backup: yes
-
-- name: Configure Postfix master.cf for advanced relaying
-  blockinfile:
-    path: /etc/postfix/master.cf
-    block: |
-      # SMTP smuggling and advanced relay configurations
-      587      inet  n       -       y       -       -       smtpd
-        -o syslog_name=postfix/submission
-        -o smtpd_tls_security_level=encrypt
-        -o smtpd_sasl_auth_enable=yes
-        -o smtpd_tls_wrappermode=no
-        -o smtpd_client_restrictions=permit_sasl_authenticated,reject
-        -o smtpd_relay_restrictions=permit_sasl_authenticated,reject
-        -o milter_macro_daemon_name=ORIGINATING
-      
-      # SMTP smuggling support
-      cleanup   unix  n       -       y       -       0       cleanup
-        -o header_checks=pcre:/etc/postfix/header_checks
-        -o nested_header_checks=pcre:/etc/postfix/nested_header_checks
-
-- name: Create SMTP smuggling header checks
-  copy:
-    dest: /etc/postfix/header_checks
-    content: |
-      # SMTP smuggling techniques
-      /^Content-Transfer-Encoding:\s*7bit/i REPLACE Content-Transfer-Encoding: 8bit
-      /^Content-Type:\s*text\/plain/i REPLACE Content-Type: text/html
-    mode: '0644'
-
-- name: Create nested header checks for advanced smuggling
-  copy:
-    dest: /etc/postfix/nested_header_checks
-    content: |
-      # Advanced SMTP smuggling patterns
-      /^\s*<script/i IGNORE
-      /^\s*<iframe/i IGNORE
-    mode: '0644'
-
-- name: Configure DKIM for domain reputation
+- name: Configure Postfix, Dovecot SASL and OpenDKIM
   include_tasks: ../../../../common/tasks/configure_mail.yml
 
-- name: Create relay authentication
-  copy:
-    dest: /etc/postfix/sasl_passwd
-    content: |
-      {{ phishing_domain }} {{ smtp_relay_user }}:{{ smtp_relay_pass }}
-    mode: '0600'
-    owner: root
-    group: root
+- name: Name the relay and bind SASL to Dovecot
+  lineinfile:
+    path: /etc/postfix/main.cf
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+  loop:
+    - { regexp: '^myhostname', line: "myhostname = {{ mta_hostname | default('mail.' + domain) }}" }
+    - { regexp: '^smtpd_sasl_type', line: "smtpd_sasl_type = dovecot" }
+    - { regexp: '^smtpd_sasl_path', line: "smtpd_sasl_path = private/auth" }
+    - { regexp: '^smtpd_sasl_security_options', line: "smtpd_sasl_security_options = noanonymous" }
+    - { regexp: '^smtpd_forbid_bare_newline', line: "smtpd_forbid_bare_newline = yes" }
+    - { regexp: '^smtpd_helo_required', line: "smtpd_helo_required = yes" }
 
-- name: Configure transport maps for backend routing
-  copy:
-    dest: /etc/postfix/transport
-    content: |
-      {{ phishing_domain }}    smtp:[{{ gophish_ip }}]:25
-      .{{ phishing_domain }}   smtp:[{{ gophish_ip }}]:25
-    mode: '0644'
-
-- name: Install Python SMTP testing tools
-  pip:
-    name:
-      - smtplib-extended
-      - email-validator
-      - faker
-    state: present
-
-- name: Create SMTP smuggling test script
-  template:
-    src: "../templates/phishing/smtp-smuggling-test.py.j2"
-    dest: /root/Tools/smtp-smuggling-test.py
-    mode: '0755'
-
-- name: Create email reputation monitoring script
-  template:
-    src: "../templates/phishing/reputation-monitor.sh.j2"
-    dest: /root/Tools/reputation-monitor.sh
-    mode: '0755'
-
-- name: Set up log monitoring for deliverability
-  cron:
-    name: "Monitor email deliverability"
-    minute: "*/15"
-    job: "/root/Tools/reputation-monitor.sh >> /var/log/reputation.log 2>&1"
-
-- name: restart postfix
+- name: Restart Postfix with the relay settings
   service:
     name: postfix
     state: restarted
 
-- name: reload postfix
-  service:
-    name: postfix
-    state: reloaded
+- name: Allow SMTP and submission through the host firewall
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop:
+    - "25"
+    - "587"
+  when: provider | default('') != 'aws'
 
-- name: postmap header_checks
-  command: postmap /etc/postfix/header_checks
-
-- name: postmap nested_header_checks
-  command: postmap /etc/postfix/nested_header_checks
-
-- name: postmap sasl_passwd
-  command: postmap /etc/postfix/sasl_passwd
-
-- name: postmap transport
-  command: postmap /etc/postfix/transport
+- name: Record the relay settings for the operator
+  copy:
+    dest: /root/MTA_FRONT_GUIDE.txt
+    mode: '0600'
+    content: |
+      MTA front for {{ domain }}
+      Submission: {{ ansible_host }}:587 (STARTTLS, SASL user {{ smtp_auth_user }})
+      The SASL password was shown in the deployment output.
+      DKIM selector "mail": publish /etc/opendkim/keys/{{ domain }}/mail.txt in DNS.

@@ -164,7 +164,7 @@ class AzureSingleVmWorkloadAdapter(WorkloadAdapter):
             if not azure_utils.deploy_azure(infrastructure):
                 return False
             state = azure_utils.load_state(
-                config['deployment_id'], config.get('azure_state_dir'))
+                infrastructure['deployment_id'], config.get('azure_state_dir'))
             address = state.get('outputs', {}).get('public_ip', {}).get('value', '')
             parsed = self._public_ipv4(address)
             config.update({key: value for key, value in infrastructure.items()

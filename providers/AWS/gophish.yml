@@ -198,7 +198,7 @@
             cidr_ip: "{{ operator_ip }}/32"
           # Gophish admin UI only reachable from the operator
           - proto: tcp
-            ports: 3333
+            ports: "{{ gophish_admin_port | default(3333) }}"
             cidr_ip: "{{ operator_ip }}/32"
           # Gophish landing page/tracking only reachable from the phishing redirector
           - proto: tcp
@@ -378,15 +378,10 @@
     - name: Include gophish server configuration tasks
       include_tasks: "../../modules/phishing/gophish/tasks/configure_phishing_server.yml"
 
-    - name: Include gophish advanced configuration tasks
-      include_tasks: "../../modules/phishing/gophish/tasks/configure_gophish_advanced.yml"
 
     - name: Include common security hardening tasks
       include_tasks: "../../common/tasks/security_hardening.yml"
 
-    - name: Configure integrated click tracker
-      include_tasks: "../../modules/c2/tasks/configure_integrated_tracker.yml"
-      when: deploy_tracker | default(true) | bool
 
     - name: Print deployment summary
       debug:

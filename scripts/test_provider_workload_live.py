@@ -31,7 +31,8 @@ for path in (SCRIPT_DIR, ROOT):
         sys.path.insert(0, str(path))
 
 from utils.common import load_vars_file, setup_logging
-from utils.deployment_engine import deploy_infrastructure, dispatch_composite_workload
+from utils.deployment_engine import (deploy_infrastructure, dispatch_composite_workload,
+                                     dispatch_workload)
 from utils.provider_registry import prepare_provider_environment
 from utils.provider_utils import apply_provider_profile, prepare_module_ssh_key
 
@@ -257,19 +258,20 @@ class AzureCloud:
         azure_utils.ensure_azure_auth(AZURE_SUBSCRIPTION, force=True)
 
     def inventory(self, identity):
-        group = 'c2itall-' + identity['deployment_id']
-        if self.smoke.az('group', 'exists', '--name', group) is not True:
-            return {'instances': [], 'resources': []}
-        instances = []
-        for vm in self.smoke.az('vm', 'list', '--resource-group', group, '--show-details') or []:
-            instances.append({
-                'id': vm['id'].lower(), 'name': vm['name'],
-                'state': 'running' if vm.get('powerState') == 'VM running' else str(vm.get('powerState', '')),
-                'public_ip': vm.get('publicIps', ''), 'instance_type': vm['hardwareProfile']['vmSize'],
-                'image_id': json.dumps(vm['storageProfile']['imageReference'], sort_keys=True)})
-        resources = sorted(item['id'].lower() for item in
-                           self.smoke.az('resource', 'list', '--resource-group', group) or [])
-        return {'instances': sorted(instances, key=lambda item: item['id']), 'resources': resources}
+        groups = identity.get('azure_groups') or ['c2itall-' + identity['deployment_id']]
+        instances, resources = [], []
+        for group in groups:
+            if self.smoke.az('group', 'exists', '--name', group) is not True:
+                continue
+            for vm in self.smoke.az('vm', 'list', '--resource-group', group, '--show-details') or []:
+                instances.append({
+                    'id': vm['id'].lower(), 'name': vm['name'],
+                    'state': 'running' if vm.get('powerState') == 'VM running' else str(vm.get('powerState', '')),
+                    'public_ip': vm.get('publicIps', ''), 'instance_type': vm['hardwareProfile']['vmSize'],
+                    'image_id': json.dumps(vm['storageProfile']['imageReference'], sort_keys=True)})
+            resources.extend(item['id'].lower() for item in
+                             self.smoke.az('resource', 'list', '--resource-group', group) or [])
+        return {'instances': sorted(instances, key=lambda item: item['id']), 'resources': sorted(resources)}
 
     def totals(self):
         inventory = self.smoke.inventory()
@@ -282,8 +284,9 @@ class AzureCloud:
         self.smoke.cleanup_subscription()
 
     def address(self, identity, name):
+        wanted = identity.get('azure_names', {}).get(name)
         for instance in self.inventory(identity)['instances']:
-            if instance['state'] == 'running':
+            if instance['state'] == 'running' and wanted in (None, instance['name']):
                 return public_ipv4(instance['public_ip'])
         raise LiveError('No running Azure VM for ' + name)
 
@@ -330,6 +333,32 @@ def checks(context, items, timeout=90):
         for label, command in items)
     context.ssh(script, timeout=timeout)
     return {label: True for label, _ in items}
+
+
+def load_module(relative):
+    spec = importlib.util.spec_from_file_location(Path(relative).stem + '_live', ROOT / relative)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def submission_auth(address, user, password):
+    """Prove the relay accepts the operator credential over STARTTLS and nothing else."""
+    import smtplib
+    import ssl
+    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    tls.check_hostname = False
+    tls.verify_mode = ssl.CERT_NONE
+    with smtplib.SMTP(address, 587, timeout=30) as smtp:
+        smtp.starttls(context=tls)
+        smtp.login(user, password)
+    with smtplib.SMTP(address, 587, timeout=30) as smtp:
+        smtp.starttls(context=tls)
+        try:
+            smtp.login(user, password + 'x')
+        except smtplib.SMTPAuthenticationError:
+            return True
+    raise LiveError('MTA front accepted a wrong SASL password')
 
 
 def key_files(stem):
@@ -637,7 +666,123 @@ class PayloadServer:
         return report
 
 
-WORKLOADS = {cls.name: cls for cls in (AttackBox, Redirector, C2, PayloadServer)}
+class Phishing:
+    """Basic phishing: an MTA front plus a GoPhish server, verified from the operator."""
+    name = 'phishing'
+    instances = 2
+    repeat = {'aws': False, 'linode': False, 'azure': True}
+    source_paths = ('modules/phishing', 'providers/{dir}/mta.yml', 'providers/{dir}/gophish.yml',
+                    'common')
+
+    def config(self, provider, deployment_id, operator_ip):
+        domain = 'phish-lab.test'
+        config = {
+            'deployment_id': deployment_id, 'provider': provider, 'provider_workload': 'phishing',
+            'deployment_type': 'basic_phishing', 'phishing_deployment': True,
+            'deploy_mta_front': True, 'deploy_gophish': True,
+            'phishing_domain': domain, 'primary_domain': domain, 'domain': domain,
+            'mta_hostname': 'mail.' + domain, 'phishing_hostname': 'portal.' + domain,
+            'mta_name': 'mta-' + deployment_id, 'gophish_name': 'gophish-' + deployment_id,
+            'phishing_redirector_name': 'phr-' + deployment_id,
+            'phishing_webserver_name': 'pw-' + deployment_id,
+            'smtp_auth_user': 'operator', 'smtp_auth_pass': secrets.token_urlsafe(12),
+            'gophish_admin_port': '3333', 'campaign_name': 'lab', 'sender_name': 'Lab',
+            'sender_email': 'noreply@' + domain, 'email_template': 'office365_login',
+            'enable_credential_harvesting': False, 'enable_attachment_tracking': False,
+            'enable_link_tracking': False, 'letsencrypt_email': 'admin@' + domain,
+            'operator_ip': operator_ip, 'ssh_after_deploy': False, 'open_admin_panel': False,
+            'use_lander': False,
+        }
+        config.update(provider_config(provider))
+        # Both hosts share the module key.
+        config.pop('provider_manages_ssh_key', None)
+        ready, _ = prepare_module_ssh_key(config, deployment_id)
+        require(ready, 'Could not generate the module SSH key')
+        return config
+
+    def deploy(self, config):
+        module = load_module('modules/phishing/deploy_phishing.py')
+        return dispatch_workload(config, module.execute_component_deployment)
+
+    def identity(self, config):
+        deployment_id = config['deployment_id']
+        names = ['mta-' + deployment_id, 'gophish-' + deployment_id]
+        return {'deployment_id': deployment_id, 'names': names,
+                'key_names': ['c2deploy_' + deployment_id],
+                'sg_names': [name + '-sg' for name in names],
+                'azure_groups': ['c2itall-' + deployment_id + '-' + part for part in ('mta', 'gophish')],
+                'azure_names': {'mta-' + deployment_id: 'c2itall-' + deployment_id + '-mta-vm',
+                                'gophish-' + deployment_id: 'c2itall-' + deployment_id + '-gophish-vm'}}
+
+    def target(self, provider, config):
+        user = {'aws': 'ubuntu', 'azure': 'azureuser'}.get(provider, 'root')
+        return 'mta-' + config['deployment_id'], user, SSH_DIR / ('c2deploy_' + config['deployment_id'])
+
+    def local_artifacts(self, provider, config):
+        deployment_id = config['deployment_id']
+        return key_files('c2deploy_' + deployment_id) + [
+            AZURE_STATE_DIR / (deployment_id + '-' + part + '.json') for part in ('mta', 'gophish')]
+
+    def verify(self, context, config):
+        domain = config['domain']
+        deployment_id = config['deployment_id']
+        sshd = ('sshd_no_password', "sudo -n /usr/sbin/sshd -T | grep -iq '^passwordauthentication no$'")
+        report = {'mta': checks(context, [
+            ('postfix_active', 'test "$(systemctl is-active postfix)" = active'),
+            ('dovecot_active', 'test "$(systemctl is-active dovecot)" = active'),
+            ('opendkim_active', 'test "$(systemctl is-active opendkim)" = active'),
+            ('smtp_listening', "ss -ltn | grep -q ':25 '"),
+            ('submission_listening', "ss -ltn | grep -q ':587 '"),
+            ('dkim_key', 'sudo -n test -s /etc/opendkim/keys/' + domain + '/mail.private'),
+            ('guide', 'sudo -n test -s /root/MTA_FRONT_GUIDE.txt'),
+            sshd,
+        ])}
+        report['mta']['sasl_submission'] = submission_auth(
+            context.address, config['smtp_auth_user'], config['smtp_auth_pass'])
+        identity = self.identity(config)
+        gophish_address = context.cloud.address(identity, 'gophish-' + deployment_id)
+        gophish = Context(context.runner, context.cloud, context.provider, gophish_address,
+                          context.user, context.key)
+        admin_port = str(config['gophish_admin_port'])
+        report['gophish'] = checks(gophish, [
+            ('gophish_active', 'test "$(systemctl is-active gophish)" = active'),
+            ('gophish_enabled', 'test "$(systemctl is-enabled gophish)" = enabled'),
+            ('runs_as_gophish', 'test "$(ps -o user= -C gophish | head -1)" = gophish'),
+            ('admin_listening', "ss -ltn | grep -q ':" + admin_port + " '"),
+            ('phish_listening', "ss -ltn | grep -q ':80 '"),
+            ('guide', 'sudo -n test -s /root/GOPHISH_GUIDE.txt'),
+            sshd,
+        ])
+        base = ['curl', '-ks', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '20']
+        login = context.run(base + ['https://' + gophish_address + ':' + admin_port + '/login'])
+        require(login == '200', 'GoPhish admin login page did not answer the operator: ' + login)
+        landing = context.run(base + ['http://' + gophish_address + '/'])
+        require(landing in ('200', '404'), 'GoPhish phishing listener did not answer: ' + landing)
+        report['gophish'].update({'admin_login_page': True, 'phish_listener_status': landing,
+                                  'address': gophish_address})
+        operator = config['operator_ip'] + '/32'
+        if context.provider == 'azure':
+            mta_rules = context.cloud.inbound_rules(deployment_id + '-mta')
+            gophish_rules = context.cloud.inbound_rules(deployment_id + '-gophish')
+            require(mta_rules == sorted([('tcp', '22', operator), ('tcp', '25', '*'), ('tcp', '587', '*')]),
+                    'Azure MTA front rules are not operator SSH plus mail: ' + str(mta_rules))
+            require(gophish_rules == sorted([('tcp', '22', operator), ('tcp', admin_port, operator),
+                                             ('tcp', '80', '*')]),
+                    'Azure GoPhish rules are not operator SSH/admin plus public phish: ' + str(gophish_rules))
+            report['security_group_rules'] = {'mta': mta_rules, 'gophish': gophish_rules}
+        if context.provider == 'aws':
+            report['security_group_rules'] = {}
+            for part in ('mta', 'gophish'):
+                rules = context.cloud.inbound_rules(part + '-' + deployment_id + '-sg')
+                require(('tcp', 22, 22, operator) in rules,
+                        'AWS ' + part + ' group does not restrict SSH to the operator /32')
+                report['security_group_rules'][part] = rules
+            require(('tcp', int(admin_port), int(admin_port), operator) in report['security_group_rules']['gophish'],
+                    'AWS GoPhish group does not restrict the admin UI to the operator /32')
+        return report
+
+
+WORKLOADS = {cls.name: cls for cls in (AttackBox, Redirector, C2, PayloadServer, Phishing)}
 
 
 class Webrunner:
@@ -832,10 +977,13 @@ def activate(provider, workload_name, operator_ip=None, repeat=None):
         setup_logging(deployment_id, 'live_test')
 
         deployed = True
-        require(deploy_infrastructure(config), 'Initial routed deployment failed')
+        deploy = getattr(workload, 'deploy', deploy_infrastructure)
+        expected = getattr(workload, 'instances', 1)
+        require(deploy(config), 'Initial routed deployment failed')
         first = cloud.inventory(identity)
-        require(len(first['instances']) == 1 and first['instances'][0]['state'] == 'running',
-                'Expected exactly one running instance after deployment')
+        require(len(first['instances']) == expected and
+                all(item['state'] == 'running' for item in first['instances']),
+                'Expected exactly {0} running instance(s) after deployment'.format(expected))
         name, user, key = workload.target(provider, config)
         require(key.is_file(), 'Expected SSH key is missing: ' + str(key))
         address = cloud.address(identity, name)
@@ -846,7 +994,7 @@ def activate(provider, workload_name, operator_ip=None, repeat=None):
 
         do_repeat = workload.repeat[provider] if repeat is None else repeat
         if do_repeat:
-            require(deploy_infrastructure(config), 'Repeated routed deployment failed')
+            require(deploy(config), 'Repeated routed deployment failed')
             repeated = cloud.inventory(identity)
             require(repeated == first, 'Repeated deployment changed cloud resource identities')
             require(cloud.address(identity, name) == address, 'Repeated deployment changed the public address')
@@ -952,10 +1100,7 @@ def activate_webrunner(provider, operator_ip=None):
         operator_ip = public_ipv4(operator_ip or runner.run([
             'curl', '-4', '--fail', '--silent', '--show-error', '--max-time', '15',
             'https://api.ipify.org']))
-        spec = importlib.util.spec_from_file_location(
-            'deploy_webrunner_live', ROOT / 'modules/webrunner/deploy_webrunner.py')
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        module = load_module('modules/webrunner/deploy_webrunner.py')
         baseline = None
         for label, run_id, keep in (('kept', deployment_id, True),
                                     ('self-teardown', deployment_id + '-r', False)):

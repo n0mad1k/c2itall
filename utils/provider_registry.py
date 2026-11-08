@@ -231,9 +231,7 @@ PROVIDER_SPECS = {
                               'phantom': 'utils.azure_phantom_adapter:AzurePhantomAdapter',
                               'chat': 'utils.azure_phantom_adapter:AzurePhantomAdapter',
                               'webrunner': 'utils.azure_webrunner_adapter:azure_webrunner_adapter',
-                          },
-                          staged_routes={
-                              'phishing': 'utils.azure_staged_adapter:azure_phishing_staged_adapter',
+                              'phishing': 'utils.azure_phishing_adapter:azure_phishing_adapter',
                           }),
 }
 

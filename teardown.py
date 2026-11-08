@@ -59,7 +59,8 @@ def recoverable_from_log(config, provider):
     if uses_legacy_routes(provider):
         return True
     adapter = workload_route(dict(config, provider=provider))
-    return callable(getattr(type(adapter), 'deploy_with_legacy', None))
+    return (callable(getattr(type(adapter), 'deploy_with_legacy', None)) or
+            getattr(adapter, 'recovers_from_log', False) is True)
 
 
 def discover_deployments():

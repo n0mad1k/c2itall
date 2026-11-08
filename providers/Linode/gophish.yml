@@ -215,15 +215,10 @@
     - name: Include Gophish server configuration tasks
       include_tasks: "../../modules/phishing/gophish/tasks/configure_phishing_server.yml"
 
-    - name: Include Gophish advanced configuration tasks
-      include_tasks: "../../modules/phishing/gophish/tasks/configure_gophish_advanced.yml"
 
     - name: Include common security hardening tasks
       include_tasks: "../../common/tasks/security_hardening.yml"
 
-    - name: Configure integrated click tracker
-      include_tasks: "../../modules/c2/tasks/configure_integrated_tracker.yml"
-      when: deploy_tracker | default(true) | bool
 
     - name: Print deployment summary
       debug:
