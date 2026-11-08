@@ -32,12 +32,9 @@ def prepare_linode_environment(config, teardown=False):
         try:
             provider_vars = load_vars_file('linode')
             token = provider_vars.get('linode_token', '') if provider_vars else ''
-            if not token:
-                logging.warning(
-                    'Linode token not found in vars file - cleanup may fail')
         except Exception as exc:
             logging.warning('Failed to load Linode token from vars file: %s', exc)
-    elif not token:
+    if not token:
         try:
             token = subprocess.check_output(
                 [os.path.expanduser('~/.local/bin/creds'), 'get',

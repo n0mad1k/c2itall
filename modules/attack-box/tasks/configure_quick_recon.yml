@@ -41,6 +41,15 @@
     - "{{ work_dir }}/notes"
     - "/root/tools"
 
+# Kali rotated its archive signing key in 2025; older images cannot update without it
+- name: Refresh the Kali archive keyring
+  ansible.builtin.get_url:
+    url: https://archive.kali.org/archive-keyring.gpg
+    dest: /usr/share/keyrings/kali-archive-keyring.gpg
+    mode: '0644'
+    force: yes
+  when: ansible_facts['distribution'] is search('Kali')
+
 # Update system and install essential packages
 - name: Update package cache
   ansible.builtin.apt:

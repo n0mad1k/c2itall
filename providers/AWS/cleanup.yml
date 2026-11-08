@@ -580,6 +580,8 @@
         - "~/.ssh/c2deploy_{{ deployment_id }}.pub"
         - "~/.ssh/c2deploy_{{ attack_box_name }}"
         - "~/.ssh/c2deploy_{{ attack_box_name }}.pub"
+        - "~/.ssh/attack-box-{{ deployment_id }}"
+        - "{{ playbook_dir }}/../../logs/attack_box_{{ deployment_id }}_info.txt"
         - "~/.ssh/c2deploy_ph-{{ deployment_id }}"
         - "~/.ssh/c2deploy_ph-{{ deployment_id }}.pub"
         - "~/.ssh/c2deploy_ph-{{ deployment_id }}_known_hosts"

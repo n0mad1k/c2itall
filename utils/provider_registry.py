@@ -171,6 +171,7 @@ PROVIDER_SPECS = {
                             LEGACY_TRANSITION_CAPABILITIES['aws'] |
                             frozenset({'phantom', 'chat'})),
                         environment_loader='utils.aws_utils:prepare_aws_environment',
+                        profile_loader='utils.aws_utils:apply_aws_profile',
                         credential_environment=(
                             ('aws_access_key', 'AWS_ACCESS_KEY_ID'),
                             ('aws_secret_key', 'AWS_SECRET_ACCESS_KEY'),

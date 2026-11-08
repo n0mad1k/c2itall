@@ -9,8 +9,44 @@ import logging
 from .common import COLORS, load_vars_file
 
 
+INFISICAL_FOLDER = 'aws'
+
+
+def load_aws_credentials(provider_vars=None):
+    """Load AWS keys from Infisical, then the environment, then vars.yaml."""
+    key = secret = ''
+    creds = os.path.expanduser('~/.local/bin/creds')
+    try:
+        key = subprocess.check_output(
+            [creds, 'get', 'AWS_ACCESS_KEY', INFISICAL_FOLDER],
+            text=True, stderr=subprocess.DEVNULL).strip()
+        secret = subprocess.check_output(
+            [creds, 'get', 'AWS_SECRET_KEY', INFISICAL_FOLDER],
+            text=True, stderr=subprocess.DEVNULL).strip()
+    except Exception:
+        key = secret = ''
+    if not (key and secret):
+        key = os.environ.get('AWS_ACCESS_KEY_ID', '')
+        secret = os.environ.get('AWS_SECRET_ACCESS_KEY', '')
+    if not (key and secret):
+        if provider_vars is None:
+            provider_vars = load_vars_file('aws')
+        key = provider_vars.get('aws_access_key', '') or ''
+        secret = provider_vars.get('aws_secret_key', '') or ''
+        if 'YOUR_AWS' in key:
+            key = secret = ''
+    return {'aws_access_key': key, 'aws_secret_key': secret}
+
+
 def prepare_aws_environment(config, teardown=False):
-    """Preserve the legacy AWS controller environment contract."""
+    """Export the controller credentials; load them when the config lacks them."""
+    if not (config.get('aws_access_key') and config.get('aws_secret_key')):
+        loaded = load_aws_credentials()
+        if loaded['aws_access_key'] and loaded['aws_secret_key']:
+            config.update(loaded)
+        else:
+            logging.warning('AWS credentials were not found in Infisical, '
+                            'the environment or vars.yaml')
     if config.get('aws_access_key'):
         os.environ['AWS_ACCESS_KEY_ID'] = config['aws_access_key']
     if config.get('aws_secret_key'):
@@ -18,34 +54,30 @@ def prepare_aws_environment(config, teardown=False):
     if not teardown and config.get('aws_region'):
         os.environ['AWS_DEFAULT_REGION'] = config['aws_region']
 
+
+def apply_aws_profile(config, workload, profile, value):
+    """Translate neutral workload tuning into AWS instance types."""
+    if workload != 'attack_box' or profile != 'instance_size':
+        return config
+    sizes = {
+        'small': 't3.small',
+        'medium': 't3.medium',
+        'large': 't3.large',
+        'xlarge': 't3.xlarge',
+    }
+    if value not in sizes:
+        raise ValueError('Unsupported AWS attack-box instance size')
+    config['aws_instance_type'] = sizes[value]
+    return config
+
+
 def get_aws_credentials(provider_vars=None):
-    """Get AWS credentials — Infisical first, vars.yaml fallback, then prompt."""
-    key = ''
-    secret = ''
-
-    try:
-        key = subprocess.check_output(
-            [os.path.expanduser('~/.local/bin/creds'), 'get', 'AWS_ACCESS_KEY_ID', 'homelab'],
-            text=True, stderr=subprocess.DEVNULL,
-        ).strip()
-        secret = subprocess.check_output(
-            [os.path.expanduser('~/.local/bin/creds'), 'get', 'AWS_SECRET_ACCESS_KEY', 'homelab'],
-            text=True, stderr=subprocess.DEVNULL,
-        ).strip()
-    except Exception:
-        pass
-
-    if not key:
-        if not provider_vars:
-            provider_vars = load_vars_file('aws')
-        key = provider_vars.get('aws_access_key', '')
-        secret = provider_vars.get('aws_secret_key', '')
-        if key and 'YOUR_AWS' in key:
-            key = ''
-            secret = ''
+    """Get AWS credentials: Infisical first, then environment, vars.yaml, prompt."""
+    creds = load_aws_credentials(provider_vars)
+    key, secret = creds['aws_access_key'], creds['aws_secret_key']
 
     print(f"\n{COLORS['BLUE']}AWS Configuration{COLORS['RESET']}")
-    if key:
+    if key and secret:
         print(f"  AWS credentials loaded")
     else:
         key = input("AWS Access Key: ").strip()

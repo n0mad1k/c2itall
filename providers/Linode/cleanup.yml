@@ -176,6 +176,14 @@
         path: "{{ playbook_dir }}/../deployment_state_{{ deployment_id }}.json"
         state: absent
 
+    - name: Remove attack-box records written beside the playbook
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ playbook_dir }}/logs/deployment_info_{{ deployment_id }}.txt"
+        - "{{ playbook_dir }}/logs/attack_box_{{ deployment_id }}.env"
+
     - name: Report verified cleanup
       ansible.builtin.debug:
         msg:
