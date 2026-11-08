@@ -206,7 +206,7 @@
     state: present
     backup: yes
   loop:
-    - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
+    - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin prohibit-password' }
     - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
     - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
     - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 3' }
