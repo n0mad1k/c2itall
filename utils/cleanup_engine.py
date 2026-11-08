@@ -24,6 +24,12 @@ from utils.provider_registry import (
     workload_route,
 )
 
+def deployment_record_path(deployment_id):
+    """Exact record path for a deployment ID, or None when the ID is unsafe."""
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', str(deployment_id)):
+        return None
+    return f"logs/deployment_info_{deployment_id}.txt"
+
 def teardown_by_deployment_id(deployment_id):
     """Teardown infrastructure by deployment ID"""
     print(f"\n{COLORS['BLUE']}Teardown Infrastructure by ID: {deployment_id}{COLORS['RESET']}")
@@ -35,18 +41,12 @@ def teardown_by_deployment_id(deployment_id):
     if state is not None:
         return execute_teardown(state)
     
-    # Look for deployment logs to determine provider and configuration
-    log_files = glob.glob(f"logs/deployment_{deployment_id}*.log")
-    
-    if not log_files:
-        print(f"{COLORS['RED']}No deployment logs found for ID: {deployment_id}{COLORS['RESET']}")
+    info_file = deployment_record_path(deployment_id)
+    if info_file is None:
+        print(f"{COLORS['RED']}Invalid deployment ID: {deployment_id}{COLORS['RESET']}")
         return False
-    
-    # Try to find deployment info files
-    info_files = glob.glob(f"logs/deployment_info_{deployment_id}*.txt")
-    
-    if info_files:
-        config = parse_deployment_info(info_files[0])
+    if os.path.exists(info_file):
+        config = parse_deployment_info(info_file)
         if config:
             return execute_teardown(config)
     
@@ -134,9 +134,15 @@ def execute_teardown(config):
     """Execute teardown based on configuration"""
     providers = config.get('providers')
     if providers and not config.get('provider'):
-        # A composite deployment owns one verified lifecycle per provider.
-        return all([execute_teardown(dict(config, provider=provider))
-                    for provider in providers])
+        # A composite deployment owns one verified lifecycle per provider; the
+        # shared key and record retire only after every leg has verified.
+        legs = [execute_teardown(dict(config, provider=provider, preserve_local_keys=True,
+                                      preserve_deployment_record=True))
+                for provider in providers]
+        if not all(legs):
+            return False
+        finalize_teardown(config)
+        return True
     provider = config.get('provider')
     adapter = workload_route(config)
     legacy = uses_legacy_routes(provider, requested_workload(config))
@@ -186,14 +192,7 @@ def execute_legacy_teardown(config):
         success = run_teardown_playbook(playbook, config)
         
         if success:
-            # Clean up local SSH keys
-            if not config.get('preserve_local_keys'):
-                cleanup_ssh_keys_for_deployment(
-                    deployment_id, config.get('ssh_key_path'))
-            
-            # Move deployment logs to cleanup folder
-            archive_deployment_logs(deployment_id)
-            
+            finalize_teardown(config)
             print(f"{COLORS['GREEN']}Teardown completed successfully{COLORS['RESET']}")
         else:
             print(f"{COLORS['RED']}Teardown failed - manual cleanup may be required{COLORS['RESET']}")
@@ -204,6 +203,14 @@ def execute_legacy_teardown(config):
         logging.error(f"Teardown execution failed: {e}")
         print(f"{COLORS['RED']}Teardown execution failed: {e}{COLORS['RESET']}")
         return False
+
+def finalize_teardown(config):
+    """Retire the local key and logs once provider cleanup has verified."""
+    deployment_id = config['deployment_id']
+    if not config.get('preserve_local_keys'):
+        cleanup_ssh_keys_for_deployment(deployment_id, config.get('ssh_key_path'))
+    if not config.get('preserve_deployment_record'):
+        archive_deployment_logs(deployment_id)
 
 def set_provider_environment_for_teardown(config):
     """Compatibility shim for registry-routed teardown environment setup."""

@@ -491,6 +491,8 @@ def execute_component_deployment(config):
             return
         print(f"{COLORS['YELLOW']}Cleaning up partial phishing deployment...{COLORS['RESET']}")
         if not execute_teardown(config):
+            from utils.deployment_engine import save_deployment_info
+            save_deployment_info(config)
             print(f"{COLORS['RED']}Partial deployment cleanup was not verified; retain recovery data.{COLORS['RESET']}")
 
     try:

@@ -338,9 +338,14 @@ with patch.object(c,'execute_teardown',return_value=True) as teardown:
 
     def test_legacy_mixed_case_underscore_id_keeps_fallback(self):
         config = {"provider": "linode", "deployment_id": "Old_ID"}
-        with mock.patch.object(cleanup_engine.glob, "glob", side_effect=[["legacy.log"], ["legacy.txt"]]), mock.patch.object(cleanup_engine, "parse_deployment_info", return_value=config), mock.patch.object(cleanup_engine, "execute_teardown", return_value=True) as cleanup, contextlib.redirect_stdout(io.StringIO()):
+        with mock.patch.object(cleanup_engine.os.path, "exists", return_value=True), mock.patch.object(cleanup_engine, "parse_deployment_info", return_value=config) as parse, mock.patch.object(cleanup_engine, "execute_teardown", return_value=True) as cleanup, contextlib.redirect_stdout(io.StringIO()):
             self.assertTrue(cleanup_engine.teardown_by_deployment_id("Old_ID"))
             cleanup.assert_called_once_with(config)
+        # The record is matched exactly, never by prefix or an unsafe ID.
+        parse.assert_called_once_with("logs/deployment_info_Old_ID.txt")
+        with mock.patch.object(cleanup_engine, "parse_deployment_info") as parse, contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(cleanup_engine.teardown_by_deployment_id("../Old_ID"))
+        parse.assert_not_called()
 
     def test_teardown_all_discovers_state_and_deduplicates_legacy_info(self):
         state = self.prepare()
@@ -753,9 +758,11 @@ class RoutingAndTemplateTests(AzureFixture):
                 mock.patch.object(
                     cleanup_engine, 'execute_teardown',
                     return_value=False) as cleanup, \
+                mock.patch.object(deployment_engine, 'save_deployment_info') as record, \
                 contextlib.redirect_stdout(io.StringIO()):
             self.assertFalse(module.execute_ansible_deployment(config))
         cleanup.assert_called_once_with(config)
+        record.assert_called_once_with(config)
 
     def test_phishing_executor_uses_shared_runtime_and_cleans_partial_failure(self):
         module_spec = importlib.util.spec_from_file_location(
@@ -780,11 +787,13 @@ class RoutingAndTemplateTests(AzureFixture):
                 mock.patch.object(
                     cleanup_engine, 'execute_teardown',
                     return_value=False) as cleanup, \
+                mock.patch.object(deployment_engine, 'save_deployment_info') as record, \
                 contextlib.redirect_stdout(io.StringIO()):
             self.assertFalse(module.execute_component_deployment(config))
         environment.assert_called_once_with(config)
         self.assertEqual(execute.call_count, 2)
         cleanup.assert_called_once_with(config)
+        record.assert_called_once_with(config)
 
         with mock.patch.object(module.os.path, 'exists', return_value=False), \
                 mock.patch.object(
@@ -815,11 +824,14 @@ class RoutingAndTemplateTests(AzureFixture):
                     return_value=False) as execute, \
                 mock.patch.object(
                     cleanup_engine, 'execute_teardown',
-                    return_value=False) as cleanup:
+                    return_value=False) as cleanup, \
+                mock.patch.object(deployment_engine, 'save_deployment_info') as record:
             self.assertFalse(deployment_engine.deploy_infrastructure(config))
         environment.assert_called_once_with(config)
         execute.assert_called_once_with('providers/AWS/c2.yml', config)
         cleanup.assert_called_once_with(config)
+        # Unverified cleanup keeps the record a later teardown recovers from.
+        record.assert_called_once_with(config)
 
     def test_composite_dispatch_uses_one_lifecycle_and_refuses_partial_fallback(self):
         config = {'providers': ['linode', 'aws'],
@@ -1347,12 +1359,58 @@ class RoutingAndTemplateTests(AzureFixture):
                     'utils.cleanup_engine.execute_teardown',
                     return_value=True) as cleanup:
             self.assertFalse(module._execute_webrunner_legacy(config))
-        self.assertEqual([call.args[0]['provider']
-                          for call in cleanup.call_args_list],
-                         ['linode', 'aws'])
-        self.assertTrue(all(call.args[0]['preserve_local_keys']
-                            for call in cleanup.call_args_list))
+        cleanup.assert_called_once()
+        composite = cleanup.call_args.args[0]
+        self.assertEqual(composite['providers'], ['linode', 'aws'])
+        self.assertNotIn('provider', composite)
+        self.assertTrue(composite['preserve_local_keys'])
         self.assertTrue(self.key.exists())
+
+    def test_composite_teardown_retires_shared_artifacts_after_every_leg(self):
+        config = {'providers': ['linode', 'aws'], 'provider_workload': 'webrunner',
+                  'deployment_id': 'comp', 'ssh_key_path': str(self.key) + '.pub'}
+        with mock.patch.object(cleanup_engine, 'execute_legacy_teardown',
+                               return_value=True) as legacy, \
+                mock.patch.object(cleanup_engine, 'cleanup_ssh_keys_for_deployment') as keys, \
+                mock.patch.object(cleanup_engine, 'archive_deployment_logs') as archive:
+            self.assertTrue(cleanup_engine.execute_teardown(config))
+        self.assertEqual([call.args[0]['provider'] for call in legacy.call_args_list],
+                         ['linode', 'aws'])
+        for call in legacy.call_args_list:
+            # A leg never retires the key or record another leg still needs.
+            self.assertTrue(call.args[0]['preserve_local_keys'])
+            self.assertTrue(call.args[0]['preserve_deployment_record'])
+        keys.assert_called_once_with('comp', str(self.key) + '.pub')
+        archive.assert_called_once_with('comp')
+
+        with mock.patch.object(cleanup_engine, 'execute_legacy_teardown',
+                               side_effect=[True, False]) as legacy, \
+                mock.patch.object(cleanup_engine, 'cleanup_ssh_keys_for_deployment') as keys, \
+                mock.patch.object(cleanup_engine, 'archive_deployment_logs') as archive:
+            self.assertFalse(cleanup_engine.execute_teardown(config))
+        self.assertEqual(legacy.call_count, 2)
+        keys.assert_not_called()
+        archive.assert_not_called()
+
+    def test_archiving_old_logs_keeps_live_deployment_logs(self):
+        from utils import common
+        logs = self.home / 'logs'
+        logs.mkdir()
+        for name in ('deployment_live.log', 'deployment_live_phishing-mta.log',
+                     'deployment_info_live.txt', 'deployment_old.log', 'teardown_old.log'):
+            (logs / name).write_text('x')
+        previous = Path.cwd()
+        try:
+            os.chdir(self.home)
+            with contextlib.redirect_stdout(io.StringIO()):
+                common.archive_old_logs()
+        finally:
+            os.chdir(previous)
+        self.assertEqual(sorted(path.name for path in logs.iterdir() if path.is_file()),
+                         ['deployment_info_live.txt', 'deployment_live.log',
+                          'deployment_live_phishing-mta.log'])
+        self.assertEqual(sorted(path.name[16:] for path in (logs / 'archive').iterdir()),
+                         ['deployment_old.log', 'teardown_old.log'])
 
     def test_webrunner_removes_shared_key_only_after_verified_cloud_teardown(self):
         module_spec = importlib.util.spec_from_file_location(
@@ -2436,9 +2494,13 @@ class ProviderContractTests(AzureFixture):
 
     def test_standalone_teardown_missing_adapter_state_keeps_legacy_lookup(self):
         import teardown as standalone
-        with mock.patch.object(registry, 'load_infrastructure_state', return_value=None), mock.patch.object(standalone.glob, 'glob', return_value=[]) as logs, mock.patch.object(standalone, 'list_deployments'), contextlib.redirect_stdout(io.StringIO()):
+        with mock.patch.object(registry, 'load_infrastructure_state', return_value=None), mock.patch.object(standalone.os.path, 'exists', return_value=False) as exists, mock.patch.object(standalone, 'list_deployments') as listing, contextlib.redirect_stdout(io.StringIO()):
             self.assertFalse(standalone.teardown_deployment('Old_ID', force=True))
-            logs.assert_called_once_with('logs/deployment_info_Old_ID*.txt')
+            exists.assert_called_once_with('logs/deployment_info_Old_ID.txt')
+            listing.assert_called_once_with()
+        with mock.patch.object(registry, 'load_infrastructure_state', return_value=None), mock.patch.object(standalone, 'parse_deployment_info') as parse, contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(standalone.teardown_deployment('Old*', force=True))
+        parse.assert_not_called()
 
     def test_standalone_cleanup_uses_registered_route_before_legacy(self):
         import teardown as standalone

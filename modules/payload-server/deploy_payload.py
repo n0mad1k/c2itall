@@ -290,6 +290,8 @@ def execute_ansible_deployment(config):
         return True
     from utils.cleanup_engine import execute_teardown
     if not execute_teardown(config):
+        from utils.deployment_engine import save_deployment_info
+        save_deployment_info(config)
         print(
             f"{COLORS['RED']}Payload deployment cleanup was not verified; "
             f"retain recovery data.{COLORS['RESET']}")

@@ -203,15 +203,18 @@ def teardown_deployment(deployment_id, force=False):
         return teardown_adapter_state(state, force=force)
 
     # Find deployment info
-    info_files = glob.glob(f"logs/deployment_info_{deployment_id}*.txt")
-    
-    if not info_files:
+    from utils.cleanup_engine import deployment_record_path
+    info_file = deployment_record_path(deployment_id)
+    if info_file is None:
+        print(f"{COLORS['RED']}Invalid deployment ID: {deployment_id}{COLORS['RESET']}")
+        return False
+    if not os.path.exists(info_file):
         print(f"{COLORS['RED']}No deployment info found for ID: {deployment_id}{COLORS['RESET']}")
         print(f"{COLORS['YELLOW']}Available deployments:{COLORS['RESET']}")
         list_deployments()
         return False
     
-    config = parse_deployment_info(info_files[0])
+    config = parse_deployment_info(info_file)
     if not config:
         print(f"{COLORS['RED']}Could not parse deployment configuration{COLORS['RESET']}")
         return False
@@ -270,7 +273,8 @@ def teardown_all_deployments(force=False):
         return True
     print(f"Found {len(deployments)} deployments to teardown")
     for config in deployments:
-        print(f"  {config['provider']}: {config['deployment_id']}")
+        provider = config.get('provider') or ','.join(config.get('providers') or ['unknown'])
+        print(f"  {provider}: {config['deployment_id']}")
     if not force:
         confirm = input(f"{COLORS['YELLOW']}Type 'DESTROY' to confirm: {COLORS['RESET']}")
         if confirm != "DESTROY":

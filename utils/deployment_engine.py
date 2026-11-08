@@ -123,6 +123,8 @@ def _deploy_infrastructure_legacy(config):
     from utils.cleanup_engine import execute_teardown
     logging.warning('Deployment failed; attempting verified provider cleanup')
     if not execute_teardown(config):
+        # The record is what a later teardown recovers from.
+        save_deployment_info(config)
         logging.error(
             'Failed deployment cleanup was not verified; retain recovery data')
     return False
@@ -406,7 +408,7 @@ def save_deployment_info(config):
                 'attack_box_name', 'c2_name', 'redirector_name', 'tracker_name',
                 'chat_server_name', 'payload_server_name', 'payload_redirector_name',
                 'webrunner_name', 'phantom_name', 'mta_name', 'gophish_name',
-                'webserver_name',
+                'webserver_name', 'phishing_redirector_name', 'phishing_webserver_name',
                 'domain', 'c2_subdomain', 'redirector_subdomain',
                 'c2_framework', 'redirector_type',
                 'linode_region', 'aws_region',

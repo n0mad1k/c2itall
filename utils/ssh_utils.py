@@ -137,6 +137,10 @@ def extract_attack_box_ip_from_logs(config):
 def ssh_to_instance(config):
     """SSH into an instance after deployment"""
     ssh_key_path = config.get('ssh_key_path', '').replace('.pub', '')
+    if (not os.path.exists(os.path.expanduser(ssh_key_path)) and
+            os.path.exists(os.path.expanduser(ssh_key_path + '.pem'))):
+        # The AWS plays rename the module key to .pem after importing it.
+        ssh_key_path += '.pem'
     
     # Handle attack box deployments
     if config.get('attack_box_deployment'):

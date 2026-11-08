@@ -652,12 +652,11 @@ def _execute_webrunner_legacy(config):
         return success
 
     # A provisioning/configuration failure can occur after a provider accepted
-    # create calls but before the final in-play teardown. Re-enter each
-    # provider's verified cleanup route with the same ownership identity.
+    # create calls but before the final in-play teardown. Re-enter the
+    # composite verified cleanup route with the same ownership identity.
     from utils.cleanup_engine import execute_teardown
-    for provider in config['providers']:
-        cleanup = dict(
-            config, provider=provider, provider_workload='webrunner',
-            preserve_local_keys=True)
-        execute_teardown(cleanup)
+    if not execute_teardown(dict(config, provider_workload='webrunner', preserve_local_keys=True)):
+        from utils.deployment_engine import save_deployment_info
+        save_deployment_info(config)
+        print(f"{COLORS['RED']}WEBRUNNER cleanup was not verified; retain recovery data.{COLORS['RESET']}")
     return False

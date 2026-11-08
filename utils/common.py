@@ -85,6 +85,13 @@ def archive_old_logs(max_logs_to_keep=2):
     
     # Remove duplicates and filter out archive directory
     log_files = [f for f in set(log_files) if "archive" not in f]
+
+    # A live deployment keeps its record and logs here until teardown
+    # retires them together; only orphaned logs are swept.
+    live_ids = [os.path.basename(record)[len("deployment_info_"):-len(".txt")]
+                for record in glob.glob(os.path.join(log_dir, "deployment_info_*.txt"))]
+    log_files = [f for f in log_files if not any(
+        os.path.basename(f).startswith("deployment_" + live_id) for live_id in live_ids)]
     
     # Sort by modification time (newest first)
     log_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
@@ -111,23 +118,6 @@ def archive_old_logs(max_logs_to_keep=2):
         if archived_count > 0:
             print(f"Archived {archived_count} log files to {archive_dir}")
     
-    # Also archive old deployment info files
-    info_files = glob.glob(os.path.join(log_dir, "deployment_info_*.txt"))
-    
-    if len(info_files) > 0:
-        print(f"Found {len(info_files)} info files to archive")
-        for info_file in info_files:
-            try:
-                filename = os.path.basename(info_file)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                archived_filename = f"{timestamp}_{filename}"
-                archive_path = os.path.join(archive_dir, archived_filename)
-                
-                shutil.move(info_file, archive_path)
-                print(f"Archived: {filename} -> archive/{archived_filename}")
-            except Exception as e:
-                print(f"Failed to archive {info_file}: {e}")
-
 def setup_logging(deployment_id=None, operation_type="deployment"):
     """Set up logging for the deployment or teardown"""
     log_dir = "logs"
