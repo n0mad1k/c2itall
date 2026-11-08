@@ -93,6 +93,9 @@ class AzureDriver(CloudDriver):
             return str(azure_utils.ROOT / 'providers' / 'Azure' / 'infrastructure.yml')
         return None
 
+    def local_artifacts(self, deployment_id, config=None):
+        return [azure_utils._state_path(deployment_id, (config or {}).get('azure_state_dir'))]
+
     def log_dir(self, config):
         return Path(config.get('azure_state_dir') or azure_utils.STATE_DIR) / 'logs'
 

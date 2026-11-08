@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deploy, verify, repeat and remove one real AWS or Linode offensive workload.
+"""Deploy, verify, repeat and remove one real cloud offensive workload.
 
 The default invocation is a dry run. ``--activate`` performs the lifecycle
 through the shared provider registry exactly as the interactive modules do,
@@ -10,7 +10,6 @@ Nothing is scanned or attacked: verification only inspects the deployed host.
 
 import argparse
 import importlib.util
-import ipaddress
 import json
 import os
 from pathlib import Path
@@ -21,7 +20,6 @@ import signal
 import subprocess
 import sys
 import time
-from urllib import error, request
 import uuid
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -30,21 +28,19 @@ for path in (SCRIPT_DIR, ROOT):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from utils.common import load_vars_file, setup_logging
+from live_clouds import (CLOUDS, REGIONS, LiveError, LiveInterrupted, build_cloud,
+                         live_config, public_ipv4, redacted, require)
+from utils.common import setup_logging
 from utils.deployment_engine import (deploy_infrastructure, dispatch_composite_workload,
                                      dispatch_workload)
-from utils.provider_registry import prepare_provider_environment
+from utils.provider_registry import (PROVIDER_SPECS, prepare_provider_environment,
+                                     provider_driver, provider_label)
 from utils.provider_utils import apply_provider_profile, prepare_module_ssh_key
 
-REGIONS = {'aws': 'us-east-1', 'linode': 'us-east', 'azure': 'eastus'}
-PROVIDER_DIRS = {'aws': 'AWS', 'linode': 'Linode', 'azure': 'Azure'}
-AZURE_SUBSCRIPTION = 'cc2a66d1-67c2-47ca-856f-19a4eae52cfe'
-AZURE_SIZE = 'Standard_D2as_v4'
-AZURE_STATE_DIR = ROOT / 'deployments' / 'azure'
-CREDENTIAL_ENVIRONMENT = ('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY',
-                          'AWS_DEFAULT_REGION', 'LINODE_TOKEN')
-SECRET_FRAGMENTS = ('token', 'secret', 'pass', 'access_key')
-LINODE_API = 'https://api.linode.com/v4'
+# A fresh teardown process must hold no provider credential at all.
+CREDENTIAL_ENVIRONMENT = tuple(
+    environment for spec in PROVIDER_SPECS.values()
+    for _, environment in spec.credential_environment) + ('AWS_DEFAULT_REGION',)
 SSH_DIR = Path.home() / '.ssh'
 # Never fails; records why an sshd check could fail without a second deployment.
 SSHD_DIAGNOSTICS = (
@@ -52,32 +48,6 @@ SSHD_DIAGNOSTICS = (
     "grep -n -i 'passwordauthentication\\|^include' /etc/ssh/sshd_config; "
     "ls -la /etc/ssh/sshd_config.d/ 2>&1; "
     "sudo -n sh -c 'head -20 /etc/ssh/sshd_config.d/*.conf' 2>&1; true")
-
-
-class LiveError(RuntimeError):
-    pass
-
-
-class LiveInterrupted(LiveError):
-    pass
-
-
-def require(condition, message):
-    if not condition:
-        raise LiveError(message)
-
-
-def public_ipv4(value):
-    address = ipaddress.ip_address(str(value).strip().removesuffix('/32'))
-    if address.version != 4 or not address.is_global:
-        raise LiveError('Operator address must be a public IPv4 address')
-    return str(address)
-
-
-def redacted(config):
-    return {key: ('<redacted>' if any(fragment in key.lower()
-                                      for fragment in SECRET_FRAGMENTS) else value)
-            for key, value in config.items()}
 
 
 class Runner:
@@ -113,217 +83,6 @@ class Runner:
             raise LiveError('Command failed ({0}): {1}: {2}'.format(
                 process.returncode, argv[0], process.stderr[-3000:]))
         return process.stdout.strip()
-
-
-class AwsCloud:
-    provider = 'aws'
-
-    def __init__(self, region):
-        import boto3
-        self.region = region
-        self.ec2 = boto3.client('ec2', region_name=region)
-
-    def _instances(self, filters):
-        found = {}
-        for reservation in self.ec2.describe_instances(Filters=filters)['Reservations']:
-            for instance in reservation['Instances']:
-                if instance['State']['Name'] == 'terminated':
-                    continue
-                tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
-                found[instance['InstanceId']] = {
-                    'id': instance['InstanceId'], 'state': instance['State']['Name'],
-                    'name': tags.get('Name', ''), 'public_ip': instance.get('PublicIpAddress', ''),
-                    'instance_type': instance['InstanceType'], 'image_id': instance['ImageId'],
-                }
-        return found
-
-    def inventory(self, identity):
-        deployment_id = identity['deployment_id']
-        tag_filters = [[{'Name': 'tag:deployment_id', 'Values': [deployment_id]}],
-                       [{'Name': 'tag:DeploymentID', 'Values': [deployment_id]}],
-                       [{'Name': 'tag:Name', 'Values': identity['names']}]]
-        instances = {}
-        for filters in tag_filters:
-            instances.update(self._instances(filters))
-        groups = {}
-        for filters in tag_filters[:2] + [[{'Name': 'group-name', 'Values': identity['sg_names']}]]:
-            for group in self.ec2.describe_security_groups(Filters=filters)['SecurityGroups']:
-                groups[group['GroupId']] = {'id': group['GroupId'], 'name': group['GroupName'],
-                                            'vpc_id': group.get('VpcId', '')}
-        vpcs = {}
-        for filters in tag_filters[:2]:
-            for vpc in self.ec2.describe_vpcs(Filters=filters)['Vpcs']:
-                vpcs[vpc['VpcId']] = {'id': vpc['VpcId']}
-        interfaces = {}
-        for filters in tag_filters[:2]:
-            for eni in self.ec2.describe_network_interfaces(Filters=filters)['NetworkInterfaces']:
-                interfaces[eni['NetworkInterfaceId']] = {'id': eni['NetworkInterfaceId']}
-        keys = [pair['KeyName'] for pair in self.ec2.describe_key_pairs(
-            Filters=[{'Name': 'key-name', 'Values': identity['key_names']}])['KeyPairs']]
-        return {
-            'instances': sorted(instances.values(), key=lambda item: item['id']),
-            'security_groups': sorted(groups.values(), key=lambda item: item['id']),
-            'vpcs': sorted(vpcs.values(), key=lambda item: item['id']),
-            'network_interfaces': sorted(interfaces.values(), key=lambda item: item['id']),
-            'key_pairs': sorted(keys),
-        }
-
-    def totals(self):
-        instances = len(self._instances([]))
-        groups = sum(1 for group in self.ec2.describe_security_groups()['SecurityGroups']
-                     if group['GroupName'] != 'default')
-        vpcs = sum(1 for vpc in self.ec2.describe_vpcs()['Vpcs'] if not vpc.get('IsDefault'))
-        keys = len(self.ec2.describe_key_pairs()['KeyPairs'])
-        return {'region': self.region, 'instances': instances, 'security_groups': groups,
-                'vpcs': vpcs, 'key_pairs': keys}
-
-    def address(self, identity, name):
-        for instance in self.inventory(identity)['instances']:
-            if instance['name'] == name and instance['state'] == 'running':
-                return public_ipv4(instance['public_ip'])
-        raise LiveError('No running AWS instance named ' + name)
-
-    def inbound_rules(self, sg_name):
-        rules = []
-        for group in self.ec2.describe_security_groups(
-                Filters=[{'Name': 'group-name', 'Values': [sg_name]}])['SecurityGroups']:
-            for permission in group['IpPermissions']:
-                for cidr in permission.get('IpRanges', []):
-                    rules.append((permission.get('IpProtocol'), permission.get('FromPort'),
-                                  permission.get('ToPort'), cidr['CidrIp']))
-        return sorted(rules, key=str)
-
-
-class LinodeCloud:
-    provider = 'linode'
-
-    def __init__(self, token):
-        self.token = token
-        self.region = REGIONS['linode']
-
-    def _pages(self, path):
-        page = 1
-        while True:
-            separator = '&' if '?' in path else '?'
-            call = request.Request(
-                LINODE_API + path + separator + 'page={0}&page_size=500'.format(page),
-                headers={'Authorization': 'Bearer ' + self.token, 'Accept': 'application/json'})
-            try:
-                with request.urlopen(call, timeout=30) as response:
-                    payload = json.loads(response.read())
-            except error.HTTPError as exc:
-                raise LiveError('Linode API {0} failed with HTTP {1}'.format(path, exc.code)) from exc
-            if not isinstance(payload.get('data'), list):
-                raise LiveError('Linode API returned an invalid inventory')
-            yield from payload['data']
-            if page >= int(payload.get('pages', 1)):
-                return
-            page += 1
-
-    def inventory(self, identity):
-        deployment_id = identity['deployment_id']
-        instances = []
-        for item in self._pages('/linode/instances'):
-            if deployment_id in (item.get('tags') or []) or item.get('label') in identity['names']:
-                instances.append({'id': item['id'], 'name': item['label'], 'state': item['status'],
-                                  'public_ip': (item.get('ipv4') or [''])[0],
-                                  'instance_type': item.get('type'), 'image_id': item.get('image')})
-        keys = [item['label'] for item in self._pages('/profile/sshkeys')
-                if item.get('label') in identity['key_names']]
-        return {'instances': sorted(instances, key=lambda item: item['id']),
-                'key_pairs': sorted(keys)}
-
-    def totals(self):
-        return {'region': self.region,
-                'instances': sum(1 for _ in self._pages('/linode/instances')),
-                'key_pairs': sum(1 for _ in self._pages('/profile/sshkeys'))}
-
-    def address(self, identity, name):
-        for instance in self.inventory(identity)['instances']:
-            if instance['name'] == name and instance['state'] == 'running':
-                return public_ipv4(instance['public_ip'])
-        raise LiveError('No running Linode named ' + name)
-
-
-class AzureCloud:
-    provider = 'azure'
-
-    def __init__(self, evidence):
-        import deploy_azure_smoke as smoke
-        from utils import azure_utils
-        self.region = REGIONS['azure']
-        self.smoke = smoke.Runner(ROOT)
-        self.smoke.evidence = evidence / 'azure'
-        self.smoke.evidence.mkdir(mode=0o700)
-        azure_utils.ensure_azure_auth(AZURE_SUBSCRIPTION, force=True)
-
-    def inventory(self, identity):
-        groups = identity.get('azure_groups') or ['c2itall-' + identity['deployment_id']]
-        instances, resources = [], []
-        for group in groups:
-            if self.smoke.az('group', 'exists', '--name', group) is not True:
-                continue
-            for vm in self.smoke.az('vm', 'list', '--resource-group', group, '--show-details') or []:
-                instances.append({
-                    'id': vm['id'].lower(), 'name': vm['name'],
-                    'state': 'running' if vm.get('powerState') == 'VM running' else str(vm.get('powerState', '')),
-                    'public_ip': vm.get('publicIps', ''), 'instance_type': vm['hardwareProfile']['vmSize'],
-                    'image_id': json.dumps(vm['storageProfile']['imageReference'], sort_keys=True)})
-            resources.extend(item['id'].lower() for item in
-                             self.smoke.az('resource', 'list', '--resource-group', group) or [])
-        return {'instances': sorted(instances, key=lambda item: item['id']), 'resources': sorted(resources)}
-
-    def totals(self):
-        inventory = self.smoke.inventory()
-        if self.smoke.subscription_baseline is None:
-            self.smoke.subscription_baseline = inventory
-        return inventory
-
-    def settle(self):
-        # Azure adds a NetworkWatcher to an empty lab; the smoke runner removes only that.
-        self.smoke.cleanup_subscription()
-
-    def address(self, identity, name):
-        wanted = identity.get('azure_names', {}).get(name)
-        for instance in self.inventory(identity)['instances']:
-            if instance['state'] == 'running' and wanted in (None, instance['name']):
-                return public_ipv4(instance['public_ip'])
-        raise LiveError('No running Azure VM for ' + name)
-
-    def inbound_rules(self, deployment_id):
-        rules = []
-        for nsg in self.smoke.az('network', 'nsg', 'list', '--resource-group',
-                                 'c2itall-' + deployment_id) or []:
-            for rule in nsg.get('securityRules', []):
-                if rule.get('direction') == 'Inbound' and rule.get('access') == 'Allow':
-                    rules.append((str(rule.get('protocol', '')).lower(), str(rule.get('destinationPortRange')),
-                                  str(rule.get('sourceAddressPrefix'))))
-        return sorted(rules)
-
-
-def provider_config(provider):
-    if provider == 'azure':
-        return {
-            'azure_subscription_id': AZURE_SUBSCRIPTION, 'azure_location': REGIONS['azure'],
-            'azure_vm_size': AZURE_SIZE, 'azure_os_disk_gb': 32,
-            'provider_manages_ssh_key': True,
-        }
-    values = load_vars_file(provider)
-    if provider == 'aws':
-        return {
-            'aws_access_key': os.environ['AWS_ACCESS_KEY_ID'],
-            'aws_secret_key': os.environ['AWS_SECRET_ACCESS_KEY'],
-            'aws_regions': [REGIONS['aws']], 'aws_region': REGIONS['aws'],
-            'ami_map': values.get('ami_map', {}),
-            'aws_instance_type': values.get('aws_instance_type', 't3.micro'),
-            'aws_volume_size': values.get('aws_volume_size', 20),
-        }
-    return {
-        'linode_token': os.environ['LINODE_TOKEN'],
-        'linode_regions': [REGIONS['linode']], 'linode_region': REGIONS['linode'],
-        'linode_instance_type': values.get('linode_instance_type', 'g6-nanode-1'),
-        'linode_image': values.get('linode_image', 'linode/debian12'),
-    }
 
 
 def checks(context, items, timeout=90):
@@ -365,14 +124,30 @@ def key_files(stem):
     return [SSH_DIR / stem, SSH_DIR / (stem + '.pub'), SSH_DIR / (stem + '.pem')]
 
 
-def azure_artifacts(deployment_id):
-    return key_files('c2deploy_' + deployment_id) + [AZURE_STATE_DIR / (deployment_id + '.json')]
+def driver_artifacts(deployment_id):
+    """Local state any driver-backed provider keeps for one deployment ID."""
+    paths = []
+    for provider in PROVIDER_SPECS:
+        driver = provider_driver(provider)
+        if driver is not None:
+            paths.extend(driver.local_artifacts(deployment_id))
+    return paths
+
+
+def shared_artifacts(deployment_id):
+    return key_files('c2deploy_' + deployment_id) + driver_artifacts(deployment_id)
+
+
+def driver_target(provider, name, key_stem):
+    """SSH target for a driver-backed provider: its user, the module key."""
+    return name, provider_driver(provider).ssh_user, SSH_DIR / ('c2deploy_' + key_stem)
 
 
 class AttackBox:
     name = 'attack_box'
-    repeat = {'aws': True, 'linode': False, 'azure': True}
-    source_paths = ('modules/attack-box', 'providers/{dir}/attack_box.yml')
+    repeat = {'aws': True, 'linode': False}
+    source_paths = ('modules/attack-box',)
+    legacy_paths = ('providers/{dir}/attack_box.yml',)
 
     def config(self, provider, deployment_id, operator_ip):
         box = 'qr-' + deployment_id
@@ -389,8 +164,8 @@ class AttackBox:
             'ssh_user': 'root', 'attack_box_image': 'linode/kali',
             'quick_deployment': True,
         }
-        config.update(provider_config(provider))
-        if provider != 'azure':
+        config.update(live_config(provider, self.name))
+        if provider_driver(provider) is None:
             apply_provider_profile(config, 'instance_size', 'small')
         ready, _ = prepare_module_ssh_key(config, box)
         require(ready, 'Could not generate the module SSH key')
@@ -405,13 +180,13 @@ class AttackBox:
     def target(self, provider, config):
         if provider == 'aws':
             return config['attack_box_name'], 'kali', SSH_DIR / ('attack-box-' + config['deployment_id'])
-        if provider == 'azure':
-            return config['attack_box_name'], 'azureuser', SSH_DIR / ('c2deploy_' + config['deployment_id'])
-        return config['attack_box_name'], 'root', SSH_DIR / ('c2deploy_' + config['attack_box_name'])
+        if provider == 'linode':
+            return config['attack_box_name'], 'root', SSH_DIR / ('c2deploy_' + config['attack_box_name'])
+        return driver_target(provider, config['attack_box_name'], config['deployment_id'])
 
     def local_artifacts(self, provider, config):
         deployment_id = config['deployment_id']
-        return key_files('c2deploy_' + config['attack_box_name']) + azure_artifacts(deployment_id) + [
+        return key_files('c2deploy_' + config['attack_box_name']) + shared_artifacts(deployment_id) + [
             SSH_DIR / ('attack-box-' + deployment_id),
             ROOT / 'logs' / ('attack_box_' + deployment_id + '_info.txt'),
             ROOT / 'providers' / 'Linode' / 'logs' / ('deployment_info_' + deployment_id + '.txt'),
@@ -432,10 +207,10 @@ class AttackBox:
             ('alias', "sudo -n grep -Fq \"alias qr='cd /root/" + deployment_id + "'\" /root/.bashrc"),
             ('sshd_no_password', "sudo -n /usr/sbin/sshd -T | grep -iq '^passwordauthentication no$'"),
         ])
-        if context.provider == 'azure':
+        if provider_driver(context.provider) is not None:
             rules = context.cloud.inbound_rules(deployment_id)
             require(rules == [('tcp', '22', config['operator_ip'] + '/32')],
-                    'Azure attack box exposes more than operator SSH: ' + str(rules))
+                    provider_label(context.provider) + ' attack box exposes more than operator SSH: ' + str(rules))
             report['security_group_rules'] = rules
         if context.provider == 'aws':
             rules = context.cloud.inbound_rules('attack-box-sg-' + deployment_id)
@@ -449,8 +224,9 @@ class AttackBox:
 
 class Redirector:
     name = 'redirector'
-    repeat = {'aws': True, 'linode': True, 'azure': True}
-    source_paths = ('modules/redirectors', 'providers/{dir}/redirector.yml', 'common')
+    repeat = {'aws': True, 'linode': True}
+    source_paths = ('modules/redirectors', 'common')
+    legacy_paths = ('providers/{dir}/redirector.yml',)
 
     def config(self, provider, deployment_id, operator_ip):
         config = {
@@ -463,7 +239,7 @@ class Redirector:
             'deployment_type': 'c2_redirector', 'redirector_only': True,
             'c2_only': False,
         }
-        config.update(provider_config(provider))
+        config.update(live_config(provider, self.name))
         ready, _ = prepare_module_ssh_key(config, deployment_id)
         require(ready, 'Could not generate the module SSH key')
         return config
@@ -478,15 +254,15 @@ class Redirector:
         deployment_id = config['deployment_id']
         if provider == 'aws':
             return 'r-' + deployment_id, 'ubuntu', SSH_DIR / ('c2deploy_' + deployment_id + '.pem')
-        if provider == 'azure':
-            return 'r-' + deployment_id, 'azureuser', SSH_DIR / ('c2deploy_' + deployment_id)
-        return 'r-' + deployment_id, 'root', SSH_DIR / ('c2deploy_' + deployment_id)
+        if provider == 'linode':
+            return 'r-' + deployment_id, 'root', SSH_DIR / ('c2deploy_' + deployment_id)
+        return driver_target(provider, 'r-' + deployment_id, deployment_id)
 
     def local_artifacts(self, provider, config):
         deployment_id = config['deployment_id']
-        return key_files('c2deploy_' + deployment_id) + azure_artifacts(deployment_id) + [
+        return key_files('c2deploy_' + deployment_id) + shared_artifacts(deployment_id) + [
             ROOT / ('infrastructure_state_' + deployment_id + '.json'),
-            ROOT / 'providers' / PROVIDER_DIRS[provider] / ('infrastructure_state_' + deployment_id + '.json')]
+            ROOT / 'providers' / PROVIDER_SPECS[provider].directory / ('infrastructure_state_' + deployment_id + '.json')]
 
     def verify(self, context, config):
         # The site answers only its own hostname; the catch-all vhost bounces every other Host.
@@ -509,11 +285,11 @@ class Redirector:
         unknown = context.run(base + [url])
         require(unknown == '301', 'Redirector answered an unknown Host instead of bouncing it: ' + unknown)
         report['unknown_host_bounced'] = True
-        if context.provider == 'azure':
+        if provider_driver(context.provider) is not None:
             rules = context.cloud.inbound_rules(config['deployment_id'])
             require(('tcp', '22', config['operator_ip'] + '/32') in rules and
                     all(source == '*' for proto, port, source in rules if port != '22'),
-                    'Azure redirector rules are not operator-SSH plus public web: ' + str(rules))
+                    provider_label(context.provider) + ' redirector rules are not operator-SSH plus public web: ' + str(rules))
             report['security_group_rules'] = rules
         if context.provider == 'aws':
             rules = context.cloud.inbound_rules('r-' + config['deployment_id'] + '-sg')
@@ -525,8 +301,9 @@ class Redirector:
 
 class C2:
     name = 'c2'
-    repeat = {'aws': False, 'linode': False, 'azure': True}
-    source_paths = ('modules/c2', 'providers/{dir}/c2.yml', 'common')
+    repeat = {'aws': False, 'linode': False}
+    source_paths = ('modules/c2', 'common')
+    legacy_paths = ('providers/{dir}/c2.yml',)
 
     def config(self, provider, deployment_id, operator_ip):
         config = {
@@ -540,13 +317,7 @@ class C2:
             'ssh_after_deploy': False, 'deployment_type': 'c2_only', 'c2_only': True,
             'gophish_admin_port': '2222',
         }
-        config.update(provider_config(provider))
-        # Havoc is compiled on the host; the vars.yaml defaults are sized for
-        # redirectors and starve the build. Match the playbook's own defaults.
-        if provider == 'aws':
-            config['aws_instance_type'] = 't3.medium'
-        elif provider == 'linode':
-            config['linode_instance_type'] = 'g6-standard-2'
+        config.update(live_config(provider, self.name))
         ready, _ = prepare_module_ssh_key(config, deployment_id)
         require(ready, 'Could not generate the module SSH key')
         return config
@@ -561,15 +332,15 @@ class C2:
         deployment_id = config['deployment_id']
         if provider == 'aws':
             return config['c2_name'], 'kali', SSH_DIR / ('c2deploy_' + deployment_id + '.pem')
-        if provider == 'azure':
-            return config['c2_name'], 'azureuser', SSH_DIR / ('c2deploy_' + deployment_id)
-        return config['c2_name'], 'root', SSH_DIR / ('c2deploy_' + deployment_id)
+        if provider == 'linode':
+            return config['c2_name'], 'root', SSH_DIR / ('c2deploy_' + deployment_id)
+        return driver_target(provider, config['c2_name'], deployment_id)
 
     def local_artifacts(self, provider, config):
         deployment_id = config['deployment_id']
-        return key_files('c2deploy_' + deployment_id) + azure_artifacts(deployment_id) + [
+        return key_files('c2deploy_' + deployment_id) + shared_artifacts(deployment_id) + [
             ROOT / ('infrastructure_state_' + deployment_id + '.json'),
-            ROOT / 'providers' / PROVIDER_DIRS[provider] / ('infrastructure_state_' + deployment_id + '.json')]
+            ROOT / 'providers' / PROVIDER_SPECS[provider].directory / ('infrastructure_state_' + deployment_id + '.json')]
 
     def verify(self, context, config):
         report = checks(context, [
@@ -593,8 +364,9 @@ class C2:
 
 class PayloadServer:
     name = 'payload_server'
-    repeat = {'aws': True, 'linode': True, 'azure': True}
-    source_paths = ('modules/payload-server', 'providers/{dir}/payload_server.yml')
+    repeat = {'aws': True, 'linode': True}
+    source_paths = ('modules/payload-server',)
+    legacy_paths = ('providers/{dir}/payload_server.yml',)
 
     def config(self, provider, deployment_id, operator_ip):
         config = {
@@ -609,7 +381,7 @@ class PayloadServer:
             'letsencrypt_email': 'admin@payload-lab.test', 'operator_ip': operator_ip,
             'ssh_after_deploy': False,
         }
-        config.update(provider_config(provider))
+        config.update(live_config(provider, self.name))
         ready, _ = prepare_module_ssh_key(config, deployment_id)
         require(ready, 'Could not generate the module SSH key')
         return config
@@ -622,12 +394,14 @@ class PayloadServer:
 
     def target(self, provider, config):
         deployment_id = config['deployment_id']
-        user = {'aws': 'ubuntu', 'azure': 'azureuser'}.get(provider, 'root')
-        return 'ps-' + deployment_id, user, SSH_DIR / ('c2deploy_' + deployment_id)
+        if provider in ('aws', 'linode'):
+            user = 'ubuntu' if provider == 'aws' else 'root'
+            return 'ps-' + deployment_id, user, SSH_DIR / ('c2deploy_' + deployment_id)
+        return driver_target(provider, 'ps-' + deployment_id, deployment_id)
 
     def local_artifacts(self, provider, config):
         deployment_id = config['deployment_id']
-        return key_files('c2deploy_' + deployment_id) + azure_artifacts(deployment_id)
+        return key_files('c2deploy_' + deployment_id) + shared_artifacts(deployment_id)
 
     def verify(self, context, config):
         report = checks(context, [
@@ -653,11 +427,11 @@ class PayloadServer:
         require(scanner == '000', 'Payload server answered a tool user agent: ' + scanner)
         report.update({'public_basic_auth': True, 'public_authorized': True,
                        'tool_user_agent_dropped': True})
-        if context.provider == 'azure':
+        if provider_driver(context.provider) is not None:
             rules = context.cloud.inbound_rules(config['deployment_id'])
             require(('tcp', '22', config['operator_ip'] + '/32') in rules and
                     all(source == '*' for proto, port, source in rules if port != '22'),
-                    'Azure payload server rules are not operator-SSH plus public web: ' + str(rules))
+                    provider_label(context.provider) + ' payload server rules are not operator-SSH plus public web: ' + str(rules))
             report['security_group_rules'] = rules
         if context.provider == 'aws':
             rules = context.cloud.inbound_rules('ps-' + config['deployment_id'] + '-sg')
@@ -671,9 +445,9 @@ class Phishing:
     """Basic phishing: an MTA front plus a GoPhish server, verified from the operator."""
     name = 'phishing'
     instances = 2
-    repeat = {'aws': False, 'linode': False, 'azure': True}
-    source_paths = ('modules/phishing', 'providers/{dir}/mta.yml', 'providers/{dir}/gophish.yml',
-                    'common')
+    repeat = {'aws': False, 'linode': False}
+    source_paths = ('modules/phishing', 'common')
+    legacy_paths = ('providers/{dir}/mta.yml', 'providers/{dir}/gophish.yml')
 
     def config(self, provider, deployment_id, operator_ip):
         domain = 'phish-lab.test'
@@ -694,7 +468,7 @@ class Phishing:
             'operator_ip': operator_ip, 'ssh_after_deploy': False, 'open_admin_panel': False,
             'use_lander': False,
         }
-        config.update(provider_config(provider))
+        config.update(live_config(provider, self.name))
         # Both hosts share the module key.
         config.pop('provider_manages_ssh_key', None)
         ready, _ = prepare_module_ssh_key(config, deployment_id)
@@ -711,22 +485,23 @@ class Phishing:
         return {'deployment_id': deployment_id, 'names': names,
                 'key_names': ['c2deploy_' + deployment_id],
                 'sg_names': [name + '-sg' for name in names],
-                'azure_groups': ['c2itall-' + deployment_id + '-' + part for part in ('mta', 'gophish')],
-                'azure_names': {'mta-' + deployment_id: 'c2itall-' + deployment_id + '-mta-vm',
-                                'gophish-' + deployment_id: 'c2itall-' + deployment_id + '-gophish-vm'}}
+                # Driver-backed providers deploy one record per component.
+                'components': {'mta-' + deployment_id: deployment_id + '-mta',
+                               'gophish-' + deployment_id: deployment_id + '-gophish'}}
 
     def target(self, provider, config):
         deployment_id = config['deployment_id']
         if provider == 'aws':
             # The AWS component plays rename the module key to .pem.
             return 'mta-' + deployment_id, 'ubuntu', SSH_DIR / ('c2deploy_' + deployment_id + '.pem')
-        user = 'azureuser' if provider == 'azure' else 'root'
-        return 'mta-' + deployment_id, user, SSH_DIR / ('c2deploy_' + deployment_id)
+        if provider == 'linode':
+            return 'mta-' + deployment_id, 'root', SSH_DIR / ('c2deploy_' + deployment_id)
+        return driver_target(provider, 'mta-' + deployment_id, deployment_id)
 
     def local_artifacts(self, provider, config):
         deployment_id = config['deployment_id']
         return key_files('c2deploy_' + deployment_id) + [
-            AZURE_STATE_DIR / (deployment_id + '-' + part + '.json') for part in ('mta', 'gophish')]
+            path for part in ('mta', 'gophish') for path in driver_artifacts(deployment_id + '-' + part)]
 
     def verify(self, context, config):
         domain = config['domain']
@@ -766,14 +541,14 @@ class Phishing:
         report['gophish'].update({'admin_login_page': True, 'phish_listener_status': landing,
                                   'address': gophish_address})
         operator = config['operator_ip'] + '/32'
-        if context.provider == 'azure':
+        if provider_driver(context.provider) is not None:
             mta_rules = context.cloud.inbound_rules(deployment_id + '-mta')
             gophish_rules = context.cloud.inbound_rules(deployment_id + '-gophish')
             require(mta_rules == sorted([('tcp', '22', operator), ('tcp', '25', '*'), ('tcp', '587', '*')]),
-                    'Azure MTA front rules are not operator SSH plus mail: ' + str(mta_rules))
+                    provider_label(context.provider) + ' MTA front rules are not operator SSH plus mail: ' + str(mta_rules))
             require(gophish_rules == sorted([('tcp', '22', operator), ('tcp', admin_port, operator),
                                              ('tcp', '80', '*')]),
-                    'Azure GoPhish rules are not operator SSH/admin plus public phish: ' + str(gophish_rules))
+                    provider_label(context.provider) + ' GoPhish rules are not operator SSH/admin plus public phish: ' + str(gophish_rules))
             report['security_group_rules'] = {'mta': mta_rules, 'gophish': gophish_rules}
         if context.provider == 'aws':
             report['security_group_rules'] = {}
@@ -806,8 +581,8 @@ class Webrunner:
             'chunk_size': 500000, 'operator_ip': operator_ip, 'enhanced_opsec': False,
             'teardown_after_scan': not keep_nodes,
         }
-        config.update(provider_config(provider))
-        # Every provider's scan nodes share the module key, so Azure must not own one.
+        config.update(live_config(provider, self.name))
+        # Every provider's scan nodes share the module key, so a driver must not own one.
         config.pop('provider_manages_ssh_key', None)
         ready, private = prepare_module_ssh_key(config, name)
         require(ready and private, 'Could not generate the module SSH key')
@@ -825,19 +600,22 @@ class Webrunner:
 
     def identity(self, provider, deployment_id):
         name = 'wr-' + deployment_id
-        if provider == 'azure':
+        if provider_driver(provider) is not None:
+            # Generic node adapters derive one state record per node.
             return {'deployment_id': deployment_id + '-n01', 'names': [name + '-01']}
         return {'deployment_id': deployment_id, 'names': [name + '-01'],
                 'key_names': [name], 'sg_names': ['webrunner-' + name]}
 
     def target(self, provider, config):
-        user = {'aws': 'admin', 'azure': 'azureuser'}.get(provider, 'root')
-        return config['webrunner_name'] + '-01', user, SSH_DIR / ('c2deploy_' + config['webrunner_name'])
+        node = config['webrunner_name'] + '-01'
+        if provider in ('aws', 'linode'):
+            user = 'admin' if provider == 'aws' else 'root'
+            return node, user, SSH_DIR / ('c2deploy_' + config['webrunner_name'])
+        return driver_target(provider, node, config['webrunner_name'])
 
     def local_artifacts(self, provider, config):
         deployment_id = config['deployment_id']
-        return (key_files('c2deploy_wr-' + deployment_id) +
-                [AZURE_STATE_DIR / (deployment_id + '-n01.json')])
+        return key_files('c2deploy_wr-' + deployment_id) + driver_artifacts(deployment_id + '-n01')
 
     def verify(self, runner, cloud, provider, config, identity, keep_nodes):
         node, user, key = self.target(provider, config)
@@ -863,10 +641,10 @@ class Webrunner:
                 ('scanner_present', 'sudo -n test -s /root/webrunner/node_scanner.py'),
                 ('results_present', 'sudo -n test -s /root/webrunner/results.json'),
             ])
-            if provider == 'azure':
+            if provider_driver(provider) is not None:
                 rules = cloud.inbound_rules(identity['deployment_id'])
                 require(rules == [('tcp', '22', config['operator_ip'] + '/32')],
-                        'Azure scan node allows more than operator SSH: ' + str(rules))
+                        provider_label(provider) + ' scan node allows more than operator SSH: ' + str(rules))
                 report['security_group_rules'] = rules
             if provider == 'aws':
                 rules = cloud.inbound_rules('webrunner-' + config['webrunner_name'])
@@ -920,20 +698,19 @@ class Context:
 
 
 def verify_committed_source(runner, provider, workload):
+    directory = PROVIDER_SPECS[provider].directory
     paths = ['utils', 'teardown.py', 'scripts/test_provider_workload_live.py',
-             'providers/{0}/cleanup.yml'.format(PROVIDER_DIRS[provider])]
-    paths += [path.format(dir=PROVIDER_DIRS[provider]) for path in workload.source_paths]
+             'scripts/live_clouds.py']
+    paths += [path.format(dir=directory) for path in workload.source_paths]
+    if provider_driver(provider) is None:
+        paths.append('providers/{0}/cleanup.yml'.format(directory))
+        paths += [path.format(dir=directory) for path in getattr(workload, 'legacy_paths', ())]
+    else:
+        # A driver provider's whole directory is its infrastructure contract.
+        paths.append('providers/' + directory)
     for path in paths:
         runner.run(['git', 'diff', '--quiet', 'HEAD', '--', path])
     return runner.run(['git', 'rev-parse', 'HEAD'])
-
-
-def build_cloud(provider, evidence):
-    if provider == 'aws':
-        return AwsCloud(REGIONS['aws'])
-    if provider == 'azure':
-        return AzureCloud(evidence)
-    return LinodeCloud(os.environ['LINODE_TOKEN'])
 
 
 def empty(inventory):
@@ -997,7 +774,8 @@ def activate(provider, workload_name, operator_ip=None, repeat=None):
         service = workload.verify(context, config)
         runner.record('first-deployment.json', {'cloud': first, 'address': address, 'service': service})
 
-        do_repeat = workload.repeat[provider] if repeat is None else repeat
+        # Driver-backed adapters are idempotent by contract; legacy plays vary.
+        do_repeat = workload.repeat.get(provider, True) if repeat is None else repeat
         if do_repeat:
             require(deploy(config), 'Repeated routed deployment failed')
             repeated = cloud.inventory(identity)
@@ -1145,8 +923,8 @@ def activate_webrunner(provider, operator_ip=None):
         for label, config, identity in pending:
             try:
                 workload.collect(runner, config, label)
-                node_state = AZURE_STATE_DIR / (config['deployment_id'] + '-n01.json')
-                if node_state.exists() and not (
+                node_state = driver_artifacts(config['deployment_id'] + '-n01')
+                if any(path.exists() for path in node_state) and not (
                         ROOT / 'logs' / ('deployment_info_' + config['deployment_id'] + '.txt')).exists():
                     # Provisioning failed before the playbook recorded the run.
                     runner.run([sys.executable, 'teardown.py', '--deployment-id',
@@ -1171,7 +949,7 @@ def activate_webrunner(provider, operator_ip=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--provider', choices=sorted(REGIONS), required=True)
+    parser.add_argument('--provider', choices=sorted(CLOUDS), required=True)
     parser.add_argument('--workload', choices=sorted(WORKLOADS) + ['webrunner'], required=True)
     parser.add_argument('--activate', action='store_true')
     parser.add_argument('--operator-ip')

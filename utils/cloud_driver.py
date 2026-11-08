@@ -96,6 +96,10 @@ class CloudDriver:
     def infrastructure_playbook(self, config):
         return None
 
+    def local_artifacts(self, deployment_id, config=None):
+        """Local files kept for one deployment ID (durable state, caches)."""
+        return []
+
     # --- controller plumbing ----------------------------------------------
     def log_dir(self, config):
         """Directory for service playbook logs of this provider's deployments."""
