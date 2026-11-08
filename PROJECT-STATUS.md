@@ -6,7 +6,7 @@
 ---
 
 ## 🎯 Current Focus
-**Goal:** Live re-validation of every Azure route through the driver-backed adapters, then push
+**Goal:** Push the validated modular refactor; keep the extension contracts green as providers and modules are added
 **Last Updated:** 2026-11-08
 
 ---
@@ -24,8 +24,8 @@
 ---
 
 ### 📍 Where I Left Off
-- Working on: the modular provider/workload refactor landed (profiles in `modules/<module>/workload.py`, `CloudDriver` contract, generic adapters, Azure as one driver). Unit suite green (170 tests). No live cloud run since the refactor.
-- Next Priority: `scripts/test_provider_workload_live.py --provider azure --workload <w> --activate` for each workload and `scripts/test_azure_phantom_live.py --activate`; then push `public`.
+- Working on: the modular provider/workload refactor landed (profiles in `modules/<module>/workload.py`, `CloudDriver` contract, generic adapters, Azure as one driver). Unit suite green (170 tests). Every Azure route passed the live harness on 2026-11-08 at commit 64ffb2e: redirector, attack box, payload server, C2, phishing, WEBRUNNER, Phantom. Evidence under `logs/azure-*-live/`.
+- Next Priority: push `public`; live re-run of the AWS and Linode transition routes only if their plays change.
 - Blockers: none
 
 ---
