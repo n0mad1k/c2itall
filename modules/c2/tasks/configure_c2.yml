@@ -339,7 +339,7 @@
               User {{ ssh_user | default('root') }}
               IdentityFile /root/.ssh/redirector_key
               StrictHostKeyChecking no
-  when: not redirector_only | bool and redirector_ip is defined
+  when: not (redirector_only | default(false) | bool) and redirector_ip is defined
 
 # Include integrated tracker tasks if requested
 - name: Include integrated tracker setup
