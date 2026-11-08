@@ -34,7 +34,7 @@
 - **OPSEC Built-In**: Tor, VPN tunneling, log cleaning, the works
 
 ### **C2 Infrastructure That Actually Works**
-- **Framework Support**: Havoc, Cobalt Strike, Sliver, Mythic - pick your poison
+- **Framework Support**: Havoc today; the framework catalog lives in one profile, so adding another is a task file and a catalog entry
 - **Proper Architecture**: C2 + Redirector + Domain fronting, configured correctly
 - **SSL Automation**: Let's Encrypt certs, no more self-signed cert warnings
 - **Zero-Logs Mode**: Automatic log cleaning for when you need to stay invisible
@@ -51,9 +51,9 @@
 ## 💼 **What's Working Now vs What's Coming**
 
 ### **✅ Ready for Operations**
-- **Multi-Cloud Deployment**: AWS, Linode, FlokiNET - pick based on target geography
+- **Multi-Cloud Deployment**: Azure, AWS, Linode, FlokiNET - pick based on target geography
 - **Automated Attack Boxes**: Kali/Ubuntu boxes deployed and configured in ~5 minutes
-- **C2 Deployment**: Havoc/Sliver/CS infrastructure with proper redirectors
+- **C2 Deployment**: Havoc infrastructure with proper redirectors
 - **SSH Key Management**: No more sharing keys or password auth
 - **One-Command Teardown**: Nuke everything when the engagement ends
 
@@ -120,7 +120,7 @@
 ### **What Makes This Different**
 - **Built by Red Teamers, for Red Teamers**: Not some generic DevOps tool
 - **OPSEC by Default**: Security and stealth considerations built into everything
-- **Multi-Cloud Native**: Never locked into one provider's pricing/availability
+- **Multi-Cloud Native**: Never locked into one provider's pricing/availability; a new provider is one driver file (see `docs/EXTENDING.md`)
 - **Production Ready**: Already being used in real engagements
 
 ### **The Real Value Proposition**

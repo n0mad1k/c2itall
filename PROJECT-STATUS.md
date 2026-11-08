@@ -1,13 +1,13 @@
 # C2ingRed Project Management
 
 ## Project Overview
-**C2ingRed** - Automated red team infrastructure deployment system supporting AWS, Linode, and FlokiNET with Havoc C2, redirectors, email infrastructure, and advanced OPSEC features.
+**c2itall** - Automated red team infrastructure deployment system supporting Azure (native driver), AWS, Linode and FlokiNET (transition plays) with Havoc C2, redirectors, email infrastructure, payload hosting, WEBRUNNER recon nodes, Phantom privacy services and advanced OPSEC features. Architecture: `docs/ARCHITECTURE.md`. Adding providers, workloads or variants: `docs/EXTENDING.md`.
 
 ---
 
 ## 🎯 Current Focus
-**Goal:** Stabilize core deployment functionality and test it
-**Last Updated:** 05-30-2025
+**Goal:** Live re-validation of every Azure route through the driver-backed adapters, then push
+**Last Updated:** 2026-11-08
 
 ---
 
@@ -24,9 +24,9 @@
 ---
 
 ### 📍 Where I Left Off
-- Working on: Need to fix issue with AWS deployment security hardening playbook | Need to restructure I want each module in its own dir with its own tasks, templates, files and I want to move Provider playbooks into a Provider dir. I also want to break apart deploy.py and take each part for a module and make its own script that can be ran independently of the deploy script to just deploy the that module if need be
-- Next Priority: Test core deployment
-- Blockers: Sleep
+- Working on: the modular provider/workload refactor landed (profiles in `modules/<module>/workload.py`, `CloudDriver` contract, generic adapters, Azure as one driver). Unit suite green (170 tests). No live cloud run since the refactor.
+- Next Priority: `scripts/test_provider_workload_live.py --provider azure --workload <w> --activate` for each workload and `scripts/test_azure_phantom_live.py --activate`; then push `public`.
+- Blockers: none
 
 ---
 
@@ -204,13 +204,12 @@
 **Description:** User guides, API docs, and ease of use
 
 #### Tasks:
-- [x] ✅ Basic README
+- [x] ✅ README (usage, providers, verification, layout)
 - [x] ✅ Post-install instructions
-- [ ] 🔄 Comprehensive user guide
-- [ ] 📝 Troubleshooting guide
+- [x] ✅ Architecture documentation (`docs/ARCHITECTURE.md`)
+- [x] ✅ Extension guide with validation-error reference (`docs/EXTENDING.md`)
 - [ ] 📝 Advanced configuration docs
 - [ ] 📝 Video tutorials/demos
-- [ ] 📝 Architecture documentation
 
 **Notes:** Documentation is sparse. Need comprehensive guides.
 
@@ -315,6 +314,7 @@
 1. AWS EC2 deployment with VPC creation
 2. Linode infrastructure deployment
 3. FlokiNET pre-provisioned server configuration
+3a. Azure deployment through a cloud driver (resource group, NSG, static IP, VM, durable state, verified cleanup)
 4. Cross-provider deployment (redirector on one, C2 on another)
 5. Multi-region deployment within same provider
 6. Split-region deployment (C2 and redirector in different regions)
