@@ -8,7 +8,7 @@ C2ingRed enables rapid deployment of complete Command and Control (C2) infrastru
 
 ## Features
 
-- **Multi-provider Support**: AWS, Linode, FlokiNET, and registered Azure workloads
+- **Multi-provider Support**: Azure through a cloud driver that serves every workload; AWS, Linode and FlokiNET through their transition plays. Adding a provider or a workload is a localized change; see `docs/EXTENDING.md`
 - **Infrastructure Components**:
   - C2 server with Havoc C2 Framework (dev branch)
   - HTTPS redirectors with security hardening
@@ -84,9 +84,8 @@ non-mutating harness with `python3 scripts/test_azure_attack_box_live.py`; run a
 real deploy/repeat/SSH verification/cleanup cycle by adding `--activate`.
 Kali and full attack-box subtypes are refused because the subscription has not
 accepted the Kali Marketplace image terms; they are not silently mapped to
-Ubuntu. Azure C2, redirector, phishing, payload-server and WEBRUNNER handlers
-are registered only as staged, disabled preparation and therefore are not
-advertised as Azure capabilities or reachable through deployment dispatch.
+Ubuntu. Azure also serves C2, redirector, phishing, payload-server, WEBRUNNER,
+Phantom and chat through the same driver; see the architecture section below.
 
 For unattended use, run
 `python3 scripts/setup_azure_automation.py --activate` once. It creates the
@@ -158,108 +157,69 @@ state through its adapter. The same read-only check is available as
 or unavailable check returns failure. An empty result means no tracked adapter
 deployments, not that every cloud resource or legacy workload was checked.
 
-### Provider routing and incremental migration
+### Provider and workload architecture
 
-All four providers enter the dispatcher in `utils/provider_registry.py`.
-The registry is the source of provider names, directories, SSH defaults,
-configuration loaders and new workload routes. Configuration loaders for AWS,
-Linode and FlokiNET delegate to the existing functions.
+Providers and workloads are independent layers joined by the registry in
+`utils/provider_registry.py`. `docs/EXTENDING.md` holds the step-by-step recipes.
 
-For deployment, playbook selection and cleanup, the dispatcher looks for a
-registered **provider + workload** handler first. If no handler exists, providers
-with explicit legacy support for that workload retain their existing route. A
-handler's failure or invalid registration never falls back to legacy execution.
-Existing selectors and menu defaults are preserved; registering one workload
-does not replace the provider's other workloads or advertise unsupported
-capabilities. Workloads with provider-specific subtypes declare those variants
-in the same registry, so configuration stops before provisioning when a provider
-does not implement the requested subtype. Historical unrecognized workload names
-still retain the broad legacy path. FlokiNET is not offered for Attack Box
-because it has no matching legacy playbook.
+- A **workload profile** in `modules/<module>/workload.py` states what the
+  workload needs from any VM provider: inbound rules, image role, disk size,
+  validation, variants, and which configuration keys its provider-neutral
+  service play in `modules/<module>/service.yml` receives.
+- A **cloud driver** (`utils/cloud_driver.py`) is the whole provider contract:
+  plan a VM for a request, create it, report its address, keep durable state,
+  prove it is gone. `utils/azure_cloud.py` is the Azure driver; it never names
+  a workload.
+- **Generic adapters** in `utils/vm_workloads.py` bind any driver to any
+  profile for the single-VM, multi-component, scan-node and handoff shapes,
+  with the recoverable lifecycle (state before creation, verified cleanup on
+  failure, idempotent repeat) shared by all of them.
+- A driver-backed provider's capabilities are derived from the profiles that
+  exist, so it automatically serves `infrastructure`, attack box, C2,
+  redirector, phishing, payload server, WEBRUNNER, Phantom and chat. Explicit
+  routes that would shadow a driver workload are rejected by validation.
+- AWS, Linode and FlokiNET keep their existing plays behind explicit
+  transition routes. Modules use the registered route whenever one exists and
+  fall back to legacy execution only where a provider explicitly retains it.
+  FlokiNET is not offered for Attack Box because it has no matching play.
+- Menus, the WEBRUNNER provider picker and region pools, the connectivity test,
+  configuration validation, health checks, standalone teardown and the live
+  harness ask the registry about providers instead of naming them. The C2
+  menus list the frameworks the C2 profile declares; the attack-box module
+  names only the subtype and each provider maps it to an image.
 
-Attack-box, C2, redirector, phishing and payload-server menus now request their
-canonical workload through this dispatcher. They offer registered handlers plus
-providers that explicitly retain legacy support, gather configuration from a new
-handler when present, and otherwise call the existing provider loader. Subtype
-names such as `gophish_only` remain deployment details and no longer obscure the
-canonical provider workload. Phishing and payload-server execution also enters
-the dispatcher before their unchanged legacy executors.
-
-`ProviderSpec.staged_routes` holds fail-closed preparation for a future provider
-route. A staged adapter may gather provider configuration and reuse the
-ownership-validated cleanup boundary, but it is excluded from menus and active
-dispatch and its deployment method must remain disabled. Azure uses this state
-for C2, redirector, phishing, payload-server and WEBRUNNER. Activating one still
-requires a reviewed service playbook, least-privilege network contract, remote
-health verification and live repeat/teardown evidence; moving metadata alone is
-not sufficient.
-
-The neutral infrastructure module uses the adapter contract rather than Azure
-imports. An adapter supplies configuration, validation, key preparation, playbook
-selection, deployment, cleanup and durable-state discovery. New handlers are
-registered in `ProviderSpec.routes`; adding a provider or workload does not
-require adding another provider switch to that module. Azure implements the
-infrastructure and quick-recon attack-box handlers today. AWS, Linode and
-FlokiNET retain only their registered or explicitly declared legacy workload
-implementations; they have not been silently rewritten or live-tested by this
-change. WEBRUNNER now uses a composite
-dispatcher: an all-legacy provider selection runs its existing playbook once, and
-a compatible all-new selection uses its registered handler. Mixed new/legacy or
-incompatible handler selections stop before provisioning because splitting one
-scan lifecycle would make results and cleanup ambiguous.
-
-The one-node Linode WEBRUNNER lifecycle harness is preview-only unless explicitly
-activated. Activation requires the operator's public IPv4, checks credentials
-before generating local inputs, refuses a deployment identity that already owns
-resources, and independently inventories and deletes test-owned Linodes and
-profile SSH keys before it can report success:
-
-```bash
-python3 smoke_test_webrunner.py
-python3 smoke_test_webrunner.py --activate --operator-ip YOUR_PUBLIC_IPV4
-```
-
-The read-only coverage audit derives its result from the same registry used for
-dispatch. It distinguishes native handlers, explicit transition handlers, legacy
-fallbacks, staged disabled handlers, partial subtype coverage and unsupported
-combinations. Requiring Azure currently exits nonzero and lists the staged
-service routes and Attack Box variants that remain unimplemented:
+The read-only coverage audit derives its result from the same registry used
+for dispatch and distinguishes native, transition, legacy-fallback, staged,
+partial-variant and unsupported combinations:
 
 ```bash
 python3 scripts/audit_provider_coverage.py --require-provider azure
 ```
 
-Phantom uses the same provider/workload dispatcher when c2itall launches it.
-Its legacy AWS, Linode and FlokiNET routes remain unchanged, while the registered
-Azure route provisions the VM through the recoverable Azure infrastructure
-adapter and then runs Phantom's existing hardening and service playbooks. Azure
-network rules are derived from the selected privacy service; SSH remains limited
-to the operator /32. The real-cloud validation command below deploys WireGuard,
-repeats the complete deployment against the same owned resources, verifies the
-running service and client configuration over SSH, verifies Azure VM and NSG
-state, tears down through Phantom, and requires the subscription inventory to
-return to its baseline:
+Live verification of one provider/workload pair runs through
+`scripts/test_provider_workload_live.py`; the per-provider inventory clients and
+account inputs it uses live in `scripts/live_clouds.py`. The one-node Linode
+WEBRUNNER harness `smoke_test_webrunner.py` remains preview-only unless
+explicitly activated with the operator's public IPv4.
 
-```bash
-python3 scripts/test_azure_phantom_live.py --activate
-```
+Phantom enters through the same dispatcher when c2itall launches it. Its AWS,
+Linode and FlokiNET routes are unchanged, while a driver-backed provider
+provisions the VM with rules derived from the selected privacy service (SSH
+limited to the operator /32) and hands it to Phantom's existing hardening and
+service playbooks. `python3 scripts/test_azure_phantom_live.py --activate`
+deploys WireGuard on Azure, repeats against the same resources, verifies the
+service and VM/NSG state over SSH and the CLI, tears down through Phantom and
+requires the subscription inventory to return to its baseline. Evidence lands
+under `logs/azure-phantom-live/`.
 
-The live test uses the authenticated Azure CLI subscription
-`cc2a66d1-67c2-47ca-856f-19a4eae52cfe`, East US and `Standard_D2as_v4`. Its
-default mode is a non-mutating description; `--activate` is required to create
-the temporary VM. Evidence is retained under `logs/azure-phantom-live/`; the
-temporary resource group, generated SSH key and Phantom working files are removed.
-Provider registrations remain enabled after the test.
-
-The formerly missing **Deploy Chat Server** entry now keeps its distinct purpose:
-it reuses Phantom's Matrix + Element core, then adds Tailscale private networking
-and optional `matrix-nio` bot runtime/systemd scaffolding. It enters through the
-canonical `chat` provider route. Azure uses the registered recoverable adapter;
-AWS, Linode and FlokiNET retain Phantom's existing provider lifecycle as the
-legacy fallback. A blank Tailscale key installs and starts `tailscaled` for later
-manual authentication; a supplied key is handled with Ansible output suppression.
-Deployment summaries redact passwords, auth keys and generated Matrix secrets;
-owner-only deployment information remains available for recovery.
+**Deploy Chat Server** reuses Phantom's Matrix + Element core, then adds
+Tailscale private networking and optional `matrix-nio` bot runtime/systemd
+scaffolding. It enters through the canonical `chat` workload; the chat profile
+reuses the Phantom profile's rules and disk sizing. A blank Tailscale key
+installs and starts `tailscaled` for later manual authentication; a supplied key
+is handled with Ansible output suppression. Deployment summaries redact
+passwords, auth keys and generated Matrix secrets; owner-only deployment
+information remains available for recovery.
 
 ### Main Menu (Easiest Method)
 
