@@ -88,8 +88,15 @@ Ubuntu. Azure C2, redirector, phishing, payload-server and WEBRUNNER handlers
 are registered only as staged, disabled preparation and therefore are not
 advertised as Azure capabilities or reachable through deployment dispatch.
 
-Use an authenticated Azure CLI session (`az login`) and supply the subscription,
-region, VM size and SSH public key explicitly. No Azure SDK package is required;
+For unattended use, run
+`python3 scripts/setup_azure_automation.py --activate` once. It creates the
+`c2itall-automation` service principal with Contributor access to the dedicated
+subscription, stores its client ID, private certificate, tenant and subscription
+in Infisical folder `homelab`, and verifies a certificate-based login. Azure routes
+prefer an existing valid CLI session and automatically recover an expired or
+missing session from those Infisical values. Interactive `az login` remains a
+fallback when the automation identity has not been configured. Supply the region,
+VM size and SSH public key explicitly. No Azure SDK package is required;
 the localhost Ansible playbooks use the installed Azure CLI. Register
 `Microsoft.Compute` and `Microsoft.Network` and check regional quota, policy,
 image and SKU availability before deploying. See

@@ -29,6 +29,19 @@ spec = importlib.util.spec_from_file_location("azure_smoke", ROOT / "scripts/dep
 smoke = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(smoke)
 
+setup_spec = importlib.util.spec_from_file_location(
+    "azure_automation_setup", ROOT / "scripts/setup_azure_automation.py")
+azure_setup = importlib.util.module_from_spec(setup_spec)
+setup_spec.loader.exec_module(azure_setup)
+
+AUTOMATION_CERTIFICATE = """-----BEGIN PRIVATE KEY-----
+unit-test-private-key
+-----END PRIVATE KEY-----
+-----BEGIN CERTIFICATE-----
+unit-test-certificate
+-----END CERTIFICATE-----
+"""
+
 
 class AzureFixture(unittest.TestCase):
     def setUp(self):
@@ -37,6 +50,9 @@ class AzureFixture(unittest.TestCase):
         self.home = Path(self.temporary.name)
         self.addCleanup(mock.patch.stopall)
         mock.patch.dict(os.environ, {"HOME": str(self.home)}).start()
+        azure._AUTH_VALID_UNTIL.clear()
+        azure._clear_azure_auth_certificate()
+        self.addCleanup(azure._clear_azure_auth_certificate)
         self.state_dir = self.home / "states"
         mock.patch.object(azure, "STATE_DIR", self.state_dir).start()
         self.key = self.home / ".ssh" / "c2deploy_test-azure"
@@ -118,6 +134,133 @@ class ConfigurationTests(AzureFixture):
         with mock.patch.object(azure, "run_command", return_value=subprocess.CompletedProcess([], 0, "not JSON", "")):
             with self.assertRaises(json.JSONDecodeError):
                 azure.run_az(["account", "show"], smoke.SUBSCRIPTION)
+
+    def test_automation_credentials_accept_complete_environment_only(self):
+        values = {
+            "AZURE_CLIENT_ID": "11111111-1111-1111-1111-111111111111",
+            "AZURE_CLIENT_CERTIFICATE": AUTOMATION_CERTIFICATE,
+            "AZURE_TENANT_ID": "22222222-2222-2222-2222-222222222222",
+            "AZURE_SUBSCRIPTION_ID": smoke.SUBSCRIPTION,
+        }
+        with mock.patch.dict(os.environ, values, clear=True):
+            self.assertEqual(
+                azure.azure_automation_credentials(smoke.SUBSCRIPTION), values)
+        with mock.patch.dict(os.environ, {"AZURE_CLIENT_ID": values["AZURE_CLIENT_ID"]}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "incomplete"):
+                azure.azure_automation_credentials(smoke.SUBSCRIPTION)
+
+    def test_automation_credentials_accept_rsa_private_key_pem(self):
+        values = {
+            "AZURE_CLIENT_ID": "11111111-1111-1111-1111-111111111111",
+            "AZURE_CLIENT_CERTIFICATE": AUTOMATION_CERTIFICATE.replace(
+                "BEGIN PRIVATE KEY", "BEGIN RSA PRIVATE KEY").replace(
+                "END PRIVATE KEY", "END RSA PRIVATE KEY"),
+            "AZURE_TENANT_ID": "22222222-2222-2222-2222-222222222222",
+            "AZURE_SUBSCRIPTION_ID": smoke.SUBSCRIPTION,
+        }
+        with mock.patch.dict(os.environ, values, clear=True):
+            self.assertEqual(
+                azure.azure_automation_credentials(smoke.SUBSCRIPTION), values)
+
+    def test_automation_credentials_load_infisical_without_exposing_values(self):
+        values = {
+            "AZURE_CLIENT_ID": "11111111-1111-1111-1111-111111111111",
+            "AZURE_CLIENT_CERTIFICATE": AUTOMATION_CERTIFICATE,
+            "AZURE_TENANT_ID": "22222222-2222-2222-2222-222222222222",
+            "AZURE_SUBSCRIPTION_ID": smoke.SUBSCRIPTION,
+        }
+        def fetch(argv, **_kwargs):
+            return subprocess.CompletedProcess(argv, 0, values[argv[2]] + "\n", "")
+        expected = dict(values)
+        expected["AZURE_CLIENT_CERTIFICATE"] = AUTOMATION_CERTIFICATE.strip()
+        with mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch.object(azure.subprocess, "run", side_effect=fetch) as command:
+            self.assertEqual(
+                azure.azure_automation_credentials(smoke.SUBSCRIPTION), expected)
+        self.assertEqual(command.call_count, 4)
+        self.assertTrue(all(call.args[0][1] == "get" for call in command.call_args_list))
+        self.assertTrue(all(call.args[0][3] == "homelab" for call in command.call_args_list))
+
+    def test_ensure_azure_auth_materializes_certificate_only_during_login(self):
+        values = {
+            "AZURE_CLIENT_ID": "11111111-1111-1111-1111-111111111111",
+            "AZURE_CLIENT_CERTIFICATE": AUTOMATION_CERTIFICATE,
+            "AZURE_TENANT_ID": "22222222-2222-2222-2222-222222222222",
+            "AZURE_SUBSCRIPTION_ID": smoke.SUBSCRIPTION,
+        }
+        certificate_paths = []
+        def execute(argv, **_kwargs):
+            certificate = Path(argv[argv.index("--certificate") + 1])
+            certificate_paths.append(certificate)
+            self.assertEqual(certificate.read_text(), AUTOMATION_CERTIFICATE)
+            self.assertEqual(certificate.stat().st_mode & 0o777, 0o600)
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        with mock.patch.object(azure, "azure_automation_credentials", return_value=values), \
+                mock.patch.object(azure, "run_command", side_effect=execute):
+            self.assertEqual(
+                azure.ensure_azure_auth(smoke.SUBSCRIPTION, force=True), smoke.SUBSCRIPTION)
+        self.assertEqual(len(certificate_paths), 1)
+        self.assertTrue(certificate_paths[0].exists())
+        azure._clear_azure_auth_certificate()
+        self.assertFalse(certificate_paths[0].exists())
+
+    def test_run_az_reauthenticates_once_only_for_authentication_failure(self):
+        success = subprocess.CompletedProcess([], 0, '{"ok": true}', "")
+        with mock.patch.object(
+                azure, "run_command",
+                side_effect=[RuntimeError("Please run 'az login'"), success]) as command, \
+                mock.patch.object(azure, "ensure_azure_auth") as authenticate:
+            self.assertEqual(azure.run_az(["group", "list"], smoke.SUBSCRIPTION), {"ok": True})
+        authenticate.assert_called_once_with(smoke.SUBSCRIPTION, force=True)
+        self.assertEqual(command.call_count, 2)
+        with mock.patch.object(azure, "run_command", side_effect=RuntimeError("resource missing")), \
+                mock.patch.object(azure, "ensure_azure_auth") as authenticate:
+            with self.assertRaisesRegex(RuntimeError, "resource missing"):
+                azure.run_az(["group", "show"], smoke.SUBSCRIPTION)
+        authenticate.assert_not_called()
+
+    def test_connection_reauthenticates_and_checks_arm(self):
+        account = {"id": smoke.SUBSCRIPTION, "state": "Enabled"}
+        with mock.patch.object(
+                azure, "run_command",
+                side_effect=[RuntimeError("Please run 'az login'"),
+                             subprocess.CompletedProcess([], 0, json.dumps(account), "")]), \
+                mock.patch.object(
+                    azure, "ensure_azure_auth", return_value=smoke.SUBSCRIPTION) as authenticate, \
+                mock.patch.object(azure, "run_az", return_value=0):
+            self.assertEqual(azure.check_connection(), {
+                "subscription_id": smoke.SUBSCRIPTION, "resource_group_count": 0})
+        authenticate.assert_called_once_with(None, force=True)
+
+    def test_setup_script_certificate_creation_and_login_are_redacted(self):
+        def create(*args, **kwargs):
+            certificate = Path(kwargs["cwd"]) / "generated.pem"
+            certificate.write_text(AUTOMATION_CERTIFICATE)
+            return json.dumps({
+                "appId": "11111111-1111-1111-1111-111111111111",
+                "tenant": "22222222-2222-2222-2222-222222222222",
+                "fileWithCertAndPrivateKey": str(certificate),
+            })
+        with mock.patch.object(azure_setup, "az", side_effect=create):
+            credentials = azure_setup.create_service_principal(smoke.SUBSCRIPTION)
+        self.assertEqual(
+            credentials["AZURE_CLIENT_CERTIFICATE"], AUTOMATION_CERTIFICATE.strip())
+        certificate_paths = []
+        def login(*args, **_kwargs):
+            if args[0] == "login":
+                certificate = Path(args[args.index("--certificate") + 1])
+                certificate_paths.append(certificate)
+                self.assertEqual(certificate.read_text(), AUTOMATION_CERTIFICATE.strip())
+                return ""
+            if args[:2] == ("account", "show"):
+                return json.dumps({
+                    "id": smoke.SUBSCRIPTION, "state": "Enabled",
+                    "user": {"type": "servicePrincipal"},
+                })
+            return "0"
+        with mock.patch.object(azure_setup, "az", side_effect=login):
+            self.assertEqual(azure_setup.login_and_verify(credentials), 0)
+        self.assertFalse(certificate_paths[0].exists())
 
 
 class StateAndCleanupTests(AzureFixture):

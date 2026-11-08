@@ -27,6 +27,10 @@ import uuid
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from utils import azure_utils
+
 SUBSCRIPTION = "cc2a66d1-67c2-47ca-856f-19a4eae52cfe"
 LOCATION = "eastus"
 SIZE = "Standard_D2as_v4"
@@ -38,7 +42,7 @@ APPROVED_PATHS = (
     "providers/Azure/cleanup.yml", "providers/Azure/vars.example.yaml",
     "providers/Azure/templates/infrastructure.json.j2",
     "modules/infrastructure/deploy_infrastructure.py", "tests/test_azure_provider.py",
-    "scripts/deploy_azure_smoke.py",
+    "scripts/deploy_azure_smoke.py", "scripts/setup_azure_automation.py",
     "utils/provider_registry.py", "utils/azure_adapter.py",
     "teardown.py",
 )
@@ -89,7 +93,8 @@ def nonnegative_count(value, field):
 
 def child_environment():
     return {key: value for key, value in os.environ.items()
-            if not key.upper().startswith(("AWS_", "LINODE", "FLOKINET", "ANSIBLE_"))}
+            if not key.upper().startswith((
+                "AWS_", "LINODE", "FLOKINET", "ANSIBLE_", "AZURE_CLIENT_"))}
 
 
 def stop_process(process):
@@ -144,8 +149,15 @@ class Runner:
         return stdout.strip()
 
     def az(self, *argv):
-        result = self.run(["az", *argv, "--subscription", SUBSCRIPTION,
-                           "--only-show-errors", "--output", "json"])
+        command = ["az", *argv, "--subscription", SUBSCRIPTION,
+                   "--only-show-errors", "--output", "json"]
+        try:
+            result = self.run(command)
+        except SmokeError as exc:
+            if not azure_utils.authentication_error(exc):
+                raise
+            azure_utils.ensure_azure_auth(SUBSCRIPTION, force=True)
+            result = self.run(command)
         return json.loads(result) if result else None
 
     def git(self, *argv, timeout=60):

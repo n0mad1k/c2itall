@@ -13,6 +13,7 @@ import signal
 import subprocess
 import stat
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -30,6 +31,14 @@ UNSUPPORTED_FLAGS = frozenset({'c2_only', 'deploy_c2', 'c2_framework', 'attack_b
     'redirector_only', 'tracker_deployment', 'phishing_deployment', 'chat_deployment',
     'payload_deployment', 'payload_server_deployment', 'webrunner_deployment'})
 _LOCKS = threading.local()
+_AUTH_VALID_UNTIL = {}
+_AUTH_CERTIFICATE_DIRECTORY = None
+_AUTH_CERTIFICATE_PATH = None
+_AUTOMATION_KEYS = (
+    'AZURE_CLIENT_ID', 'AZURE_CLIENT_CERTIFICATE',
+    'AZURE_TENANT_ID', 'AZURE_SUBSCRIPTION_ID',
+)
+_AZURE_INFISICAL_FOLDER = 'homelab'
 
 
 def supports_infrastructure(config):
@@ -109,6 +118,121 @@ def azure_environment():
     return env
 
 
+def _credential_environment():
+    allowed = {'PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'LC_CTYPE',
+               'TMPDIR', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE',
+               'INFISICAL_URL', 'SYSTEMROOT'}
+    return {key: value for key, value in os.environ.items() if key in allowed}
+
+
+def _infisical_credential(key):
+    helper = Path.home() / '.local' / 'bin' / 'creds'
+    try:
+        result = subprocess.run(
+            [str(helper), 'get', key, _AZURE_INFISICAL_FOLDER],
+            env=_credential_environment(), stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, text=True, timeout=15, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError('Infisical Azure credential lookup failed') from exc
+    value = result.stdout.strip()
+    if result.returncode or not value:
+        raise RuntimeError(f'Infisical Azure credential is unavailable: {key}')
+    return value
+
+
+def azure_automation_credentials(subscription_id=None):
+    """Load one complete Azure automation credential without exposing it."""
+    from_environment = {key: os.environ.get(key, '') for key in _AUTOMATION_KEYS}
+    if any(from_environment.values()):
+        if not all(from_environment.values()):
+            raise RuntimeError('Azure automation environment is incomplete')
+        values = from_environment
+    else:
+        values = {key: _infisical_credential(key) for key in _AUTOMATION_KEYS}
+    try:
+        values['AZURE_CLIENT_ID'] = str(uuid.UUID(values['AZURE_CLIENT_ID']))
+        values['AZURE_TENANT_ID'] = str(uuid.UUID(values['AZURE_TENANT_ID']))
+        values['AZURE_SUBSCRIPTION_ID'] = str(uuid.UUID(values['AZURE_SUBSCRIPTION_ID']))
+    except ValueError as exc:
+        raise RuntimeError('Azure automation identity contains an invalid UUID') from exc
+    certificate = values['AZURE_CLIENT_CERTIFICATE']
+    if (not re.search(r'-----BEGIN [^-]*PRIVATE KEY-----', certificate)
+            or 'BEGIN CERTIFICATE' not in certificate):
+        raise RuntimeError('Azure automation certificate is invalid')
+    if subscription_id is not None:
+        requested = str(uuid.UUID(subscription_id))
+        if values['AZURE_SUBSCRIPTION_ID'] != requested:
+            raise RuntimeError('Infisical Azure subscription does not match the requested subscription')
+    return values
+
+
+def authentication_error(error):
+    detail = str(error).lower()
+    return any(marker in detail for marker in (
+        "please run 'az login'", 'az login', 'aadsts', 'authentication failed',
+        'credential', 'token has expired', 'no subscriptions found',
+        'service-principal.pem', 'filenotfounderror',
+    ))
+
+
+def _clear_azure_auth_certificate():
+    global _AUTH_CERTIFICATE_DIRECTORY, _AUTH_CERTIFICATE_PATH
+    if _AUTH_CERTIFICATE_DIRECTORY is not None:
+        _AUTH_CERTIFICATE_DIRECTORY.cleanup()
+    _AUTH_CERTIFICATE_DIRECTORY = None
+    _AUTH_CERTIFICATE_PATH = None
+
+
+def _materialize_azure_auth_certificate(certificate_text):
+    global _AUTH_CERTIFICATE_DIRECTORY, _AUTH_CERTIFICATE_PATH
+    if (_AUTH_CERTIFICATE_PATH is not None and _AUTH_CERTIFICATE_PATH.exists()
+            and _AUTH_CERTIFICATE_PATH.read_text() == certificate_text):
+        return _AUTH_CERTIFICATE_PATH
+    _clear_azure_auth_certificate()
+    _AUTH_CERTIFICATE_DIRECTORY = tempfile.TemporaryDirectory(
+        prefix='c2itall-azure-login-')
+    _AUTH_CERTIFICATE_PATH = (
+        Path(_AUTH_CERTIFICATE_DIRECTORY.name) / 'service-principal.pem')
+    _AUTH_CERTIFICATE_PATH.write_text(certificate_text)
+    _AUTH_CERTIFICATE_PATH.chmod(0o600)
+    return _AUTH_CERTIFICATE_PATH
+
+
+def ensure_azure_auth(subscription_id=None, force=False):
+    """Retain a valid CLI session, using Infisical service-principal auth as fallback."""
+    requested = str(uuid.UUID(subscription_id)) if subscription_id is not None else None
+    cache_key = requested or 'default'
+    now = time.monotonic()
+    if not force and _AUTH_VALID_UNTIL.get(cache_key, 0) > now:
+        return requested
+    if not force:
+        command = ['az', 'account', 'get-access-token', '--only-show-errors',
+                   '--output', 'none']
+        if requested:
+            command.extend(['--subscription', requested])
+        try:
+            run_command(command, timeout=30)
+            _AUTH_VALID_UNTIL[cache_key] = now + 300
+            return requested
+        except RuntimeError:
+            pass
+    credentials = azure_automation_credentials(requested)
+    certificate = _materialize_azure_auth_certificate(
+        credentials['AZURE_CLIENT_CERTIFICATE'])
+    run_command([
+        'az', 'login', '--service-principal',
+        '--username', credentials['AZURE_CLIENT_ID'],
+        '--tenant', credentials['AZURE_TENANT_ID'],
+        '--subscription', credentials['AZURE_SUBSCRIPTION_ID'],
+        '--skip-subscription-discovery', '--certificate', str(certificate),
+        '--only-show-errors', '--output', 'none',
+    ], timeout=60)
+    _AUTH_VALID_UNTIL[credentials['AZURE_SUBSCRIPTION_ID']] = time.monotonic() + 300
+    _AUTH_VALID_UNTIL['default'] = time.monotonic() + 300
+    return credentials['AZURE_SUBSCRIPTION_ID']
+
+
 @contextlib.contextmanager
 def interruption_handlers():
     """Make both interactive interrupts and termination stop child groups."""
@@ -155,8 +279,15 @@ def run_command(argv, timeout=60, deadline=None):
 
 
 def run_az(args, subscription_id, deadline=None):
-    result = run_command(['az', *args, '--subscription', subscription_id,
-                          '--only-show-errors', '--output', 'json'], deadline=deadline)
+    command = ['az', *args, '--subscription', subscription_id,
+               '--only-show-errors', '--output', 'json']
+    try:
+        result = run_command(command, deadline=deadline)
+    except RuntimeError as exc:
+        if not authentication_error(exc):
+            raise
+        ensure_azure_auth(subscription_id, force=True)
+        result = run_command(command, deadline=deadline)
     return json.loads(result.stdout) if result.stdout.strip() else None
 
 
@@ -165,7 +296,15 @@ def check_connection(subscription_id=None):
     command = ['az', 'account', 'show', '--only-show-errors', '--output', 'json']
     if subscription_id is not None:
         command.extend(['--subscription', str(uuid.UUID(subscription_id))])
-    account = json.loads(run_command(command).stdout)
+    try:
+        account = json.loads(run_command(command).stdout)
+    except RuntimeError as exc:
+        if not authentication_error(exc):
+            raise
+        selected = ensure_azure_auth(subscription_id, force=True)
+        if subscription_id is None and selected is not None:
+            command.extend(['--subscription', selected])
+        account = json.loads(run_command(command).stdout)
     selected = str(uuid.UUID(account['id']))
     if account.get('state') != 'Enabled':
         raise ValueError('Azure subscription is not enabled')

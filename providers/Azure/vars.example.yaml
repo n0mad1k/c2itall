@@ -1,4 +1,6 @@
-# CLI session authentication: az login, then select the explicit subscription.
+# Authentication: existing Azure CLI session, or Infisical folder `homelab` with
+# AZURE_CLIENT_ID, AZURE_CLIENT_CERTIFICATE, AZURE_TENANT_ID and
+# AZURE_SUBSCRIPTION_ID created by scripts/setup_azure_automation.py.
 # Copy only non-secret inputs into your deployment configuration.
 provider: azure
 deployment_type: infrastructure
