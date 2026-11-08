@@ -217,6 +217,32 @@
     state: directory
     mode: '0700'
 
+- name: Let sudo resolve the box hostname
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    line: "127.0.1.1 {{ ansible_facts['hostname'] }}"
+
+# Cloud-init drop-ins override sshd_config, so write the earliest drop-in too
+- name: Disable SSH password authentication in sshd_config
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PasswordAuthentication'
+    line: 'PasswordAuthentication no'
+  register: quick_recon_sshd_config
+
+- name: Disable SSH password authentication ahead of cloud-init drop-ins
+  ansible.builtin.copy:
+    content: "PasswordAuthentication no\n"
+    dest: /etc/ssh/sshd_config.d/00-attack-box.conf
+    mode: '0644'
+  register: quick_recon_sshd_dropin
+
+- name: Restart SSH to apply password authentication change
+  ansible.builtin.service:
+    name: ssh
+    state: restarted
+  when: quick_recon_sshd_config.changed or quick_recon_sshd_dropin.changed
+
 - name: Create simple quick reference
   ansible.builtin.copy:
     content: |

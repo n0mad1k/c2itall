@@ -201,20 +201,6 @@
         delay: 30
         timeout: 300
 
-    - name: Disable SSH password authentication
-      lineinfile:
-        path: /etc/ssh/sshd_config
-        regexp: '^#?PasswordAuthentication'
-        line: 'PasswordAuthentication no'
-        state: present
-      register: attack_box_sshd
-
-    - name: Restart SSH to apply password authentication change
-      service:
-        name: ssh
-        state: restarted
-      when: attack_box_sshd.changed
-
     - name: Update package cache only (avoid grub-pc issues)
       apt:
         update_cache: yes
