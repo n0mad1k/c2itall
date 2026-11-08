@@ -137,6 +137,12 @@
     creates: /usr/bin/msfconsole
   ignore_errors: yes
 
+# The upstream installer can leave its apt source behind when the key import
+# fails, which then breaks every later apt update on the host.
+- name: Drop a Metasploit apt source whose keyring never arrived
+  shell: test -r /usr/share/keyrings/metasploit-framework.gpg || rm -f /etc/apt/sources.list.d/metasploit-framework.list
+  changed_when: false
+
 - name: Ensure GoPhish directory exists
   file:
     path: "{{ tools_dir }}/gophish"
