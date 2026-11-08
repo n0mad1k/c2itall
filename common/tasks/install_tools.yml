@@ -158,7 +158,7 @@
 
 - name: Download and install GoPhish
   shell: |
-    curl -fL --retry 5 --retry-delay 15 --retry-all-errors "{{ gophish_url.stdout }}" -o {{ tools_dir }}/gophish.zip
+    curl -fL --retry 10 --retry-delay 30 --retry-all-errors "{{ gophish_url.stdout }}" -o {{ tools_dir }}/gophish.zip
     unzip {{ tools_dir }}/gophish.zip -d {{ tools_dir }}/gophish
     rm -f {{ tools_dir }}/gophish.zip
     chmod +x {{ tools_dir }}/gophish/gophish
