@@ -8,12 +8,14 @@
   connection: local
   vars_files:
     - vars.yaml
-  vars:
     # Generate random shell handler port if not provided
-    shell_handler_port: "{{ shell_handler_port | default(4000 + 60000 | random) }}"
-    redirector_subdomain: "{{ redirector_subdomain | default('cdn') }}"
 
   tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        shell_handler_port: "{{ shell_handler_port | default(4000 + 60000 | random) }}"
+        redirector_subdomain: "{{ redirector_subdomain | default('cdn') }}"
+
     - name: Validate required FlokiNET configuration
       assert:
         that:

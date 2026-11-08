@@ -9,11 +9,7 @@
     - vars.yaml
   vars:
     # Default values
-    ssh_user: "{{ ssh_user | default('ubuntu') }}"
-    aws_region: "{{ aws_region | default(aws_region_choices | random) }}"
     instance_type: "{{ aws_instance_type | default('t2.micro') }}"
-    deployment_id: "{{ deployment_id | default('') }}"
-    redirector_name: "{{ redirector_name | default('r-' + deployment_id) }}"
     effective_listen_port: "{{ shell_handler_port | default(4488) }}"
     # Check for shared infrastructure
     # Only use shared when C2 and redirector are in the same region
@@ -33,6 +29,13 @@
       sa-east-1: "ami-0af6e9042ea5a4e3e"
 
   tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        ssh_user: "{{ ssh_user | default('ubuntu') }}"
+        aws_region: "{{ aws_region | default(aws_region_choices | random) }}"
+        deployment_id: "{{ deployment_id | default('') }}"
+        redirector_name: "{{ redirector_name | default('r-' + deployment_id) }}"
+
     - name: Validate AWS credentials
       assert:
         that:

@@ -232,6 +232,11 @@
     owner: root
     group: root
 
+- name: Default inputs the controller may not supply
+  set_fact:
+    redirector_subdomain: "{{ redirector_subdomain | default('cdn') }}"
+    redirector_port: "{{ redirector_port | default('443') }}"
+
 - name: Create beacon server script from template
   template:
     src: "../templates/serve-havoc-payloads.sh.j2"
@@ -240,9 +245,7 @@
     owner: root
     group: root
   vars:
-    redirector_subdomain: "{{ redirector_subdomain | default('cdn') }}"
     domain: "{{ domain }}"
-    redirector_port: "{{ redirector_port | default('443') }}"
 
 - name: Run port randomization if enabled
   include_tasks: "../../../common/tasks/port_randomization.yml"

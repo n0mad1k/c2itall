@@ -9,11 +9,7 @@
     - vars.yaml
   vars:
     # Default values
-    ssh_user: "{{ ssh_user | default('ubuntu') }}"
-    aws_region: "{{ aws_region | default(aws_region_choices | random) }}"
     instance_type: "{{ aws_instance_type | default('t2.micro') }}"
-    deployment_id: "{{ deployment_id | default('') }}"
-    webserver_name: "{{ webserver_name | default('web-' + deployment_id) }}"
     # Check for shared infrastructure
     use_shared_infra: "{{ not (c2_region is defined and webserver_region is defined and c2_region != webserver_region) and not c2_only | default(false) | bool and not webserver_only | default(false) | bool }}"
     # Ubuntu AMI IDs for different regions (Ubuntu 22.04 LTS)
@@ -31,6 +27,13 @@
       sa-east-1: "ami-0af6e9042ea5a4e3e"
 
   tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        ssh_user: "{{ ssh_user | default('ubuntu') }}"
+        aws_region: "{{ aws_region | default(aws_region_choices | random) }}"
+        deployment_id: "{{ deployment_id | default('') }}"
+        webserver_name: "{{ webserver_name | default('web-' + deployment_id) }}"
+
     - name: Validate AWS credentials
       assert:
         that:

@@ -6,11 +6,13 @@
   connection: local
   vars_files:
     - vars.yaml
-  vars:
-    deployment_id: "{{ deployment_id | default('') }}"
-    confirm_cleanup: "{{ confirm_cleanup | default(true) }}"
     
   tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        deployment_id: "{{ deployment_id | default('') }}"
+        confirm_cleanup: "{{ confirm_cleanup | default(true) }}"
+
     - name: Load deployment state
       include_vars:
         file: "phishing_deployment_state_{{ deployment_id }}.json"

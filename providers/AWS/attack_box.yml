@@ -11,9 +11,6 @@
   vars:
     ansible_python_interpreter: "{{ ansible_playbook_python }}"
     deployment_type: "attack_box"
-    attack_box_name: "{{ attack_box_name | default('a-' + deployment_id) }}"
-    attack_box_type: "{{ attack_box_type | default('kali') }}"
-    aws_region: "{{ aws_region | default(aws_region_choices | random) }}"
     instance_type: "{{ aws_instance_type | default('t3.small') }}"
     ssh_key_name: "attack-box-{{ deployment_id }}"
     attack_box_ssh_user: "kali"
@@ -25,6 +22,12 @@
       Type: "attack-box"
 
   tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        attack_box_name: "{{ attack_box_name | default('a-' + deployment_id) }}"
+        attack_box_type: "{{ attack_box_type | default('kali') }}"
+        aws_region: "{{ aws_region | default(aws_region_choices | random) }}"
+
     - name: Validate AWS credentials
       assert:
         that:
@@ -207,12 +210,14 @@
   hosts: attack_boxes
   gather_facts: yes
   become: yes
-  vars:
-    setup_workspace: "{{ setup_workspace | default(true) }}"
-    setup_vpn: "{{ setup_vpn | default(false) }}"
-    setup_tor: "{{ setup_tor | default(false) }}"
 
   tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        setup_workspace: "{{ setup_workspace | default(true) }}"
+        setup_vpn: "{{ setup_vpn | default(false) }}"
+        setup_tor: "{{ setup_tor | default(false) }}"
+
     - name: Wait for system to be ready
       wait_for_connection:
         delay: 10

@@ -6,12 +6,14 @@
   connection: local
   vars_files:
     - vars.yaml
-  vars:
-    deployment_id: "{{ deployment_id | default('') }}"
-    payload_redirector_name: "{{ payload_redirector_name | default('pr-' + deployment_id) }}"
-    provider: "{{ provider | default('aws') }}"
     
   tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        deployment_id: "{{ deployment_id | default('') }}"
+        payload_redirector_name: "{{ payload_redirector_name | default('pr-' + deployment_id) }}"
+        provider: "{{ provider | default('aws') }}"
+
     - name: Deploy payload redirector based on provider
       include_tasks: "../providers/{{ provider | upper }}/redirector.yml"
       vars:

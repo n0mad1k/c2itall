@@ -9,14 +9,17 @@
     - vars.yaml
   vars:
     # Default values - using minimalist settings
-    linode_region: "{{ linode_region | default(region_choices | random) }}"
-    plan: "{{ plan | default('g6-nanode-1') }}"  # Use smallest plan for tracker
     tracker_image: "{{ image | default('linode/debian12') }}"  # Use Debian instead of Kali
     
     # Generate random instance name if not provided
-    tracker_name: "{{ tracker_name | default('t-' + 9999999999 | random | to_uuid | hash('md5') | truncate(8, True, '')) }}"
 
   tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        linode_region: "{{ linode_region | default(region_choices | random) }}"
+        plan: "{{ plan | default('g6-nanode-1') }}"  # Use smallest plan for tracker
+        tracker_name: "{{ tracker_name | default('t-' + 9999999999 | random | to_uuid | hash('md5') | truncate(8, True, '')) }}"
+
     - name: Validate required Linode token
       assert:
         that:
@@ -74,9 +77,11 @@
   gather_facts: true
   vars_files:
     - vars.yaml
-  vars:
-    tracker_domain: "{{ tracker_domain | default('track.' + domain) }}"
   tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        tracker_domain: "{{ tracker_domain | default('track.' + domain) }}"
+
     - name: Update and install minimal required packages
       apt:
         name:

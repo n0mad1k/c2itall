@@ -11,20 +11,23 @@
     - vars.yaml
   vars:
     # Default values if not provided
-    ssh_user: "{{ ssh_user | default('root') }}"
-    linode_region: "{{ linode_region | default(region_choices | random) }}"
-    plan: "{{ plan | default('g6-standard-2') }}"
-    image: "{{ image | default('linode/kali') }}"
     
     # Determine what to deploy based on configuration
     deploy_redirector: "{{ not (c2_only | default(false)) }}"
     deploy_c2: "{{ not (redirector_only | default(false)) }}"
     
     # Generate random names if not provided
-    redirector_name: "{{ redirector_name | default('srv-' + 100000000 | random | to_uuid | hash('md5') | truncate(8, True, '')) }}"
     c2_name: "{{ c2_name | default('node-' + 100000000 | random | to_uuid | hash('md5') | truncate(8, True, '')) }}"
 
   tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        ssh_user: "{{ ssh_user | default('root') }}"
+        linode_region: "{{ linode_region | default(region_choices | random) }}"
+        plan: "{{ plan | default('g6-standard-2') }}"
+        image: "{{ image | default('linode/kali') }}"
+        redirector_name: "{{ redirector_name | default('srv-' + 100000000 | random | to_uuid | hash('md5') | truncate(8, True, '')) }}"
+
     - name: Validate required Linode token
       assert:
         that:

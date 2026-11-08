@@ -9,10 +9,7 @@
     - vars.yaml
   vars:
     # Default values
-    ssh_user: "{{ ssh_user | default('kali') }}"
-    aws_region: "{{ aws_region | default(aws_region_choices | random) }}"
     instance_type: "{{ aws_instance_type | default('t2.medium') }}"
-    deployment_id: "{{ deployment_id | default('') }}"
     c2_name: "{{ c2_name | default('s-' + deployment_id) }}"
     # Define split_regions - only true when regions are explicitly different
     split_regions: "{{ c2_region is defined and redirector_region is defined and c2_region != redirector_region }}"
@@ -26,6 +23,12 @@
       us-east-2: "ami-061b17d332829ab1c"  # Fallback to us-east-1 AMI
 
   tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        ssh_user: "{{ ssh_user | default('kali') }}"
+        aws_region: "{{ aws_region | default(aws_region_choices | random) }}"
+        deployment_id: "{{ deployment_id | default('') }}"
+
     - name: Validate AWS credentials
       assert:
         that:

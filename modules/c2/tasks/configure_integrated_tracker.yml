@@ -100,6 +100,10 @@
     - /root/Tools/tracker/data
   when: setup_integrated_tracker | default(false) | bool
 
+- name: Default inputs the controller may not supply
+  set_fact:
+    tracker_domain: "{{ tracker_domain | default('track.' + domain) }}"
+
 - name: Create NGINX site config for tracker
   template:
     src: "../../tracker/files/tracker-nginx.conf"
@@ -107,8 +111,6 @@
     mode: '0644'
     owner: root
     group: root
-  vars:
-    tracker_domain: "{{ tracker_domain | default('track.' + domain) }}"
   when: setup_integrated_tracker | default(false) | bool
 
 - name: Enable tracker NGINX site

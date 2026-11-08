@@ -6,12 +6,14 @@
   connection: local
   vars_files:
     - vars.yaml
-  vars:
-    deployment_id: "{{ deployment_id | default('') }}"
-    payload_server_name: "{{ payload_server_name | default('ps-' + deployment_id) }}"
-    provider: "{{ provider | default('aws') }}"
     
   tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        deployment_id: "{{ deployment_id | default('') }}"
+        payload_server_name: "{{ payload_server_name | default('ps-' + deployment_id) }}"
+        provider: "{{ provider | default('aws') }}"
+
     - name: Deploy payload server based on provider
       include_tasks: "../providers/{{ provider | upper }}/c2.yml"
       vars:

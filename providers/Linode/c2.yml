@@ -9,8 +9,6 @@
     - vars.yaml
   vars:
     # Default values for required variables
-    linode_region: "{{ linode_region | default(region_choices | random) }}"
-    plan: "{{ plan | default('g6-standard-2') }}"
     # Use static value to avoid recursive templating
     c2_image_static: "linode/kali"
     
@@ -18,6 +16,11 @@
     c2_name: "{{ c2_name | default('node-' + 9999999999 | random | to_uuid | hash('md5') | truncate(8, True, '')) }}"
 
   tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        linode_region: "{{ linode_region | default(region_choices | random) }}"
+        plan: "{{ plan | default('g6-standard-2') }}"
+
     - name: Validate required Linode token
       assert:
         that:

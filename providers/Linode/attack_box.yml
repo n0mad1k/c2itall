@@ -9,10 +9,6 @@
   vars:
     ansible_python_interpreter: "{{ ansible_playbook_python }}"
     deployment_type: "attack_box"
-    attack_box_name: "{{ attack_box_name | default('a-' + deployment_id) }}"
-    attack_box_type: "{{ attack_box_type | default('kali') }}"
-    linode_instance_type: "{{ linode_instance_type | default('g6-standard-4') }}"
-    linode_region: "{{ linode_region | default('us-east') }}"
     ssh_key_name: "{{ ssh_key_path | default('c2deploy_' + attack_box_name) | basename | regex_replace('\\.pub$', '') }}"
     
     # Attack box image mapping (headless versions)
@@ -22,6 +18,13 @@
       quick_recon: "linode/kali"  # Kali Linux for easy tool expansion
     
   tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        attack_box_name: "{{ attack_box_name | default('a-' + deployment_id) }}"
+        attack_box_type: "{{ attack_box_type | default('kali') }}"
+        linode_instance_type: "{{ linode_instance_type | default('g6-standard-4') }}"
+        linode_region: "{{ linode_region | default('us-east') }}"
+
     - name: Debug attack box deployment
       debug:
         msg: "Deploying {{ attack_box_type }} attack box on Linode in {{ linode_region }}"
@@ -190,12 +193,14 @@
   hosts: attack_boxes
   gather_facts: yes
   become: yes
-  vars:
-    setup_workspace: "{{ setup_workspace | default(true) }}"
-    setup_vpn: "{{ setup_vpn | default(false) }}"
-    setup_tor: "{{ setup_tor | default(false) }}"
     
   tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        setup_workspace: "{{ setup_workspace | default(true) }}"
+        setup_vpn: "{{ setup_vpn | default(false) }}"
+        setup_tor: "{{ setup_tor | default(false) }}"
+
     - name: Wait for system to be ready
       wait_for_connection:
         delay: 30

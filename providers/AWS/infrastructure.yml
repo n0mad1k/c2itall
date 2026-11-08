@@ -9,7 +9,6 @@
     - vars.yaml
   vars:
     # Deployment identifiers
-    deployment_id: "{{ deployment_id | default('') }}"
     infra_name: "infra-{{ deployment_id }}"
     # Region settings
     deployment_region: "{{ aws_region | default(aws_region_choices | random) }}"
@@ -19,6 +18,10 @@
     single_component: "{{ c2_only | default(false) | bool or redirector_only | default(false) | bool }}"
 
   tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        deployment_id: "{{ deployment_id | default('') }}"
+
     - name: Validate AWS credentials
       assert:
         that:

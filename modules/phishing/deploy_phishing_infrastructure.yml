@@ -7,9 +7,6 @@
   gather_facts: true  # Enable to get ansible_date_time
   connection: local
   vars:
-    deployment_id: "{{ deployment_id | default('') }}"
-    provider: "{{ provider | default('aws') }}"
-    deployment_type: "{{ deployment_type | default('phishing_only_noccdn') }}"
     # Provider directory mapping
     provider_dirs:
       aws: "AWS"
@@ -17,6 +14,12 @@
       flokinet: "FlokiNET"
     
   tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        deployment_id: "{{ deployment_id | default('') }}"
+        provider: "{{ provider | default('aws') }}"
+        deployment_type: "{{ deployment_type | default('phishing_only_noccdn') }}"
+
     - name: Validate deployment configuration
       assert:
         that:

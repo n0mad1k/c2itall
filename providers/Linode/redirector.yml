@@ -178,9 +178,12 @@
     - vars.yaml
   vars:
     c2_ip: "{{ hostvars['localhost']['c2_ip'] | default('127.0.0.1') }}"
-    redirector_subdomain: "{{ redirector_subdomain | default('cdn') }}"
     ansible_python_interpreter: auto  # Explicitly add this line
   tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        redirector_subdomain: "{{ redirector_subdomain | default('cdn') }}"
+
     - name: Wait for apt to be available
       apt:
         update_cache: yes
