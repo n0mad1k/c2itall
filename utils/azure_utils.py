@@ -26,7 +26,10 @@ CONFIG_KEYS = frozenset({
     'azure_subscription_id', 'azure_location', 'azure_vm_size',
     'azure_resource_group', 'azure_os_disk_gb', 'operator_ip', 'ssh_key_path',
     'ssh_private_key_path', 'ssh_key_generated', 'azure_inbound_rules',
+    'azure_image',
 })
+DEFAULT_IMAGE = {'publisher': 'Canonical', 'offer': 'ubuntu-24_04-lts',
+                 'sku': 'server', 'version': 'latest', 'plan': False}
 UNSUPPORTED_FLAGS = frozenset({'c2_only', 'deploy_c2', 'c2_framework', 'attack_box_deployment',
     'redirector_only', 'tracker_deployment', 'phishing_deployment', 'chat_deployment',
     'payload_deployment', 'payload_server_deployment', 'webrunner_deployment'})
@@ -363,9 +366,19 @@ def validate_config(config, require_key=True):
         except (TypeError, ValueError):
             raise ValueError('Invalid Azure inbound rule port')
         source = rule['source']
+        if source != '*':
+            try:
+                network = ipaddress.ip_network(
+                    source if '/' in str(source) else str(source) + '/32', strict=True)
+            except ValueError:
+                raise ValueError('Invalid Azure inbound rule')
+            if (network.version != 4 or network.prefixlen != 32
+                    or not network.network_address.is_global):
+                raise ValueError('Invalid Azure inbound rule')
+            source = str(network)
         if (not isinstance(name, str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,39}', name)
                 or protocol not in ('Tcp', 'Udp') or not 1 <= port <= 65535
-                or port == 22 or source not in ('*', result['operator_ip'])):
+                or port == 22):
             raise ValueError('Invalid Azure inbound rule')
         identity = (protocol, port, source)
         if identity in seen_rules:
@@ -374,6 +387,17 @@ def validate_config(config, require_key=True):
         normalized_rules.append({'name': name, 'protocol': protocol,
                                  'port': str(port), 'source': source})
     result['azure_inbound_rules'] = normalized_rules
+    image = result.get('azure_image')
+    if image is not None:
+        fields = ('publisher', 'offer', 'sku', 'version')
+        if (not isinstance(image, dict) or set(image) - {*fields, 'plan'}
+                or any(not isinstance(image.get(key), str)
+                       or not re.fullmatch(r'[A-Za-z0-9._-]{1,64}', image[key])
+                       for key in fields)
+                or type(image.get('plan', False)) is not bool):
+            raise ValueError('Invalid Azure image reference')
+        result['azure_image'] = {**{key: image[key] for key in fields},
+                                 'plan': bool(image.get('plan', False))}
     public = Path(result['ssh_key_path']).expanduser().absolute()
     private = Path(result.get('ssh_private_key_path', str(public).removesuffix('.pub'))).expanduser().absolute()
     if public == private:
@@ -539,8 +563,12 @@ def validate_ownership(state, group, resources):
 def render_template(config):
     from jinja2 import Environment, FileSystemLoader, StrictUndefined
     normalized = validate_config(config)
+    image = normalized.get('azure_image') or DEFAULT_IMAGE
     context = dict(normalized, names={k: v.rsplit('/', 1)[1] for k, v in resource_ids(normalized).items()},
                    ssh_public_key=Path(normalized['ssh_key_path']).read_text().strip(),
+                   image_reference={k: image[k] for k in ('publisher', 'offer', 'sku', 'version')},
+                   image_plan=({'name': image['sku'], 'product': image['offer'],
+                                'publisher': image['publisher']} if image['plan'] else None),
                    tags=ownership_tags(config) if config.get('ownership_marker') else
                    {'c2itall-deployment': normalized['deployment_id'], 'c2itall-owner': 'validation-only'})
     env = Environment(loader=FileSystemLoader(ROOT / 'providers/Azure/templates'), undefined=StrictUndefined)

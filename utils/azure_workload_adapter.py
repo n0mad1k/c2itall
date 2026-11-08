@@ -21,6 +21,7 @@ class AzureSingleVmWorkloadAdapter(WorkloadAdapter):
     service_log_suffix = None
     service_config_keys = ()
     inventory_group = None
+    image = None
     manages_ssh_key = True
 
     def gather_config(self):
@@ -82,6 +83,9 @@ class AzureSingleVmWorkloadAdapter(WorkloadAdapter):
                      'azure_cleanup_deadline'):
             if name in config:
                 result[name] = config[name]
+        image = config.get('azure_image') or self.image
+        if image:
+            result['azure_image'] = image
         return result
 
     def _public_ipv4(self, value):
@@ -131,7 +135,8 @@ class AzureSingleVmWorkloadAdapter(WorkloadAdapter):
                 # Shared service tasks classify hosts by their legacy group name.
                 inventory = str(Path(temporary) / 'inventory.ini')
                 Path(inventory).write_text(
-                    '[' + self.inventory_group + ']\n' + str(address) + '\n')
+                    '[' + self.inventory_group + ']\n' + str(address) +
+                    ' ansible_host=' + str(address) + '\n')
             result = azure_utils.run_command([
                 'ansible-playbook', self.playbook(config),
                 '-i', inventory, '-u', 'azureuser',
@@ -265,3 +270,83 @@ class AzureRedirectorAdapter(AzureSingleVmWorkloadAdapter):
 
 def azure_redirector_adapter():
     return AzureRedirectorAdapter()
+
+
+KALI_IMAGE = {'publisher': 'kali-linux', 'offer': 'kali', 'sku': 'kali-2026-2',
+              'version': 'latest', 'plan': True}
+
+
+class AzureC2Adapter(AzureSingleVmWorkloadAdapter):
+    """Provision a Kali VM and configure the shared Havoc C2 and mail stack."""
+
+    workload = 'c2'
+    address_key = 'c2_ip'
+    playbook_name = 'c2.yml'
+    service_log_suffix = 'c2'
+    inventory_group = 'c2servers'
+    image = KALI_IMAGE
+    service_config_keys = (
+        'c2_name', 'redirector_name', 'domain', 'c2_subdomain',
+        'redirector_subdomain', 'redirector_port', 'c2_framework',
+        'letsencrypt_email', 'operator_ip', 'c2_ip', 'redirector_ip',
+        'ssh_key_path', 'smtp_auth_user', 'smtp_auth_pass', 'zero_logs',
+        'secure_memory', 'disable_history', 'randomize_ports',
+        'gophish_admin_port', 'gophish_phish_port', 'havoc_teamserver_port',
+        'havoc_http_port', 'havoc_https_port', 'havoc_payload_port',
+        'havoc_admin_user', 'havoc_admin_password', 'havoc_spawn',
+        'havoc_sleep', 'havoc_jitter', 'havoc_sleep_mask_technique',
+        'setup_integrated_tracker', 'tracker_domain', 'tracker_port',
+        'c2_only', 'redirector_only', 'deploy_redirector', 'deploy_tracker',
+    )
+
+    def _redirector(self, config):
+        address = str(config.get('redirector_ip') or '').removesuffix('/32')
+        if not address:
+            return None
+        parsed = ipaddress.ip_address(address)
+        if parsed.is_loopback:
+            return None
+        if parsed.version != 4 or not parsed.is_global:
+            raise ValueError('Azure C2 redirector address must be a public IPv4')
+        return str(parsed)
+
+    def _validate_workload(self, config):
+        if not config.get('domain'):
+            raise ValueError('Azure C2 requires a domain')
+        if config.get('c2_framework', 'havoc') != 'havoc':
+            raise ValueError('Azure C2 supports only the Havoc framework')
+        self._redirector(config)
+
+    def _inbound_rules(self, config):
+        operator = config['operator_ip']
+        rules = [
+            {'name': 'havoc-teamserver', 'protocol': 'Tcp',
+             'port': int(config.get('havoc_teamserver_port') or 40056), 'source': operator},
+            {'name': 'gophish-admin', 'protocol': 'Tcp',
+             'port': int(config.get('gophish_admin_port') or 2222), 'source': operator},
+        ]
+        if config.get('setup_integrated_tracker'):
+            rules.append({'name': 'tracker', 'protocol': 'Tcp',
+                          'port': int(config.get('tracker_port') or 5000), 'source': operator})
+        redirector = self._redirector(config)
+        if redirector:
+            for name, key, default in (('havoc-http', 'havoc_http_port', 8080),
+                                       ('havoc-https', 'havoc_https_port', 9443),
+                                       ('havoc-payload', 'havoc_payload_port', 8443),
+                                       ('gophish-phish', 'gophish_phish_port', 8081)):
+                rules.append({'name': name, 'protocol': 'Tcp',
+                              'port': int(config.get(key) or default), 'source': redirector})
+        return rules
+
+    def _service_variables(self, config):
+        variables = super()._service_variables(config)
+        variables.setdefault('redirector_ip', self._redirector(config) or '127.0.0.1')
+        variables.setdefault('c2_subdomain', 'mail')
+        variables.setdefault('redirector_subdomain', 'cdn')
+        variables.setdefault('gophish_admin_port', '2222')
+        variables.setdefault('redirector_only', False)
+        return variables
+
+
+def azure_c2_adapter():
+    return AzureC2Adapter()

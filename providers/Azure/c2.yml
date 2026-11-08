@@ -1,0 +1,56 @@
+---
+- name: Wait for the Azure C2 VM
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Wait for SSH connectivity
+      ansible.builtin.wait_for_connection:
+        delay: 10
+        timeout: 300
+
+- name: Configure the Azure C2 server
+  hosts: c2servers
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Validate the C2 route inputs
+      ansible.builtin.assert:
+        that:
+          - provider == 'azure'
+          - provider_workload == 'c2'
+          - domain | length > 0
+          - ansible_facts['distribution'] is search('Kali')
+        fail_msg: Azure C2 requires a domain and the Kali marketplace image
+
+    # Kali rotated its archive signing key in 2025; older images cannot update without it
+    - name: Refresh the Kali archive keyring
+      ansible.builtin.get_url:
+        url: https://archive.kali.org/archive-keyring.gpg
+        dest: /usr/share/keyrings/kali-archive-keyring.gpg
+        mode: '0644'
+        force: yes
+
+    - name: Wait for apt to be available
+      ansible.builtin.apt:
+        update_cache: yes
+      register: apt_result
+      until: apt_result is success
+      retries: 5
+      delay: 10
+
+    - name: Install the shared offensive toolset
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../common/tasks/install_tools.yml"
+
+    - name: Configure the Havoc C2 service
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../modules/c2/tasks/configure_c2.yml"
+
+    - name: Configure the mail stack
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../common/tasks/configure_mail.yml"
+
+    - name: Print deployment summary
+      ansible.builtin.debug:
+        msg:
+          - "C2 Server Deployment Complete!"
+          - "C2 Server IP: {{ inventory_hostname }}"
+          - "C2 Server Domain: {{ domain }}"
+          - "GoPhish Admin Port: {{ gophish_admin_port | default('2222') }}"

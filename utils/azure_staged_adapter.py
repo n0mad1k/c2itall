@@ -9,7 +9,7 @@ from .azure_workload_adapter import AzureSingleVmWorkloadAdapter
 
 
 STAGED_AZURE_WORKLOADS = frozenset({
-    'c2', 'phishing', 'payload_server', 'webrunner',
+    'phishing', 'payload_server', 'webrunner',
 })
 
 
@@ -52,10 +52,6 @@ class AzureStagedWorkloadAdapter(AzureSingleVmWorkloadAdapter):
     def _validate_workload(self, config):
         raise RuntimeError(
             'Azure staged route is disabled: ' + self.workload)
-
-
-def azure_c2_staged_adapter():
-    return AzureStagedWorkloadAdapter('c2')
 
 
 def azure_phishing_staged_adapter():

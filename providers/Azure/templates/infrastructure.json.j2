@@ -34,10 +34,11 @@
       "type": "Microsoft.Compute/virtualMachines", "apiVersion": "2024-11-01",
       "name": {{ names.vm | tojson }}, "location": {{ azure_location | tojson }}, "tags": {{ tags | tojson }},
       "dependsOn": ["[resourceId('Microsoft.Network/networkInterfaces', '{{ names.nic }}')]"],
+      {% if image_plan %}"plan": {{ image_plan | tojson }},{% endif %}
       "properties": {
         "hardwareProfile": {"vmSize": {{ azure_vm_size | tojson }}},
         "storageProfile": {
-          "imageReference": {"publisher": "Canonical", "offer": "ubuntu-24_04-lts", "sku": "server", "version": "latest"},
+          "imageReference": {{ image_reference | tojson }},
           "osDisk": {"name": {{ names.os_disk | tojson }}, "createOption": "FromImage", "diskSizeGB": {{ azure_os_disk_gb }}, "managedDisk": {"storageAccountType": "StandardSSD_LRS"}, "deleteOption": "Delete"}
         },
         "osProfile": {
