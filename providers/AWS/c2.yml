@@ -10,7 +10,6 @@
   vars:
     # Default values
     instance_type: "{{ aws_instance_type | default('t2.medium') }}"
-    c2_name: "{{ c2_name | default('s-' + deployment_id) }}"
     # Define split_regions - only true when regions are explicitly different
     split_regions: "{{ c2_region is defined and redirector_region is defined and c2_region != redirector_region }}"
     # Only use shared infra when NOT doing split-region deployment
@@ -25,6 +24,7 @@
   tasks:
     - name: Default inputs the controller may not supply
       set_fact:
+        c2_name: "{{ c2_name | default('s-' + deployment_id) }}"
         ssh_user: "{{ ssh_user | default('kali') }}"
         aws_region: "{{ aws_region | default(aws_region_choices | random) }}"
         deployment_id: "{{ deployment_id | default('') }}"
@@ -407,8 +407,11 @@
     - vars.yaml  # Add this line to load the variables
   vars:
     redirector_ip: "{{ hostvars['localhost']['redirector_ip'] | default('127.0.0.1') }}"
-    c2_subdomain: "{{ c2_subdomain | default('mail') }}"
   tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        c2_subdomain: "{{ c2_subdomain | default('mail') }}"
+
     - name: Install python3 if it doesn't exist on target
       raw: test -e /usr/bin/python3 || (apt-get update && apt-get install -y python3)
       args:

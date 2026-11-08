@@ -13,11 +13,11 @@
     c2_image_static: "linode/kali"
     
     # Generate random instance name if not provided
-    c2_name: "{{ c2_name | default('node-' + 9999999999 | random | to_uuid | hash('md5') | truncate(8, True, '')) }}"
 
   tasks:
     - name: Default inputs the controller may not supply
       set_fact:
+        c2_name: "{{ c2_name | default('node-' + 9999999999 | random | to_uuid | hash('md5') | truncate(8, True, '')) }}"
         linode_region: "{{ linode_region | default(region_choices | random) }}"
         plan: "{{ plan | default('g6-standard-2') }}"
 
@@ -166,8 +166,11 @@
     - vars.yaml
   vars:
     redirector_ip: "{{ hostvars['localhost']['redirector_ip'] | default('127.0.0.1') }}"
-    c2_subdomain: "{{ c2_subdomain | default('mail') }}"
   tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        c2_subdomain: "{{ c2_subdomain | default('mail') }}"
+
     - name: Wait for apt to be available
       apt:
         update_cache: yes

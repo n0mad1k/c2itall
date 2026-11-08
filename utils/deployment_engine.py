@@ -172,6 +172,10 @@ def determine_legacy_playbook(config):
     if config.get('chat_deployment'):
         return f"{base_path}/chat_server.yml"
 
+    # Payload hosting server
+    if config.get('provider_workload') == 'payload_server':
+        return f"{base_path}/payload_server.yml"
+
     # C2 deployment (default for C2 infrastructure)
     if config.get('c2_only') or config.get('deploy_c2') or config.get('c2_framework'):
         return f"{base_path}/c2.yml"

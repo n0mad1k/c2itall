@@ -9,9 +9,12 @@
   vars_files:
     - vars.yaml
   vars:
-    c2_subdomain: "{{ c2_subdomain | default('mail') }}"
 
   tasks:
+    - name: Default inputs the controller may not supply
+      set_fact:
+        c2_subdomain: "{{ c2_subdomain | default('mail') }}"
+
     - name: Validate required FlokiNET configuration
       assert:
         that:

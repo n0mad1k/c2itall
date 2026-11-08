@@ -17,11 +17,11 @@
     deploy_c2: "{{ not (redirector_only | default(false)) }}"
     
     # Generate random names if not provided
-    c2_name: "{{ c2_name | default('node-' + 100000000 | random | to_uuid | hash('md5') | truncate(8, True, '')) }}"
 
   tasks:
     - name: Default inputs the controller may not supply
       set_fact:
+        c2_name: "{{ c2_name | default('node-' + 100000000 | random | to_uuid | hash('md5') | truncate(8, True, '')) }}"
         ssh_user: "{{ ssh_user | default('root') }}"
         linode_region: "{{ linode_region | default(region_choices | random) }}"
         plan: "{{ plan | default('g6-standard-2') }}"
