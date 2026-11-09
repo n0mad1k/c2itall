@@ -23,13 +23,13 @@ the layers; `docs/EXTENDING.md` has the recipes.
   transition routes.
 - **Workloads**:
   - Quick Recon Box: Kali with recon tools, Tor, torsocks and proxychains in minutes
-  - Kali and Ubuntu attack boxes (AWS and Linode)
+  - Kali and Ubuntu attack boxes on Azure, AWS and Linode
   - C2 server with the Havoc framework (dev branch), shared mail stack, optional integrated tracker
   - HTTPS redirectors with legitimate cover pages, security-scanner bouncing and a shell handler
   - Phishing: MTA front with DKIM/DMARC plus a GoPhish server
   - Payload server with basic auth, IP, user-agent and rate filtering
   - WEBRUNNER distributed, geo-targeted masscan/nmap nodes
-  - Phantom privacy services (VPN, DNS, Matrix, email, TAK, vault, media) and a Matrix + Element + Tailscale chat server
+  - Phantom privacy services (VPN, DNS, Matrix, email, TAK, vault, media) and a Matrix + Element + Tailscale chat server with rolling replacement
 - **Security and OPSEC**: SSH limited to the operator's /32, key-only login,
   zero-logging mode, command history suppression, memory protection, Fail2Ban,
   port randomization, secure-exit and log-cleaning scripts.
@@ -114,6 +114,23 @@ then archive the state record and remove keys generated for that deployment.
 A failed native cleanup never falls through to legacy cleanup. The Cleanup
 menu in `deploy.py` offers the same operations plus SSH key and log hygiene.
 
+### Rolling Matrix replacement
+
+The Chat Server menu can attach a controller-side rotation timer to an existing
+Matrix deployment. It provisions a fresh server through the deployment's same
+provider route, creates a limited-use registration token that expires at the
+end of the grace window, posts the new URL, token and retirement deadline to a
+private room on the old server, and removes the old server only after verified
+replacement deployment and announcement. Interrupted provisioning is recovered
+before another rotation, and failed teardown keeps the owner-only recovery
+state instead of losing track of a resource.
+
+Choose `Configure rolling Matrix replacement` in the Chat Server menu, or use
+`modules/chat-server/rotate_matrix.py init` followed by `install-timer`. The
+controller workstation must remain available for its user-level systemd timer.
+The domain template must contain `{id}` or `{generation}`, and the generated
+hostnames must be routed to each replacement by the operator's DNS automation.
+
 ## Providers
 
 | Provider | Route | Notes |
@@ -135,13 +152,13 @@ venv/bin/python scripts/audit_provider_coverage.py --require-provider azure
 ### Azure
 
 Azure deployments create a dedicated resource group, virtual network,
-network security group, static Standard IPv4, NIC and VM (Ubuntu 24.04, or
-the Kali marketplace image for C2) with a StandardSSD managed disk. SSH is
+network security group, static Standard IPv4, NIC and VM (Ubuntu 24.04,
+Ubuntu 22.04 for Mail-in-a-Box, or the Kali marketplace image for Kali-based
+workloads) with a StandardSSD managed disk. SSH is
 allowed only from your public IPv4 /32, password login is disabled, and
 system logs and managed boot diagnostics stay enabled. Service ports come
-from the workload profile. Kali and full attack-box subtypes are refused on
-Azure until the subscription accepts the Kali marketplace terms; only the
-quick-recon subtype has native tasks.
+from the workload profile. Kali marketplace terms must be accepted before the
+Quick Recon, Kali attack-box and C2 routes can provision their image.
 
 Authentication prefers an existing `az` session and recovers an expired one
 from the automation identity. Run
