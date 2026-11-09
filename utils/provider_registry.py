@@ -146,7 +146,7 @@ WORKLOAD_SPECS = {
         'modules/infrastructure/deploy_infrastructure.py', False),
     'attack_box': WorkloadSpec(
         'modules/attack-box/deploy_attack_box.py', True,
-        {'quick_recon', 'kali', 'ubuntu', 'parrot'}),
+        {'quick_recon', 'kali', 'ubuntu'}),
     'c2': WorkloadSpec('modules/c2/deploy_c2.py', True),
     'redirector': WorkloadSpec(
         'modules/redirectors/deploy_redirector.py', True),

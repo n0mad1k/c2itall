@@ -88,6 +88,12 @@ class ChatServerTests(unittest.TestCase):
 
 
 class TakBuilderTests(unittest.TestCase):
+    def test_official_source_layout_uses_nested_gradle_wrapper(self):
+        source = (ROOT / "scripts/build_tak_server.py").read_text()
+        self.assertIn('build_root = source / "src"', source)
+        self.assertIn('wrapper = build_root / "gradlew"', source)
+        self.assertIn('cwd=build_root', source)
+
     def test_import_records_checksum_and_owner_only_artifact(self):
         builder = load_module(
             "test_tak_builder", ROOT / "scripts/build_tak_server.py")

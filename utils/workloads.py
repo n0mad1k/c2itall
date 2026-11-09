@@ -41,6 +41,10 @@ class WorkloadProfile:
     def disk_gb(self, config):
         return 32
 
+    def image_role_for(self, config):
+        """Return the provider-neutral image role for this configuration."""
+        return self.image_role
+
     def prepare(self, config):
         """Settle module inputs every component must share before provisioning."""
 

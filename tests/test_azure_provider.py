@@ -483,7 +483,7 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertEqual(
             provider_utils.available_providers(
                 'attack_box', legacy_fallback=True, variant='kali'),
-            ['aws', 'linode'])
+            ['aws', 'linode', 'azure'])
 
     def test_workload_config_prefers_registered_handler_then_legacy_loader(self):
         adapter = mock.Mock()
@@ -518,11 +518,12 @@ class RoutingAndTemplateTests(AzureFixture):
                 provider_utils.gather_provider_config(
                     'azure', 'attack_box', variant='quick_recon'),
                 {'source': 'azure', 'provider_manages_ssh_key': True})
-        with mock.patch.object(azure, 'gather_azure_config') as gather, \
-                self.assertRaisesRegex(ValueError, 'variant kali'):
-            provider_utils.gather_provider_config(
-                'azure', 'attack_box', variant='kali')
-        gather.assert_not_called()
+        with mock.patch.object(
+                azure, 'gather_azure_config', return_value={'source': 'azure'}):
+            self.assertEqual(
+                provider_utils.gather_provider_config(
+                    'azure', 'attack_box', variant='kali'),
+                {'source': 'azure', 'provider_manages_ssh_key': True})
         self.assertTrue(vm_workloads.adapter('azure', 'attack_box').manages_ssh_key)
 
         managed = {'provider_manages_ssh_key': True}
@@ -1010,12 +1011,12 @@ class RoutingAndTemplateTests(AzureFixture):
             row for row in rows
             if row['provider'] == 'azure' and row['workload'] == 'attack_box')
         self.assertEqual(azure_attack_box['variants'], [
-            'kali', 'parrot', 'quick_recon', 'ubuntu'])
+            'kali', 'quick_recon', 'ubuntu'])
         self.assertEqual(
-            azure_attack_box['supported_variants'], ['quick_recon'])
-        self.assertEqual(azure_attack_box['missing_variants'], [
-            'kali', 'parrot', 'ubuntu'])
-        self.assertEqual(azure_attack_box['variant_coverage'], 'partial')
+            azure_attack_box['supported_variants'], [
+                'kali', 'quick_recon', 'ubuntu'])
+        self.assertEqual(azure_attack_box['missing_variants'], [])
+        self.assertEqual(azure_attack_box['variant_coverage'], 'full')
         aws_attack_box = next(
             row for row in rows
             if row['provider'] == 'aws' and row['workload'] == 'attack_box')
@@ -1029,11 +1030,9 @@ class RoutingAndTemplateTests(AzureFixture):
         error = io.StringIO()
         with contextlib.redirect_stdout(io.StringIO()), \
                 contextlib.redirect_stderr(error):
-            self.assertEqual(module.main(['--require-provider', 'azure']), 1)
+            self.assertEqual(module.main(['--require-provider', 'azure']), 0)
             self.assertNotIn('staged (disabled)', error.getvalue())
-            self.assertIn(
-                'partial: attack_box (missing kali, parrot, ubuntu)',
-                error.getvalue())
+            self.assertNotIn('partial:', error.getvalue())
             self.assertEqual(module.main(['--json']), 0)
 
     def test_provider_registry_validation_rejects_route_drift(self):
@@ -1687,11 +1686,17 @@ class RoutingAndTemplateTests(AzureFixture):
         infrastructure = adapter._infrastructure_config(config)
         self.assertEqual(infrastructure['provider_workload'], 'attack_box')
         self.assertEqual(infrastructure['azure_inbound_rules'], [])
+        self.assertEqual(infrastructure['azure_image']['publisher'], 'kali-linux')
         normalized = azure.validate_config(infrastructure, require_key=False)
         self.assertEqual(normalized['provider_workload'], 'attack_box')
-        with self.assertRaisesRegex(ValueError, 'quick-recon'):
-            adapter._infrastructure_config({**config, 'attack_box_type': 'kali',
-                                            'deployment_type': 'kali_attack_box'})
+        kali = adapter._infrastructure_config({
+            **config, 'attack_box_type': 'kali',
+            'deployment_type': 'kali_attack_box'})
+        self.assertEqual(kali['azure_image']['publisher'], 'kali-linux')
+        ubuntu = adapter._infrastructure_config({
+            **config, 'attack_box_type': 'ubuntu',
+            'deployment_type': 'ubuntu_attack_box'})
+        self.assertNotIn('azure_image', ubuntu)
 
         state = dict(normalized, outputs={'public_ip': {'value': '1.1.1.1'}})
         with mock.patch.object(azure, 'prepare_state'), mock.patch.object(

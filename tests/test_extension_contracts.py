@@ -69,7 +69,7 @@ class FakeProviderTests(unittest.TestCase):
                         registry.WorkloadAdapter)
             self.assertEqual(
                 registry.provider_supported_variants('fakecloud', 'attack_box'),
-                frozenset({'quick_recon'}))
+                frozenset({'quick_recon', 'kali', 'ubuntu'}))
             self.assertEqual(
                 provider_utils.available_providers('c2', legacy_fallback=True),
                 ['aws', 'linode', 'flokinet', 'azure', 'fakecloud'])

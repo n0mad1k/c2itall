@@ -5,7 +5,14 @@ from utils.workloads import WorkloadProfile
 # Subtypes with native service tasks. Adding one is a task file plus an entry.
 VARIANTS = {
     'quick_recon': {'tasks': 'tasks/configure_quick_recon.yml',
-                    'deployment_type': 'quick_recon_box'},
+                    'deployment_type': 'quick_recon_box',
+                    'image_role': 'kali'},
+    'kali': {'tasks': 'tasks/configure_attack_box.yml',
+             'deployment_type': 'kali_attack_box',
+             'image_role': 'kali'},
+    'ubuntu': {'tasks': 'tasks/configure_attack_box.yml',
+               'deployment_type': 'ubuntu_attack_box',
+               'image_role': 'ubuntu'},
 }
 
 
@@ -20,6 +27,10 @@ class AttackBoxProfile(WorkloadProfile):
         'setup_vpn', 'tool_name', 'work_dir',
     )
     variants = frozenset(VARIANTS)
+
+    def image_role_for(self, config):
+        variant = VARIANTS.get(config.get('attack_box_type'))
+        return variant['image_role'] if variant else self.image_role
 
     def validate(self, config):
         variant = VARIANTS.get(config.get('attack_box_type'))

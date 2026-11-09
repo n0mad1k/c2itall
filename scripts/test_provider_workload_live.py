@@ -145,26 +145,42 @@ def driver_target(provider, name, key_stem):
 
 class AttackBox:
     name = 'attack_box'
+    variants = ('quick_recon', 'kali', 'ubuntu')
     repeat = {'aws': True, 'linode': False}
     source_paths = ('modules/attack-box',)
     legacy_paths = ('providers/{dir}/attack_box.yml',)
 
+    def __init__(self, variant='quick_recon'):
+        if variant not in self.variants:
+            raise ValueError('Unknown attack-box variant: ' + str(variant))
+        self.variant = variant
+
     def config(self, provider, deployment_id, operator_ip):
-        box = 'qr-' + deployment_id
+        prefix = {'quick_recon': 'qr', 'kali': 'ka', 'ubuntu': 'ub'}[self.variant]
+        box = prefix + '-' + deployment_id
+        deployment_type = ('quick_recon_box' if self.variant == 'quick_recon'
+                           else self.variant + '_attack_box')
+        quick = self.variant == 'quick_recon'
         config = {
             'deployment_id': deployment_id, 'provider': provider,
-            'provider_workload': 'attack_box', 'deployment_type': 'quick_recon_box',
-            'attack_box_type': 'quick_recon', 'attack_box_name': box,
-            'instance_size': 'small', 'setup_tor': True, 'setup_vpn': False,
+            'provider_workload': 'attack_box', 'deployment_type': deployment_type,
+            'attack_box_type': self.variant, 'attack_box_name': box,
+            'instance_size': 'small' if quick else 'medium',
+            'setup_tor': quick, 'setup_vpn': False,
             'setup_domain': False, 'operator_ip': operator_ip,
             'ssh_after_deploy': False, 'enhanced_opsec': True,
             'work_dir': '/root/' + deployment_id, 'tool_name': 'toolkit',
             'project_name': deployment_id, 'auto_teardown_on_fail': False,
             'default_user': 'root', 'attack_box_deployment': True,
-            'ssh_user': 'root', 'attack_box_image': 'linode/kali',
-            'quick_deployment': True,
+            'ssh_user': 'root',
+            'attack_box_image': ('linode/ubuntu22.04' if self.variant == 'ubuntu'
+                                 else 'linode/kali'),
+            'quick_deployment': quick,
         }
         config.update(live_config(provider, self.name))
+        if provider == 'azure' and not quick:
+            config['azure_vm_size'] = 'Standard_D4as_v5'
+            config['azure_os_disk_gb'] = 64
         if provider_driver(provider) is None:
             apply_provider_profile(config, 'instance_size', 'small')
         ready, _ = prepare_module_ssh_key(config, box)
@@ -179,7 +195,8 @@ class AttackBox:
 
     def target(self, provider, config):
         if provider == 'aws':
-            return config['attack_box_name'], 'kali', SSH_DIR / ('attack-box-' + config['deployment_id'])
+            user = 'ubuntu' if self.variant == 'ubuntu' else 'kali'
+            return config['attack_box_name'], user, SSH_DIR / ('attack-box-' + config['deployment_id'])
         if provider == 'linode':
             return config['attack_box_name'], 'root', SSH_DIR / ('c2deploy_' + config['attack_box_name'])
         return driver_target(provider, config['attack_box_name'], config['deployment_id'])
@@ -195,18 +212,31 @@ class AttackBox:
 
     def verify(self, context, config):
         deployment_id = config['deployment_id']
-        report = checks(context, [
-            ('os', "grep -Eq '^ID=(kali|ubuntu)' /etc/os-release"),
+        expected_os = 'ubuntu' if self.variant == 'ubuntu' else 'kali'
+        common = [
+            ('os', "grep -q '^ID=" + expected_os + "$' /etc/os-release"),
             ('workspace', 'sudo -n test -d /root/' + deployment_id + '/scans'),
-            ('quick_guide', 'sudo -n test -s /root/QUICK_RECON_GUIDE.txt'),
             ('nmap', 'command -v nmap >/dev/null'), ('dig', 'command -v dig >/dev/null'),
-            ('tor', 'command -v tor >/dev/null'), ('torsocks', 'command -v torsocks >/dev/null'),
-            ('proxychains', 'command -v proxychains4 >/dev/null'),
-            ('tor_enabled', 'test "$(systemctl is-enabled tor)" = enabled'),
-            ('tor_active', 'systemctl is-active tor >/dev/null'),
-            ('alias', "sudo -n grep -Fq \"alias qr='cd /root/" + deployment_id + "'\" /root/.bashrc"),
             ('sshd_no_password', "sudo -n /usr/sbin/sshd -T | grep -iq '^passwordauthentication no$'"),
-        ])
+        ]
+        if self.variant == 'quick_recon':
+            specific = [
+                ('quick_guide', 'sudo -n test -s /root/QUICK_RECON_GUIDE.txt'),
+                ('tor', 'command -v tor >/dev/null'),
+                ('torsocks', 'command -v torsocks >/dev/null'),
+                ('proxychains', 'command -v proxychains4 >/dev/null'),
+                ('tor_enabled', 'test "$(systemctl is-enabled tor)" = enabled'),
+                ('tor_active', 'systemctl is-active tor >/dev/null'),
+                ('alias', "sudo -n grep -Fq \"alias qr='cd /root/" + deployment_id + "'\" /root/.bashrc"),
+            ]
+        else:
+            specific = [
+                ('workspace_targets', 'sudo -n test -s /root/' + deployment_id + '/targets/targets.txt'),
+                ('opsec_script', 'sudo -n test -x /root/' + deployment_id + '/tools/scripts/opsec-check.sh'),
+                ('pipx', 'command -v pipx >/dev/null'),
+                ('workspace_alias', "sudo -n grep -Fq \"alias workspace=\" /root/.bashrc"),
+            ]
+        report = checks(context, common + specific, timeout=180)
         if provider_driver(context.provider) is not None:
             rules = context.cloud.inbound_rules(deployment_id)
             require(rules == [('tcp', '22', config['operator_ip'] + '/32')],
@@ -717,8 +747,9 @@ def empty(inventory):
     return not any(inventory.values())
 
 
-def activate(provider, workload_name, operator_ip=None, repeat=None):
-    workload = WORKLOADS[workload_name]()
+def activate(provider, workload_name, operator_ip=None, repeat=None, variant=None):
+    workload = (WORKLOADS[workload_name](variant or 'quick_recon')
+                if workload_name == 'attack_box' else WORKLOADS[workload_name]())
     os.chdir(ROOT)
     deployment_id = 'lt-{0}-{1}-{2}'.format(
         provider, workload_name.replace('_', '')[:6], uuid.uuid4().hex[:6])
@@ -951,18 +982,23 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--provider', choices=sorted(CLOUDS), required=True)
     parser.add_argument('--workload', choices=sorted(WORKLOADS) + ['webrunner'], required=True)
+    parser.add_argument('--variant', choices=AttackBox.variants,
+                        help='attack-box subtype (default: quick_recon)')
     parser.add_argument('--activate', action='store_true')
     parser.add_argument('--operator-ip')
     parser.add_argument('--repeat', dest='repeat', action='store_true', default=None)
     parser.add_argument('--no-repeat', dest='repeat', action='store_false')
     args = parser.parse_args(argv)
+    if args.variant and args.workload != 'attack_box':
+        parser.error('--variant is only valid with --workload attack_box')
     if not args.activate:
         print('DRY RUN: no cloud mutations. Target: {0} / {1} / {2}'.format(
             args.provider, REGIONS[args.provider], args.workload))
         return 0
     if args.workload == 'webrunner':
         return activate_webrunner(args.provider, args.operator_ip)
-    return activate(args.provider, args.workload, args.operator_ip, args.repeat)
+    return activate(args.provider, args.workload, args.operator_ip, args.repeat,
+                    args.variant)
 
 
 if __name__ == '__main__':

@@ -67,7 +67,7 @@ class SingleVmAdapter(WorkloadAdapter):
             generated = False
         return ProvisionRequest(
             deployment_id, self.profile.workload, self.profile.inbound_rules(config),
-            self.profile.image_role, self.profile.disk_gb(config),
+            self.profile.image_role_for(config), self.profile.disk_gb(config),
             str(key) + '.pub', str(key), generated)
 
     def _infrastructure_config(self, config):
@@ -267,7 +267,8 @@ class NodeAdapter(WorkloadAdapter):
         public = Path(config['ssh_key_path']).expanduser()
         request = ProvisionRequest(
             self.profile.node_id(config['deployment_id'], chunk['idx']),
-            self.profile.workload, [], self.profile.image_role, self.profile.disk_gb(config),
+            self.profile.workload, [], self.profile.image_role_for(config),
+            self.profile.disk_gb(config),
             str(public), str(public).removesuffix('.pub'),
             # The module key is shared by every provider's nodes; the composite
             # executor removes it only after all providers prove absence.

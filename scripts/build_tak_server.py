@@ -87,9 +87,13 @@ def build(output, java_home):
         environment = os.environ.copy()
         environment["JAVA_HOME"] = str(java_home)
         environment["PATH"] = str(Path(java_home) / "bin") + os.pathsep + environment["PATH"]
-        run([str(source / "gradlew"), "-p", str(source),
+        build_root = source / "src"
+        wrapper = build_root / "gradlew"
+        if not wrapper.is_file():
+            raise RuntimeError(f"TAK Gradle wrapper is missing: {wrapper}")
+        run([str(wrapper), "-p", str(build_root),
              "takserver-package:takserver:buildDeb", "-x", "test"],
-            cwd=source, env=environment)
+            cwd=build_root, env=environment)
         artifact = source / "src/takserver-package/takserver/build/distributions" / DEB_NAME
         return import_artifact(artifact, output)
 
