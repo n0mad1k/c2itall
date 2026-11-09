@@ -149,7 +149,7 @@
         wait: true
         state: running
         volumes:
-          - device_name: "/dev/xvda"
+          - device_name: "{{ '/dev/sda1' if attack_box_type == 'ubuntu' else '/dev/xvda' }}"
             ebs:
               # Full attack-box installs exceed the Ubuntu AMI's small root disk.
               volume_size: "{{ [aws_volume_size | default(64) | int, 64] | max }}"
@@ -245,6 +245,23 @@
       command: cloud-init status --wait
       changed_when: false
       failed_when: false
+
+    - name: Refresh root filesystem facts after cloud-init growth
+      ansible.builtin.setup:
+        filter: ansible_mounts
+      when: deployment_type != "quick_recon_box"
+
+    - name: Record full attack box root filesystem capacity
+      set_fact:
+        attack_box_root_bytes: "{{ (ansible_facts['mounts'] | selectattr('mount', 'equalto', '/') | map(attribute='size_total') | first | default(0)) | int }}"
+      when: deployment_type != "quick_recon_box"
+
+    - name: Require enough root capacity for the full toolset
+      assert:
+        that:
+          - attack_box_root_bytes | int >= 60 * 1024 * 1024 * 1024
+        fail_msg: "Full attack boxes require at least 60 GiB of usable root capacity"
+      when: deployment_type != "quick_recon_box"
 
     - name: Wait for package manager locks to clear
       shell: |

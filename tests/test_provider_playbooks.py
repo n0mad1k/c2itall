@@ -76,8 +76,10 @@ class ProviderPlaybookSyntaxTests(unittest.TestCase):
         webrunner = (ROOT / "providers/webrunner.yml").read_text()
         self.assertIn('deployment_id: "{{ deployment_id }}"', attack_box)
         self.assertIn("aws_volume_size | default(64)", attack_box)
+        self.assertIn("'/dev/sda1' if attack_box_type == 'ubuntu'", attack_box)
         self.assertIn("volume_type: gp3", attack_box)
         self.assertIn("delete_on_termination: true", attack_box)
+        self.assertIn("Require enough root capacity for the full toolset", attack_box)
         self.assertIn('deployment_id: "{{ deployment_id }}"', webrunner)
 
     def test_webrunner_teardown_verifies_nodes_and_auxiliaries(self):
