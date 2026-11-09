@@ -430,6 +430,7 @@ def verify_email(runner, config):
         "set -eu; "
         "sudo -n test -s /etc/mailinabox.conf; "
         "sudo -n test -s /root/.miab_admin_password; "
+        "sudo -n test ! -e /root/.miab-install.env; "
         "test \"$(sudo -n stat -c %a /root/.miab_admin_password)\" = 600; "
         "test \"$(systemctl is-active postfix)\" = active; "
         "test \"$(systemctl is-active dovecot)\" = active; "

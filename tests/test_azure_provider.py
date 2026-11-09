@@ -2241,6 +2241,7 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertIn('ports=(443,587,993)', live_harness)
         self.assertNotIn('ports=(25,443,993)', live_harness)
         self.assertIn("^25/tcp[[:space:]]+ALLOW", live_harness)
+        self.assertIn('test ! -e /root/.miab-install.env', live_harness)
 
     def test_azure_inbound_rules_reject_unsafe_or_ambiguous_values(self):
         invalid = (
