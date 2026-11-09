@@ -2177,6 +2177,38 @@ class RoutingAndTemplateTests(AzureFixture):
             self.assertEqual(probe[0], sys.executable)
             compile(probe[2], '<live-probe>', 'exec')
 
+    def test_phantom_live_harness_preserves_redacted_failure_log(self):
+        module_spec = importlib.util.spec_from_file_location(
+            'azure_phantom_failure_evidence',
+            ROOT / 'scripts/test_azure_phantom_live.py')
+        module = importlib.util.module_from_spec(module_spec)
+        with mock.patch.object(sys, 'path', [str(ROOT / 'scripts'), *sys.path]):
+            module_spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / 'logs' / 'archive'
+            archive.mkdir(parents=True)
+            source = archive / 'deployment_live-test.log'
+            source.write_text('failed password-value token-value visible-context\n')
+
+            class Phantom:
+                PHANTOM_LOGS = root / 'logs'
+
+            class Runner:
+                evidence = root / 'evidence'
+
+            Runner.evidence.mkdir()
+            preserved = module.preserve_failure_log(
+                Phantom, Runner, 'live-test',
+                {'admin_password': 'password-value',
+                 'vault_token': 'token-value', 'domain': 'visible-context'})
+            target = Runner.evidence / 'deployment-failure.log'
+            self.assertTrue(preserved)
+            self.assertEqual(target.read_text(),
+                             'failed <redacted> <redacted> visible-context\n')
+            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+
     def test_mailinabox_installer_has_cloud_safe_noninteractive_inputs(self):
         configure = (ROOT / 'ghost_protocol/phantom/playbooks/email/tasks/configure.yml')
         text = configure.read_text()

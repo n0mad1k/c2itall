@@ -555,6 +555,27 @@ def verify_service_log_redaction(phantom, deployment_id, config):
     return {"service_key_material_absent": True}
 
 
+def preserve_failure_log(phantom, runner, deployment_id, config):
+    """Copy the Ansible failure log into evidence before teardown removes it."""
+    name = f"deployment_{deployment_id}.log"
+    candidates = (phantom.PHANTOM_LOGS / name,
+                  phantom.PHANTOM_LOGS / "archive" / name)
+    source = next((path for path in candidates if path.is_file()), None)
+    if source is None:
+        return False
+    content = source.read_text(errors="replace")
+    sensitive = ("password", "secret", "token", "private_key",
+                 "signing_key", "auth_key")
+    for key, value in config.items():
+        if (any(part in key.lower() for part in sensitive)
+                and isinstance(value, str) and value):
+            content = content.replace(value, "<redacted>")
+    target = runner.evidence / "deployment-failure.log"
+    target.write_text(content)
+    target.chmod(0o600)
+    return True
+
+
 def service_config(service):
     if service == "vpn":
         return {
@@ -824,6 +845,8 @@ def activate(service="vpn", operator_ip=None):
         live_passed = True
     except BaseException as error:
         failure = str(error)
+        if phantom is not None:
+            preserve_failure_log(phantom, runner, deployment_id, config)
         runner.record("failure.json", {"error": failure})
         print(f"Azure Phantom live test did not pass: {error}", file=sys.stderr)
     finally:
