@@ -764,7 +764,8 @@ def clean_phantom_files(phantom, deployment_id, config=None):
 
 def activate(service="vpn", operator_ip=None):
     runner = Runner(ROOT)
-    deployment_id = f"phaz-{service}-{uuid.uuid4().hex[:8]}"
+    service_slug = service.replace("_", "-")
+    deployment_id = f"phaz-{service_slug}-{uuid.uuid4().hex[:8]}"
     runner.evidence = ROOT / "logs" / "azure-phantom-live" / deployment_id
     runner.evidence.mkdir(parents=True, mode=0o700)
     group = f"c2itall-{deployment_id}"

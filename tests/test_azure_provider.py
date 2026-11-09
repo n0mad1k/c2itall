@@ -2245,6 +2245,7 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertNotIn('\n  environment:\n', text)
 
         live_harness = (ROOT / 'scripts/test_azure_phantom_live.py').read_text()
+        self.assertIn('service_slug = service.replace("_", "-")', live_harness)
         self.assertIn('"email_skip_network_checks": True', live_harness)
         self.assertIn('"domain": "box.example.com"', live_harness)
         self.assertIn('"email_first_user": "admin@example.com"', live_harness)
