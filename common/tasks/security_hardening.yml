@@ -1,5 +1,5 @@
 ---
-# Security hardening tasks for C2 server - Fixed AWS collection issues
+# Security hardening tasks shared by every provider
 
 - name: Check if system is updated
   apt:
@@ -24,10 +24,9 @@
   retries: 3
   delay: 5
 
-# Provider and role detection - DRY principle
+# Role detection
 - name: Determine deployment configuration
   set_fact:
-    is_aws_provider: "{{ provider | default('unknown') == 'aws' }}"
     is_c2_server: "{{ 'c2servers' in group_names }}"
     is_redirector: "{{ 'redirectors' in group_names }}"
 
@@ -37,9 +36,8 @@
       - operator_ip is defined and (operator_ip | string) is match('^\d{1,3}(\.\d{1,3}){3}$')
       - (redirector_ip is not defined) or ((redirector_ip | string) is match('^\d{1,3}(\.\d{1,3}){3}$'))
     fail_msg: "operator_ip and redirector_ip (if set) must each be a single valid IPv4 address (operator_ip={{ operator_ip | default('<undefined>') }}, redirector_ip={{ redirector_ip | default('<undefined>') }})"
-  when: not is_aws_provider
 
-# UFW Configuration Block - Non-AWS only
+# UFW Configuration Block
 - name: UFW detection and installation block
   block:
     - name: Check if UFW is installed
@@ -48,7 +46,7 @@
       failed_when: false
       changed_when: false
 
-    - name: Install UFW if not present (non-AWS)
+    - name: Install UFW if not present
       apt:
         name: ufw
         state: present
@@ -58,9 +56,8 @@
       retries: 3
       delay: 5
       when: ufw_check.rc != 0
-  when: not is_aws_provider
 
-- name: Configure UFW for non-AWS deployments
+- name: Configure UFW
   block:
     - name: Enable UFW with default deny incoming
       community.general.ufw:
@@ -125,9 +122,9 @@
             - "443"
             - "{{ shell_handler_port | default('4444') }}"
       when: is_redirector
-  when: not is_aws_provider and (ufw_check.rc == 0 or ufw_install is success)
+  when: ufw_check.rc == 0 or ufw_install is success
 
-# Iptables fallback configuration - Non-AWS only
+# Iptables fallback configuration
 - name: Configure basic iptables rules if UFW unavailable
   block:
     - name: Set up basic iptables rules for C2 server
@@ -195,7 +192,7 @@
         iptables-save > /etc/iptables/rules.v4
         ip6tables-save > /etc/iptables/rules.v6
       ignore_errors: yes
-  when: not is_aws_provider and (ufw_check.rc != 0 and (ufw_install is undefined or ufw_install is failed))
+  when: ufw_check.rc != 0 and (ufw_install is undefined or ufw_install is failed)
 
 # SSH Hardening - Universal application
 - name: Harden SSH configuration
@@ -347,68 +344,6 @@
     enabled: yes
   when: fail2ban_service_stat.stat.exists and fail2ban_config_updated.changed
 
-# AWS-specific security updates - NO MODULES REQUIRED
-- name: Check if we're running on AWS provider
-  set_fact:
-    is_aws_provider: "{{ hostvars['localhost']['provider'] | default('') == 'aws' }}"
-
-- name: AWS-specific security updates
-  block:
-    - name: Get redirector security group information
-      block:
-      - name: Check if infrastructure state file exists
-        stat:
-          path: "{{ playbook_dir }}/infrastructure_state_{{ hostvars['localhost']['deployment_id'] }}.json"
-        register: redirector_state_file
-        delegate_to: localhost
-        become: false
-
-      - name: Load redirector state if available
-        include_vars:
-          file: "{{ playbook_dir }}/infrastructure_state_{{ hostvars['localhost']['deployment_id'] }}.json"
-          name: redirector_state
-        when: redirector_state_file.stat.exists
-        delegate_to: localhost
-        become: false
-      
-    - name: Update redirector security group via raw AWS CLI
-      delegate_to: localhost
-      become: false
-      environment:
-        AWS_ACCESS_KEY_ID: "{{ hostvars['localhost']['aws_access_key'] }}"
-        AWS_SECRET_ACCESS_KEY: "{{ hostvars['localhost']['aws_secret_key'] }}"
-        AWS_DEFAULT_REGION: "{{ redirector_state.region | default(aws_region) }}"
-      no_log: true
-      shell: |
-        # Install AWS CLI if not present
-        if ! command -v aws &> /dev/null; then
-          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-          unzip -q awscliv2.zip
-          sudo ./aws/install --update
-          rm -rf aws awscliv2.zip
-        fi
-        
-        # Add security group rule (ignore if exists)
-        aws ec2 authorize-security-group-ingress \
-          --group-id {{ redirector_state.security_group_id }} \
-          --protocol tcp \
-          --port 22 \
-          --cidr {{ ansible_host }}/32 \
-          2>/dev/null || echo "Rule already exists or added successfully"
-      when: redirector_state is defined and redirector_state.security_group_id is defined
-      register: sg_update_result
-      ignore_errors: yes
-
-    - name: Display security group update result
-      debug:
-        msg: |
-          AWS Security Group Update: {{ 'SUCCESS' if sg_update_result.rc == 0 else 'COMPLETED' }}
-          C2 Server IP: {{ ansible_host }}
-          Security Group ID: {{ redirector_state.security_group_id | default('NOT FOUND') }}
-      when: sg_update_result is not skipped
-
-  when: is_aws_provider | bool
-
 # Final security status report
 - name: Generate security hardening report
   debug:
@@ -419,7 +354,7 @@
       Server Type: {{ 'C2 Server' if is_c2_server else 'Redirector' if is_redirector else 'Unknown' }}
       SSH Hardened: {{ 'YES' if ssh_config_updated.changed else 'ALREADY CONFIGURED' }}
       Fail2ban Configured: {{ 'YES' if fail2ban_config_updated.changed else 'ALREADY CONFIGURED' }}
-      Firewall: {{ 'AWS Security Groups' if is_aws_provider else 'UFW/iptables' }}
+      Firewall: UFW/iptables
       Log Cleaning: {{ 'ENABLED' if zero_logs | default(false) | bool else 'DISABLED' }}
       Auto Updates: ENABLED
       System Limits: CONFIGURED
