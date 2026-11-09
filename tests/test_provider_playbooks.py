@@ -104,6 +104,17 @@ class ProviderPlaybookSyntaxTests(unittest.TestCase):
         self.assertIn("Require enough root capacity for the full toolset", attack_box)
         self.assertIn('deployment_id: "{{ deployment_id }}"', webrunner)
 
+    def test_attack_box_handles_packages_missing_from_current_cloud_images(self):
+        content = (ROOT / "modules/attack-box/tasks/configure_attack_box.yml").read_text()
+        base = content[content.index("Install base packages with progress feedback"):
+                       content.index("register: apt_install_result")]
+        self.assertNotIn("libdnet-dev", content)
+        self.assertIn("libdumbnet-dev", content)
+        self.assertNotIn("- outguess", base)
+        self.assertNotIn("- bless", base)
+        self.assertIn("Check availability of optional attack-box packages", content)
+        self.assertIn("Install available optional attack-box packages", content)
+
     def test_webrunner_teardown_verifies_nodes_and_auxiliaries(self):
         playbook = (ROOT / "providers/webrunner.yml").read_text()
         for marker in (

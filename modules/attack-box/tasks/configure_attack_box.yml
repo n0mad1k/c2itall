@@ -168,11 +168,9 @@
     - binwalk
     - exiftool
     - steghide
-    - outguess
     - stegosuite
     - hexedit
     - ghex
-    - bless
     - radare2
     - gdb
     - valgrind
@@ -213,7 +211,7 @@
     - libpcap-dev
     - libnetfilter-queue-dev
     - libnfnetlink-dev
-    - libdnet-dev
+    - libdumbnet-dev
     - libpcre3-dev
     - libgtk2.0-dev
     - libgtk-3-dev
@@ -230,6 +228,26 @@
       - sslyze
       - radare2
   when: ansible_facts['distribution'] == 'Kali' or item not in attack_box_kali_only_packages
+
+- name: Check availability of optional attack-box packages
+  ansible.builtin.command:
+    argv:
+      - apt-cache
+      - show
+      - "{{ item }}"
+  loop:
+    - outguess
+    - bless
+  register: optional_attack_box_packages
+  changed_when: false
+  failed_when: false
+
+- name: Install available optional attack-box packages
+  ansible.builtin.apt:
+    name: "{{ item.item }}"
+    state: present
+  loop: "{{ optional_attack_box_packages.results }}"
+  when: item.rc == 0
 
 - name: Show package installation progress
   debug:
