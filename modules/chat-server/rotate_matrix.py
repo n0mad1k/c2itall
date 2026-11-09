@@ -196,6 +196,65 @@ def _matrix_request(config, method, path, payload=None, token=None):
     return json.loads(content or b"{}")
 
 
+_REMOTE_ADMIN_REQUEST = """\
+import http.client
+import json
+import sys
+
+request = json.load(sys.stdin)
+connection = http.client.HTTPConnection("127.0.0.1", 8008, timeout=30)
+headers = {"Content-Type": "application/json",
+           "Authorization": "Bearer " + request["token"]}
+body = None if request["payload"] is None else json.dumps(request["payload"])
+try:
+    connection.request(request["method"], request["path"], body, headers)
+    response = connection.getresponse()
+    content = response.read().decode("utf-8", "replace")
+finally:
+    connection.close()
+print(json.dumps({"status": response.status, "body": content}))
+"""
+
+
+def _matrix_admin_request(config, method, path, payload, token):
+    """Call Synapse's loopback-only admin API without exposing credentials."""
+    key = Path(config.get("ssh_key") or config.get("ssh_private_key_path", ""))
+    known_hosts = _phantom()._ssh_known_hosts_path(config["deployment_id"])
+    if (not key.is_file() or key.is_symlink() or not known_hosts.is_file()
+            or known_hosts.is_symlink()):
+        raise RotationError("Secure SSH material is unavailable for Matrix admin API")
+    command = [
+        "ssh", "-F", "/dev/null", "-o", "BatchMode=yes",
+        "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=10",
+        "-o", "StrictHostKeyChecking=yes",
+        "-o", "GlobalKnownHostsFile=/dev/null",
+        "-o", f"UserKnownHostsFile={known_hosts}", "-i", str(key),
+        "--", f"{config.get('ssh_user', 'root')}@{config['target_host']}",
+        "python3 -c " + shlex.quote(_REMOTE_ADMIN_REQUEST),
+    ]
+    request = json.dumps({
+        "method": method, "path": path, "payload": payload, "token": token})
+    try:
+        result = subprocess.run(
+            command, input=request, text=True, capture_output=True,
+            timeout=45, check=False)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RotationError("Matrix admin API SSH request failed") from error
+    if result.returncode:
+        raise RotationError("Matrix admin API SSH request failed")
+    try:
+        envelope = json.loads(result.stdout)
+        status = int(envelope["status"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise RotationError("Matrix admin API returned an invalid response") from error
+    if status < 200 or status >= 300:
+        raise RotationError(f"Matrix admin API {path} returned HTTP {status}")
+    try:
+        return json.loads(envelope["body"] or "{}")
+    except (TypeError, ValueError) as error:
+        raise RotationError("Matrix admin API returned an invalid response") from error
+
+
 def _login(config):
     response = _matrix_request(config, "POST", "/_matrix/client/v3/login", {
         "type": "m.login.password",
@@ -209,7 +268,7 @@ def _login(config):
 
 
 def _create_registration_token(config, access_token, uses, expiry):
-    response = _matrix_request(
+    response = _matrix_admin_request(
         config, "POST", "/_synapse/admin/v1/registration_tokens/new",
         {"length": 24, "uses_allowed": uses, "expiry_time": int(expiry * 1000)},
         access_token)

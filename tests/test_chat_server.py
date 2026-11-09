@@ -199,7 +199,8 @@ class MatrixRotationTests(unittest.TestCase):
         api = {
             "login": lambda config: "access-" + config["deployment_id"],
             "create_token": lambda config, access, uses, expiry: (
-                calls.append(("token", uses, expiry)) or "join-secret"),
+                calls.append(("token", config["deployment_id"], access,
+                              uses, expiry)) or "join-secret"),
             "announce": lambda config, access, room, replacement, token, deadline: (
                 calls.append(("announce", room, replacement["domain"], token, deadline))
                 or "message containing join-secret"),
@@ -211,7 +212,8 @@ class MatrixRotationTests(unittest.TestCase):
         self.assertEqual(state["phase"], "grace")
         self.assertEqual(state["replacement"]["domain"], "matrix-2.example.test")
         self.assertTrue(state["replacement"]["matrix_registration_requires_token"])
-        self.assertEqual(calls[0], ("token", 25, 3700))
+        self.assertEqual(
+            calls[0], ("token", deployed[0], "access-" + deployed[0], 25, 3700))
         self.assertEqual(calls[1][3], "join-secret")
         self.assertNotIn("join-secret", json.dumps(state))
         self.assertEqual(
@@ -229,6 +231,36 @@ class MatrixRotationTests(unittest.TestCase):
         self.assertEqual(state["active"]["domain"], "matrix-2.example.test")
         self.assertEqual(retired, [self.active])
         self.assertEqual(len(deployed), 1)
+
+    def test_registration_token_uses_loopback_admin_api_over_ssh(self):
+        key = self.base / "key"
+        known_hosts = self.base / "known_hosts"
+        key.write_text("private key")
+        key.chmod(0o600)
+        known_hosts.write_text("host key")
+        config = dict(
+            self.active, ssh_key=str(key), ssh_user="azureuser")
+        response = {
+            "status": 200,
+            "body": json.dumps({"token": "limited-join-token"}),
+        }
+        completed = mock.Mock(
+            returncode=0, stdout=json.dumps(response), stderr="")
+        with mock.patch.object(
+                self.rotation, "_phantom",
+                return_value=mock.Mock(
+                    _ssh_known_hosts_path=mock.Mock(return_value=known_hosts))):
+            with mock.patch.object(
+                    self.rotation.subprocess, "run", return_value=completed) as run:
+                token = self.rotation._create_registration_token(
+                    config, "admin-access-token", 5, 3700)
+        self.assertEqual(token, "limited-join-token")
+        command = run.call_args.args[0]
+        self.assertNotIn("admin-access-token", " ".join(command))
+        self.assertIn("127.0.0.1", " ".join(command))
+        request = json.loads(run.call_args.kwargs["input"])
+        self.assertEqual(request["token"], "admin-access-token")
+        self.assertEqual(request["payload"]["uses_allowed"], 5)
 
     def test_failed_replacement_is_removed_and_active_server_is_kept(self):
         self.write_state(self.state())
