@@ -714,7 +714,70 @@ class Phishing:
         return report
 
 
-WORKLOADS = {cls.name: cls for cls in (AttackBox, Redirector, FrontedRedirector, C2, PayloadServer, Phishing,
+class Share(SingleHost):
+    """Phantom's Nextcloud handed a driver VM, then bound to the tailnet only."""
+    name = 'share'
+    deployment_type = 'share_drive'
+    source_paths = ('modules/share-drive',)
+
+    def module(self):
+        spec = importlib.util.spec_from_file_location(
+            'live_share_module', ROOT / 'modules' / 'share-drive' / 'deploy_share.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def config(self, provider, deployment_id, operator_ip):
+        config = self.base_config(provider, deployment_id, operator_ip)
+        # A blank auth key leaves Tailscale installed but unauthenticated, which is
+        # all a live run may do: joining a tailnet is an operator decision.
+        config.update(server_type='cloud', domain='share.internal', cloud_admin_user='liveadmin',
+                      cloud_storage_gb='10', tailscale_auth_key='')
+        return config
+
+    def deploy(self, config):
+        return self.module().deploy_share(config)
+
+    def verify(self, context, config):
+        local = "curl -ks -o /dev/null -w '%{http_code}' --max-time 10 -H 'Host: share.internal' "
+        occ = 'sudo -n -u www-data php /var/www/nextcloud/occ '
+        report = checks(context, [
+            ('mariadb_active', 'test "$(systemctl is-active mariadb)" = active'),
+            ('nginx_active', 'test "$(systemctl is-active nginx)" = active'),
+            ('tailscaled_active', 'test "$(systemctl is-active tailscaled)" = active'),
+            ('tailscaled_enabled', 'test "$(systemctl is-enabled tailscaled)" = enabled'),
+            ('tailscale_cli', 'command -v tailscale >/dev/null'),
+            ('admin_password_private', 'test "$(sudo -n stat -c %a /var/www/nextcloud/.admin_password)" = 600'),
+            ('nextcloud_installed', occ + "status --output=json | grep -Eq '\"installed\"[[:space:]]*:[[:space:]]*true'"),
+            ('trusted_domain', occ + 'config:system:get trusted_domains | grep -qx share.internal'),
+            ('firewall_tailnet_only', "sudo -n ufw status | grep -q tailscale0"),
+            ('no_public_web_rule', "! sudo -n ufw status | grep -Eq '^(80|443)/tcp +ALLOW +Anywhere'"),
+            ('local_status_page', 'test "$(' + local + 'https://127.0.0.1/status.php)" = 200'),
+            ('sshd_no_password', "sudo -n /usr/sbin/sshd -T | grep -iq '^passwordauthentication no$'"),
+        ], timeout=180)
+        exposed = subprocess.run(
+            ['curl', '-k', '--silent', '--max-time', '15', '-o', '/dev/null',
+             'https://' + context.address + '/status.php'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        require(exposed.returncode != 0, 'The share drive answered the public internet')
+        report['closed_to_internet'] = True
+        report['security_group_rules'] = self.expect_rules(context, config, [
+            ('tcp', '22', config['operator_ip'] + '/32'), ('udp', '41641', '*')])
+        return report
+
+    def phantom_work(self, config):
+        return self.module()._load_phantom().WORK_DIR / config['deployment_id']
+
+    def local_artifacts(self, provider, config):
+        return super().local_artifacts(provider, config) + [self.phantom_work(config)]
+
+    def clean_local(self, config):
+        # Phantom keeps its own vars and inventory per deployment; the Azure
+        # Phantom harness removes them the same way after a verified teardown.
+        shutil.rmtree(self.phantom_work(config), ignore_errors=True)
+
+
+WORKLOADS = {cls.name: cls for cls in (Share, AttackBox, Redirector, FrontedRedirector, C2, PayloadServer, Phishing,
                                         Tracker, LoggingServer, Hashtopolis)}
 
 
@@ -978,6 +1041,7 @@ def cleanup(runner, cloud, provider, workload, config, identity, deployed):
     getattr(cloud, 'settle', lambda: None)()
     totals = cloud.totals()
     require(totals == baseline, 'Provider inventory was not restored: {0} != {1}'.format(totals, baseline))
+    getattr(workload, 'clean_local', lambda config: None)(config)
     leftovers = [str(path) for path in workload.local_artifacts(provider, config) if path.exists()]
     for path in (ROOT / 'logs' / ('deployment_' + deployment_id + '.log'), info):
         if path.exists():
