@@ -35,6 +35,8 @@ class AzureDriver(CloudDriver):
             return UBUNTU_2204_IMAGE
         return None
 
+    region_key = 'azure_location'
+
     def region(self, config):
         return config.get('azure_location', 'eastus')
 

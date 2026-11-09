@@ -34,28 +34,12 @@ from utils.provider_rates import (
 
 WEBRUNNER_INPUTS = Path(__file__).parent / 'inputs'
 
-# Transition providers keep their region and quota knowledge here until they
-# move to a CloudDriver; driver providers answer for themselves.
-_LEGACY_REGIONS = {
-    'linode': lambda config: config.get('linode_regions', [config.get('linode_region', 'us-east')]),
-    'aws': lambda config: config.get('aws_regions', [config.get('aws_region', 'us-east-1')]),
-    'flokinet': lambda config: [config.get('flokinet_region', 'default')],
-}
-_LEGACY_NODE_QUOTA = {'linode': 20, 'aws': 32, 'flokinet': 10}
-
-
 def _provider_regions(provider, config):
-    driver = provider_driver(provider)
-    if driver is not None:
-        return [driver.region(config)]
-    return _LEGACY_REGIONS.get(provider, lambda config: ['default'])(config)
+    return provider_driver(provider).regions(config)
 
 
 def _provider_node_quota(provider):
-    driver = provider_driver(provider)
-    if driver is not None:
-        return driver.node_quota
-    return _LEGACY_NODE_QUOTA.get(provider, 20)
+    return provider_driver(provider).node_quota
 
 
 # ── menu ──────────────────────────────────────────────────────────────────────
@@ -550,12 +534,6 @@ def gather_webrunner_parameters() -> dict | None:
     else:
         print(f"{COLORS['CYAN']}  Nodes will remain running after scan — remember to teardown manually.{COLORS['RESET']}")
 
-    # Apply per-provider instance defaults if not set by gather_provider_config
-    if 'linode_instance_type' not in config:
-        config['linode_instance_type'] = DEFAULT_INSTANCE.get('linode', 'g6-nanode-1')
-    if 'aws_instance_type' not in config:
-        config['aws_instance_type'] = DEFAULT_INSTANCE.get('aws', 't3.small')
-
     return config
 
 
@@ -649,8 +627,7 @@ def _execute_webrunner_legacy(config):
         set_provider_environment({**config, 'provider': provider})
     success = execute_playbook('providers/webrunner.yml', config)
     if success:
-        if (config.get('teardown_after_scan', True) and
-                'flokinet' not in config['providers']):
+        if config.get('teardown_after_scan', True):
             public_key = Path(config.get('ssh_key_path', ''))
             private_key = Path(str(public_key).removesuffix('.pub'))
             for path in (private_key, public_key):

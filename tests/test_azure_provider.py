@@ -27,6 +27,19 @@ from utils import provider_registry as registry
 from utils import vm_workloads
 from utils.workloads import WorkloadProfile, load_profile
 
+# A registered provider that still has only the legacy executor keeps the
+# engine's fallback paths covered now that every shipped provider has a driver.
+LEGACY_SPEC = registry.ProviderSpec(
+    'Legacyco', 'root', True,
+    legacy_capabilities={'attack_box', 'c2', 'chat', 'payload_server', 'phishing',
+                         'phantom', 'redirector', 'webrunner'})
+
+
+def legacy_provider(*names, **overrides):
+    spec = LEGACY_SPEC._replace(**overrides) if overrides else LEGACY_SPEC
+    return mock.patch.dict(registry.PROVIDER_SPECS,
+                           {name: spec for name in (names or ('legacyco',))})
+
 spec = importlib.util.spec_from_file_location("azure_smoke", ROOT / "scripts/deploy_azure_smoke.py")
 smoke = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(smoke)
@@ -493,37 +506,29 @@ class RoutingAndTemplateTests(AzureFixture):
     def test_old_provider_selection_and_azure_capability(self):
         with mock.patch("builtins.input", return_value="1"), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(provider_utils.select_provider(), "aws")
-            self.assertEqual(provider_utils.select_provider("infrastructure"), "azure")
+            self.assertEqual(provider_utils.select_provider("infrastructure"), "aws")
         with mock.patch("builtins.input", return_value="3"), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(provider_utils.select_provider(), "flokinet")
 
-    def test_deferred_workloads_offer_new_routes_and_explicit_legacy_fallbacks(self):
-        self.assertEqual(
-            provider_utils.available_providers('c2', legacy_fallback=True),
-            ['aws', 'linode', 'flokinet', 'azure'])
-        self.assertEqual(
-            provider_utils.available_providers('phishing', legacy_fallback=True),
-            ['aws', 'linode', 'flokinet', 'azure'])
+    def test_every_driver_provider_serves_every_profiled_workload(self):
+        everyone = ['aws', 'linode', 'flokinet', 'azure']
+        for workload in ('c2', 'phishing', 'attack_box', 'tracker', 'share'):
+            with self.subTest(workload=workload):
+                self.assertEqual(
+                    provider_utils.available_providers(workload, legacy_fallback=True), everyone)
         # A driver only serves workloads that publish a profile; drop one and
-        # the provider silently leaves that menu.
+        # every provider silently leaves that menu.
         with mock.patch.object(
                 registry, 'driver_workloads',
                 return_value=[workload for workload in registry.driver_workloads()
                               if workload != 'phishing']):
             self.assertEqual(
-                provider_utils.available_providers('phishing', legacy_fallback=True),
-                ['aws', 'linode', 'flokinet'])
-        self.assertEqual(
-            provider_utils.available_providers('attack_box', legacy_fallback=True),
-            ['aws', 'linode', 'azure'])
-        self.assertEqual(
-            provider_utils.available_providers(
-                'attack_box', legacy_fallback=True, variant='quick_recon'),
-            ['aws', 'linode', 'azure'])
-        self.assertEqual(
-            provider_utils.available_providers(
-                'attack_box', legacy_fallback=True, variant='kali'),
-            ['aws', 'linode', 'azure'])
+                provider_utils.available_providers('phishing', legacy_fallback=True), [])
+        for variant in ('quick_recon', 'kali', 'ubuntu'):
+            self.assertEqual(
+                provider_utils.available_providers(
+                    'attack_box', legacy_fallback=True, variant=variant),
+                everyone)
 
     def test_workload_config_prefers_registered_handler_then_legacy_loader(self):
         adapter = mock.Mock()
@@ -539,17 +544,22 @@ class RoutingAndTemplateTests(AzureFixture):
                 {'source': 'new'})
             adapter.gather_config.assert_called_once_with()
 
-        from utils import aws_utils
+        from utils import aws_cloud
         with mock.patch.object(
-                aws_utils, 'gather_aws_config', return_value={'source': 'transition'}) as loader:
+                aws_cloud.AwsDriver, 'gather_config', return_value={'source': 'driver'}) as loader:
             self.assertEqual(
                 provider_utils.gather_provider_config(
                     'aws', 'c2', legacy_fallback=True),
-                {'source': 'transition'})
+                {'source': 'driver', 'provider_manages_ssh_key': True})
             loader.assert_called_once_with()
 
-        with self.assertRaisesRegex(ValueError, 'No configuration route'):
-            provider_utils.gather_provider_config('flokinet', 'attack_box', legacy_fallback=True)
+        with legacy_provider(config_loader='utils.azure_utils:gather_azure_config'), \
+                mock.patch.object(azure, 'gather_azure_config', return_value={'source': 'legacy'}):
+            self.assertEqual(
+                provider_utils.gather_provider_config('legacyco', 'c2', legacy_fallback=True),
+                {'source': 'legacy'})
+        with legacy_provider(), self.assertRaisesRegex(ValueError, 'No configuration route'):
+            provider_utils.gather_provider_config('legacyco', 'tracker', legacy_fallback=True)
 
     def test_adapter_key_ownership_is_explicit_and_shared_by_modules(self):
         with mock.patch.object(
@@ -599,9 +609,6 @@ class RoutingAndTemplateTests(AzureFixture):
             self.assertNotIn('from utils.ssh_utils import generate_ssh_key', source)
 
     def test_attack_box_sizing_is_applied_through_provider_adapter(self):
-        self.assertEqual(
-            registry.PROVIDER_SPECS['linode'].profile_loader,
-            'utils.linode_utils:apply_linode_profile')
         linode = {
             'provider': 'linode', 'provider_workload': 'attack_box',
             'deployment_id': 'profile-test',
@@ -615,44 +622,30 @@ class RoutingAndTemplateTests(AzureFixture):
                 provider_utils.apply_provider_profile(
                     linode, 'instance_size', profile)
                 self.assertEqual(linode['linode_instance_type'], instance_type)
-
         with self.assertRaisesRegex(ValueError, 'Unsupported Linode'):
             provider_utils.apply_provider_profile(
                 linode, 'instance_size', 'invalid')
-
         unchanged = dict(linode)
         provider_utils.apply_provider_profile(linode, 'unknown_profile', 'small')
         self.assertEqual(linode, unchanged)
 
-        for provider in ('aws', 'azure'):
+        aws = {'provider': 'aws', 'provider_workload': 'attack_box',
+               'deployment_id': 'profile-test'}
+        provider_utils.apply_provider_profile(aws, 'instance_size', 'small')
+        self.assertEqual(aws['aws_instance_type'], 't3.small')
+        self.assertNotIn('linode_instance_type', aws)
+        for provider in ('azure', 'flokinet'):
             config = {
                 'provider': provider, 'provider_workload': 'attack_box',
                 'deployment_id': 'profile-test',
             }
             provider_utils.apply_provider_profile(
                 config, 'instance_size', 'small')
-            self.assertNotIn('linode_instance_type', config)
-
-        config = {'provider': 'aws', 'provider_workload': 'attack_box'}
-        hook = mock.Mock(return_value=config)
-        spec = registry.PROVIDER_SPECS['aws']._replace(
-            profile_loader='fake:profile')
-        with mock.patch.dict(registry.PROVIDER_SPECS, {'aws': spec}), \
-                mock.patch.object(registry, '_load', return_value=hook) as load:
-            self.assertIs(
-                registry.apply_transition_profile(
-                    'aws', config, 'attack_box', 'instance_size', 'small'),
-                config)
-        load.assert_called_once_with('fake:profile')
-        hook.assert_called_once_with(
-            config, 'attack_box', 'instance_size', 'small')
+            self.assertEqual(set(config), {'provider', 'provider_workload', 'deployment_id'})
 
         source = (ROOT / 'modules/attack-box/deploy_attack_box.py').read_text()
         self.assertNotIn('provider == "linode"', source)
         self.assertEqual(source.count('apply_provider_profile('), 2)
-        transition_source = (
-            ROOT / 'utils/legacy_provider_adapter.py').read_text()
-        self.assertNotIn("self.provider == 'linode'", transition_source)
 
     def test_canonical_workload_dispatch_never_retries_failed_handler(self):
         config = {'provider': 'azure', 'provider_workload': 'phishing',
@@ -675,8 +668,9 @@ class RoutingAndTemplateTests(AzureFixture):
             self.assertFalse(deployment_engine.dispatch_workload(config, legacy))
         legacy.assert_not_called()
 
-        legacy_config = dict(config, provider='aws')
-        with mock.patch.object(deployment_engine, 'workload_route', return_value=None):
+        legacy_config = dict(config, provider='legacyco')
+        with legacy_provider(), \
+                mock.patch.object(deployment_engine, 'workload_route', return_value=None):
             self.assertTrue(
                 deployment_engine.dispatch_workload(legacy_config, legacy))
         legacy.assert_called_once_with(legacy_config)
@@ -855,13 +849,14 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertNotIn('subprocess.run', executor)
         self.assertNotIn('NamedTemporaryFile', executor)
 
-    def test_failed_transition_playbook_enters_verified_cleanup_once(self):
+    def test_failed_legacy_playbook_enters_verified_cleanup_once(self):
         config = {
-            'provider': 'aws', 'provider_workload': 'c2',
-            'deployment_id': 'failed-transition', 'c2_only': True,
+            'provider': 'legacyco', 'provider_workload': 'c2',
+            'deployment_id': 'failed-legacy', 'c2_only': True,
         }
-        with mock.patch.object(
-                deployment_engine, 'set_provider_environment') as environment, \
+        with legacy_provider(), mock.patch('os.path.exists', return_value=True), \
+                mock.patch.object(
+                    deployment_engine, 'set_provider_environment') as environment, \
                 mock.patch.object(
                     deployment_engine, 'execute_playbook',
                     return_value=False) as execute, \
@@ -871,18 +866,18 @@ class RoutingAndTemplateTests(AzureFixture):
                 mock.patch.object(deployment_engine, 'save_deployment_info') as record:
             self.assertFalse(deployment_engine.deploy_infrastructure(config))
         environment.assert_called_once_with(config)
-        execute.assert_called_once_with('providers/AWS/c2.yml', config)
+        execute.assert_called_once_with('providers/Legacyco/c2.yml', config)
         cleanup.assert_called_once_with(config)
         # Unverified cleanup keeps the record a later teardown recovers from.
         record.assert_called_once_with(config)
 
     def test_composite_dispatch_uses_one_lifecycle_and_refuses_partial_fallback(self):
-        config = {'providers': ['linode', 'aws'],
+        config = {'providers': ['legacyco', 'legacyco2'],
                   'provider_workload': 'webrunner'}
         legacy = mock.Mock(return_value=True)
-        with mock.patch.object(
+        with legacy_provider('legacyco', 'legacyco2'), mock.patch.object(
                 deployment_engine, 'composite_workload_routes',
-                return_value=[('linode', None), ('aws', None)]):
+                return_value=[('legacyco', None), ('legacyco2', None)]):
             self.assertTrue(
                 deployment_engine.dispatch_composite_workload(config, legacy))
         legacy.assert_called_once_with(config)
@@ -924,103 +919,16 @@ class RoutingAndTemplateTests(AzureFixture):
             'providers': ['linode', 'aws'],
             'provider_workload': 'webrunner'})
         self.assertEqual([provider for provider, _ in routes], ['linode', 'aws'])
-        self.assertEqual([adapter.provider for _, adapter in routes], ['linode', 'aws'])
-        self.assertEqual(len({type(adapter) for _, adapter in routes}), 1)
-
-    def test_transition_routes_call_preserved_executor_once(self):
-        from utils.legacy_provider_adapter import LegacyProviderAdapter
-        expected = {
-            'aws': {'attack_box', 'c2', 'chat', 'payload_server', 'phishing',
-                    'phantom', 'redirector', 'webrunner'},
-            'linode': {'attack_box', 'c2', 'chat', 'payload_server',
-                       'phishing', 'phantom', 'redirector', 'webrunner'},
-            'flokinet': {'c2', 'chat', 'phishing', 'phantom', 'redirector',
-                         'webrunner'},
-        }
-        for provider, workloads in expected.items():
-            with self.subTest(provider=provider):
-                self.assertEqual(
-                    registry.LEGACY_TRANSITION_CAPABILITIES[provider],
-                    workloads)
-                self.assertTrue(workloads.issubset(
-                    registry.PROVIDER_SPECS[provider].capabilities))
-                for workload in workloads:
-                    adapter = registry.provider_dispatcher(provider).route(workload)
-                    self.assertIsInstance(adapter, LegacyProviderAdapter)
-                    self.assertEqual(adapter.provider, provider)
-
-        config = {'provider': 'aws', 'provider_workload': 'c2',
-                  'deployment_id': 'transition-test'}
-        legacy = mock.Mock(return_value=False)
-        self.assertFalse(deployment_engine.dispatch_workload(config, legacy))
-        legacy.assert_called_once_with(config)
-        legacy.reset_mock(side_effect=True)
-        legacy.side_effect = RuntimeError('preserved executor failed')
-        with self.assertRaisesRegex(RuntimeError, 'preserved executor failed'):
-            deployment_engine.dispatch_workload(config, legacy)
-        legacy.assert_called_once_with(config)
-
-        with mock.patch.object(
-                cleanup_engine, 'execute_legacy_teardown', return_value=True) as cleanup:
-            self.assertTrue(registry.workload_route(config).cleanup(config))
-        cleanup.assert_called_once_with(config)
-
-        transition_source = (
-            ROOT / 'utils/legacy_provider_adapter.py').read_text()
-        self.assertNotIn('MIGRATED_CAPABILITIES', transition_source)
-
-    def test_transition_bridge_normalizes_phantom_and_chat_provider_inputs(self):
-        from utils.legacy_provider_adapter import LegacyProviderAdapter
-
-        linode = {
-            'provider': 'linode', 'provider_workload': 'chat',
-            'deployment_id': 'chat-test', 'linode_token': 'token',
-            'linode_region': 'us-east',
-            'linode_instance_type': 'g6-standard-1',
-            'linode_image': 'linode/debian12',
-        }
-        execute = mock.Mock(return_value=True)
-        adapter = LegacyProviderAdapter('linode')
-        self.assertTrue(adapter.deploy_with_legacy(linode, execute))
-        execute.assert_called_once_with(linode)
-        self.assertEqual(linode['api_token'], 'token')
-        self.assertEqual(linode['region'], 'us-east')
-        self.assertEqual(linode['plan'], 'g6-standard-1')
-        self.assertEqual(linode['image'], 'linode/debian12')
-        self.assertEqual(linode['phantom_name'], 'ph-chat-test')
-
-        aws = {
-            'provider': 'aws', 'provider_workload': 'phantom',
-            'deployment_id': 'phantom-test', 'region': 'us-east-1',
-            'instance_type': 't3.small',
-        }
-        LegacyProviderAdapter('aws').deploy_with_legacy(aws, mock.Mock(
-            return_value=True))
-        self.assertEqual(aws['aws_region'], 'us-east-1')
-        self.assertEqual(aws['aws_instance_type'], 't3.small')
-
-        flokinet = {
-            'provider': 'flokinet', 'provider_workload': 'chat',
-            'deployment_id': 'floki-chat', 'c2_ip': '192.0.2.10',
-        }
-        LegacyProviderAdapter('flokinet').deploy_with_legacy(
-            flokinet, mock.Mock(return_value=True))
-        self.assertEqual(flokinet['target_host'], '192.0.2.10')
-        self.assertEqual(flokinet['ssh_user'], 'root')
-        with self.assertRaisesRegex(ValueError, 'pre-provisioned host'):
-            LegacyProviderAdapter('flokinet').deploy_with_legacy({
-                'provider': 'flokinet', 'provider_workload': 'phantom',
-                'deployment_id': 'missing-host',
-            }, mock.Mock())
+        self.assertEqual([adapter.driver.provider for _, adapter in routes], ['linode', 'aws'])
+        self.assertEqual({type(adapter) for _, adapter in routes}, {vm_workloads.NodeAdapter})
 
     def test_provider_coverage_audit_reports_actual_azure_gaps(self):
         validation = registry.validate_provider_registry(load_references=True)
         self.assertEqual(validation, {
             'providers': 4, 'workloads': 13, 'controllers': 13,
-            'pairs': 52, 'routes': 22, 'driver_routes': 13, 'staged_routes': 0,
+            'pairs': 52, 'routes': 0, 'driver_routes': 52, 'staged_routes': 0,
             'counts': {
-                'native': 13, 'transition': 22,
-                'legacy_fallback': 0, 'staged': 0, 'unsupported': 17,
+                'native': 52, 'legacy_fallback': 0, 'staged': 0, 'unsupported': 0,
             },
         })
         rows = registry.provider_support_matrix()
@@ -1042,12 +950,10 @@ class RoutingAndTemplateTests(AzureFixture):
              if provider == 'azure' and
              lookup[(provider, workload)] == 'staged'},
             set())
-        self.assertEqual(lookup[('aws', 'c2')], 'transition')
-        self.assertEqual(lookup[('linode', 'attack_box')], 'transition')
-        self.assertEqual(lookup[('flokinet', 'attack_box')], 'unsupported')
-        self.assertEqual(lookup[('flokinet', 'payload_server')], 'unsupported')
-        self.assertEqual(lookup[('aws', 'chat')], 'transition')
-        self.assertEqual(lookup[('aws', 'infrastructure')], 'unsupported')
+        self.assertEqual({kind for kind in lookup.values()}, {'native'})
+        with legacy_provider():
+            self.assertEqual(registry.provider_route_kind('legacyco', 'c2'), 'legacy_fallback')
+            self.assertEqual(registry.provider_route_kind('legacyco', 'tracker'), 'unsupported')
         azure_attack_box = next(
             row for row in rows
             if row['provider'] == 'azure' and row['workload'] == 'attack_box')
@@ -1105,9 +1011,6 @@ class RoutingAndTemplateTests(AzureFixture):
                     self.assertRaisesRegex(ValueError, 'shadow the provider driver'):
                 registry.validate_provider_registry(load_references=False)
 
-        aws = registry.PROVIDER_SPECS['aws']
-        invalid = aws._replace(
-            routes=dict(aws.routes, attack_box='fake:factory'))
         original_load = registry._load
 
         def load(reference):
@@ -1115,7 +1018,7 @@ class RoutingAndTemplateTests(AzureFixture):
                 return lambda: object()
             return original_load(reference)
 
-        with mock.patch.dict(registry.PROVIDER_SPECS, {'aws': invalid}), \
+        with legacy_provider(routes={'attack_box': 'fake:factory'}), \
                 mock.patch.object(registry, '_load', side_effect=load), \
                 self.assertRaisesRegex(TypeError, 'invalid adapter'):
             registry.validate_provider_registry(load_references=True)
@@ -1136,16 +1039,19 @@ class RoutingAndTemplateTests(AzureFixture):
                 self.assertRaisesRegex(ValueError, 'variant support'):
             registry.validate_provider_registry(load_references=False)
 
-        overlapping = aws._replace(
-            staged_routes=dict(aws.staged_routes, attack_box='fake:factory'))
-        with mock.patch.dict(registry.PROVIDER_SPECS, {'aws': overlapping}), \
+        with legacy_provider(routes={'attack_box': 'fake:factory'},
+                             staged_routes={'attack_box': 'fake:factory'}), \
                 self.assertRaisesRegex(ValueError, 'routes overlap'):
             registry.validate_provider_registry(load_references=False)
 
         class Disabled(registry.WorkloadAdapter):
             deployment_enabled = False
 
-        with mock.patch.object(registry, '_load', return_value=Disabled), \
+        def load_disabled(reference):
+            return Disabled if reference == 'fake:factory' else original_load(reference)
+
+        with legacy_provider(routes={'attack_box': 'fake:factory'}), \
+                mock.patch.object(registry, '_load', side_effect=load_disabled), \
                 self.assertRaisesRegex(TypeError, 'Active provider route is disabled'):
             registry.validate_provider_registry(load_references=True)
 
@@ -1288,7 +1194,7 @@ class RoutingAndTemplateTests(AzureFixture):
         logs = self.home / 'logs'
         logs.mkdir()
         config = {
-            'provider': 'aws', 'provider_workload': 'c2',
+            'provider': 'legacyco', 'provider_workload': 'c2',
             'deployment_id': 'secure-lifecycle', 'deployment_type': 'c2',
             'aws_access_key': 'access', 'aws_secret_key': 'secret',
         }
@@ -1314,15 +1220,17 @@ class RoutingAndTemplateTests(AzureFixture):
             self.assertNotIn('secret', ' '.join(argv))
             return subprocess.CompletedProcess(argv, 0, '', '')
 
-        with mock.patch.object(cleanup_engine.subprocess, 'run', side_effect=run):
+        with legacy_provider(teardown_keys=('aws_access_key', 'aws_secret_key'),
+                             credential_environment=(('aws_access_key', 'AWS_ACCESS_KEY_ID'),
+                                                     ('aws_secret_key', 'AWS_SECRET_ACCESS_KEY'))), \
+                mock.patch.object(cleanup_engine.subprocess, 'run', side_effect=run):
             self.assertTrue(cleanup_engine.run_teardown_playbook('cleanup.yml', config))
         self.assertEqual(captured['mode'], 0o600)
         self.assertEqual(captured['data']['aws_secret_key'], 'secret')
         self.assertFalse(captured['path'].exists())
 
     def test_saved_workload_reenters_dispatcher_after_restart(self):
-        from utils.legacy_provider_adapter import LegacyProviderAdapter
-
+        from utils import aws_cloud
         logs = self.home / 'logs'
         logs.mkdir()
         config = {
@@ -1340,13 +1248,14 @@ class RoutingAndTemplateTests(AzureFixture):
                 'logs/deployment_info_restart-route.txt')
         finally:
             os.chdir(previous)
-
         self.assertEqual(restored['provider_workload'], 'c2')
-        self.assertIsInstance(registry.workload_route(restored), LegacyProviderAdapter)
-        with mock.patch.object(
-                cleanup_engine, 'execute_legacy_teardown', return_value=True) as legacy:
+        route = registry.workload_route(restored)
+        self.assertIsInstance(route, vm_workloads.SingleVmAdapter)
+        self.assertEqual(route.driver.provider, 'aws')
+        with mock.patch.object(aws_cloud.AwsDriver, 'cleanup', return_value=True) as cleanup, \
+                mock.patch.object(cleanup_engine, 'archive_deployment_logs'):
             self.assertTrue(cleanup_engine.execute_teardown(restored))
-        legacy.assert_called_once_with(restored)
+        cleanup.assert_called_once_with({'deployment_id': 'restart-route'})
 
     def test_webrunner_uses_registry_order_and_composite_dispatch(self):
         module_spec = importlib.util.spec_from_file_location(
@@ -1429,15 +1338,16 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertTrue(self.key.exists())
 
     def test_composite_teardown_retires_shared_artifacts_after_every_leg(self):
-        config = {'providers': ['linode', 'aws'], 'provider_workload': 'webrunner',
+        config = {'providers': ['legacyco', 'legacyco2'], 'provider_workload': 'webrunner',
                   'deployment_id': 'comp', 'ssh_key_path': str(self.key) + '.pub'}
-        with mock.patch.object(cleanup_engine, 'execute_legacy_teardown',
-                               return_value=True) as legacy, \
+        with legacy_provider('legacyco', 'legacyco2'), \
+                mock.patch.object(cleanup_engine, 'execute_legacy_teardown',
+                                  return_value=True) as legacy, \
                 mock.patch.object(cleanup_engine, 'cleanup_ssh_keys_for_deployment') as keys, \
                 mock.patch.object(cleanup_engine, 'archive_deployment_logs') as archive:
             self.assertTrue(cleanup_engine.execute_teardown(config))
         self.assertEqual([call.args[0]['provider'] for call in legacy.call_args_list],
-                         ['linode', 'aws'])
+                         ['legacyco', 'legacyco2'])
         for call in legacy.call_args_list:
             # A leg never retires the key or record another leg still needs.
             self.assertTrue(call.args[0]['preserve_local_keys'])
@@ -1445,8 +1355,9 @@ class RoutingAndTemplateTests(AzureFixture):
         keys.assert_called_once_with('comp', str(self.key) + '.pub')
         archive.assert_called_once_with('comp')
 
-        with mock.patch.object(cleanup_engine, 'execute_legacy_teardown',
-                               side_effect=[True, False]) as legacy, \
+        with legacy_provider('legacyco', 'legacyco2'), \
+                mock.patch.object(cleanup_engine, 'execute_legacy_teardown',
+                                  side_effect=[True, False]) as legacy, \
                 mock.patch.object(cleanup_engine, 'cleanup_ssh_keys_for_deployment') as keys, \
                 mock.patch.object(cleanup_engine, 'archive_deployment_logs') as archive:
             self.assertFalse(cleanup_engine.execute_teardown(config))
@@ -1495,20 +1406,23 @@ class RoutingAndTemplateTests(AzureFixture):
         with tempfile.TemporaryDirectory() as temp:
             chunks = Path(temp) / 'chunks.json'
             chunks.write_text(json.dumps([
-                {'idx': 0, 'node_name': 'wr-x-01', 'provider': 'linode', 'region': 'us-east',
+                {'idx': 0, 'node_name': 'wr-x-01', 'provider': 'azure', 'region': 'eastus',
                  'cidrs': ['198.51.100.1/32'], 'ip_count': 1},
                 {'idx': 1, 'node_name': 'wr-x-02', 'provider': 'azure', 'region': 'eastus',
                  'cidrs': ['198.51.100.2/32'], 'ip_count': 1}]))
             config = {
-                'providers': ['linode', 'azure'], 'provider_workload': 'webrunner',
+                'providers': ['azure'], 'provider_workload': 'webrunner',
                 'deployment_id': 'x', 'azure_subscription_id': smoke.SUBSCRIPTION,
                 'operator_ip': '203.0.113.5', 'node_chunks_file': str(chunks),
                 'ssh_key_path': str(Path(temp) / 'c2deploy_wr-x.pub'),
                 'azure_state_dir': temp, 'teardown_after_scan': True,
             }
-            expected_nodes = [{'node_name': 'wr-x-02', 'ip': '20.42.0.9', 'idx': 1,
+            expected_nodes = [{'node_name': 'wr-x-01', 'ip': '20.42.0.9', 'idx': 0,
+                               'cidrs': ['198.51.100.1/32'], 'ip_count': 1,
+                               'deployment_id': 'x-n01', 'ssh_user': 'azureuser'},
+                              {'node_name': 'wr-x-02', 'ip': '20.42.0.9', 'idx': 1,
                                'cidrs': ['198.51.100.2/32'], 'ip_count': 1,
-                               'deployment_id': 'x-n02'}]
+                               'deployment_id': 'x-n02', 'ssh_user': 'azureuser'}]
             provisioned = {}
             legacy = mock.Mock(side_effect=lambda cfg: cfg['azure_nodes'] == expected_nodes)
             states = [{'deployment_id': 'x-n02', 'provider_workload': 'webrunner'},
@@ -1548,23 +1462,27 @@ class RoutingAndTemplateTests(AzureFixture):
                 self.assertEqual(cleanup.call_args_list,
                                  [mock.call({'deployment_id': 'x-n01', 'azure_state_dir': temp})])
                 keys.assert_not_called()
-                self.assertTrue(adapter.cleanup({'deployment_id': 'x', 'providers': ['linode', 'azure'],
+                self.assertTrue(adapter.cleanup({'deployment_id': 'x', 'providers': ['azure'],
                                                  'azure_state_dir': temp,
                                                  'ssh_key_path': config['ssh_key_path']}))
                 keys.assert_called_once_with('x', config['ssh_key_path'])
 
-    def test_existing_routes_remain_and_azure_routes_only_implemented_workloads(self):
-        for provider, dirname in (("aws", "AWS"), ("linode", "Linode")):
-            self.assertEqual(deployment_engine.determine_playbook({"provider": provider, "c2_only": True}), f"providers/{dirname}/c2.yml")
-            self.assertEqual(deployment_engine.determine_playbook({"provider": provider, "attack_box_deployment": True}), f"providers/{dirname}/attack_box.yml")
-        self.assertEqual(
-            deployment_engine.determine_playbook(
-                {"provider": "flokinet", "c2_only": True}),
-            "providers/FlokiNET/c2.yml")
-        self.assertIsNone(deployment_engine.determine_playbook({
-            "provider": "flokinet", "provider_workload": "attack_box",
-            "attack_box_deployment": True,
-        }))
+    def test_every_provider_resolves_module_service_playbooks(self):
+        for provider in ('aws', 'linode', 'flokinet', 'azure'):
+            with self.subTest(provider=provider):
+                self.assertTrue(deployment_engine.determine_playbook(
+                    {'provider': provider, 'c2_only': True}).endswith('modules/c2/service.yml'))
+                self.assertTrue(deployment_engine.determine_playbook(
+                    {'provider': provider, 'attack_box_deployment': True}).endswith(
+                        'modules/attack-box/service.yml'))
+        with legacy_provider():
+            self.assertEqual(
+                deployment_engine.determine_playbook({'provider': 'legacyco', 'c2_only': True}),
+                'providers/Legacyco/c2.yml')
+            self.assertIsNone(deployment_engine.determine_playbook({
+                'provider': 'legacyco', 'provider_workload': 'tracker',
+                'tracker_deployment': True,
+            }))
         self.assertTrue(deployment_engine.determine_playbook(self.config).endswith("providers/Azure/infrastructure.yml"))
         attack = {
             **self.config, 'provider_workload': 'attack_box',
@@ -1577,33 +1495,6 @@ class RoutingAndTemplateTests(AzureFixture):
         for extra in ({"c2_only": True}, {"phishing_deployment": True}, {"infrastructure_deployment": False}):
             self.assertIsNone(deployment_engine.determine_playbook({**self.config, **extra}))
 
-    def test_unsupported_flokinet_attack_box_never_enters_legacy_execution(self):
-        import teardown as standalone
-
-        config = {
-            'provider': 'flokinet', 'provider_workload': 'attack_box',
-            'deployment_type': 'kali_attack_box', 'deployment_id': 'unsupported',
-            'attack_box_deployment': True,
-        }
-        with self.assertRaisesRegex(ValueError, 'No configuration route'):
-            provider_utils.gather_provider_config(
-                'flokinet', 'attack_box', legacy_fallback=True)
-
-        legacy_deploy = mock.Mock(return_value=True)
-        self.assertFalse(
-            deployment_engine.dispatch_workload(config, legacy_deploy))
-        legacy_deploy.assert_not_called()
-
-        with mock.patch.object(
-                cleanup_engine, 'execute_legacy_teardown') as cleanup:
-            self.assertFalse(cleanup_engine.execute_teardown(config))
-        cleanup.assert_not_called()
-
-        with mock.patch.object(
-                standalone, 'execute_legacy_teardown') as cleanup:
-            self.assertFalse(standalone.execute_teardown(config))
-        cleanup.assert_not_called()
-
     def test_phantom_and_attack_box_routes_do_not_expose_unimplemented_azure_workloads(self):
         self.assertEqual(
             provider_utils.available_providers('phantom', legacy_fallback=True),
@@ -1613,7 +1504,7 @@ class RoutingAndTemplateTests(AzureFixture):
             ['aws', 'linode', 'flokinet', 'azure'])
         self.assertEqual(
             provider_utils.available_providers('attack_box', legacy_fallback=True),
-            ['aws', 'linode', 'azure'])
+            ['aws', 'linode', 'flokinet', 'azure'])
         self.assertEqual(
             provider_utils.available_providers('chat', legacy_fallback=True),
             ['aws', 'linode', 'flokinet', 'azure'])
@@ -2151,7 +2042,7 @@ class RoutingAndTemplateTests(AzureFixture):
             module_spec.loader.exec_module(module)
         expected = {
             'vpn', 'matrix', 'matrix_rotation', 'tak', 'dns', 'cloud', 'vault',
-            'media', 'email', 'all_in_one'}
+            'media', 'email', 'all_in_one', 'share'}
         self.assertEqual(set(module.SERVICES), expected)
         for service in sorted(expected):
             with self.subTest(service=service):
@@ -2393,24 +2284,10 @@ class RoutingAndTemplateTests(AzureFixture):
             cleanup_engine.set_provider_environment_for_teardown(linode)
             self.assertEqual(os.environ['LINODE_TOKEN'], 'linode-token')
 
-            flokinet = {
-                'provider': 'flokinet', 'flokinet_api_key': 'floki-key'}
-            deployment_engine.set_provider_environment(flokinet)
-            self.assertEqual(os.environ['FLOKINET_API_KEY'], 'floki-key')
-
-            before = dict(os.environ)
-            deployment_engine.set_provider_environment({'provider': 'azure'})
-            self.assertEqual(dict(os.environ), before)
-
-        from utils import linode_utils
-        fallback = {'provider': 'linode'}
-        with mock.patch.object(
-                linode_utils, 'load_vars_file',
-                return_value={'linode_token': 'vars-token'}), \
-                mock.patch.dict(os.environ, {}, clear=True):
-            cleanup_engine.set_provider_environment_for_teardown(fallback)
-            self.assertEqual(fallback['linode_token'], 'vars-token')
-            self.assertEqual(os.environ['LINODE_TOKEN'], 'vars-token')
+            for provider in ('azure', 'flokinet'):
+                before = dict(os.environ)
+                deployment_engine.set_provider_environment({'provider': provider})
+                self.assertEqual(dict(os.environ), before)
 
         import inspect
         import teardown as standalone
@@ -2476,23 +2353,21 @@ class RoutingAndTemplateTests(AzureFixture):
                 registry.provider_secret_vars({'provider': 'linode'}),
                 {'linode_token': 'linode-token'})
             self.assertEqual(
-                registry.provider_secret_vars({'provider': 'flokinet'}),
-                {'flokinet_api_key': 'floki-key'})
+                registry.provider_secret_vars({'provider': 'flokinet'}), {})
             self.assertEqual(
                 registry.provider_secret_vars({'provider': 'azure'}), {})
 
         self.assertEqual(registry.provider_credential_keys(), {
-            'aws_access_key', 'aws_secret_key', 'linode_token',
-            'flokinet_api_key'})
+            'aws_access_key', 'aws_secret_key', 'linode_token'})
         aws_cleanup = json.loads(cleanup_engine.create_teardown_vars({
             'provider': 'aws', 'deployment_id': 'test',
             'aws_access_key': 'access', 'aws_secret_key': 'secret',
             'aws_region': 'us-east-1', 'linode_token': 'excluded',
         }))
+        # Driver providers retire resources through their own state, so the
+        # legacy teardown variables carry no credential at all.
         self.assertEqual(aws_cleanup, {
-            'deployment_id': 'test', 'provider': 'aws',
-            'operation': 'teardown', 'aws_access_key': 'access',
-            'aws_secret_key': 'secret', 'aws_region': 'us-east-1',
+            'deployment_id': 'test', 'provider': 'aws', 'operation': 'teardown',
         })
         linode_cleanup = json.loads(cleanup_engine.create_teardown_vars({
             'provider': 'linode', 'deployment_id': 'test',
@@ -2500,9 +2375,7 @@ class RoutingAndTemplateTests(AzureFixture):
             'aws_secret_key': 'excluded',
         }))
         self.assertEqual(linode_cleanup, {
-            'deployment_id': 'test', 'provider': 'linode',
-            'operation': 'teardown', 'linode_token': 'token',
-            'linode_region': 'us-east',
+            'deployment_id': 'test', 'provider': 'linode', 'operation': 'teardown',
         })
 
         captured = {}
@@ -2523,7 +2396,6 @@ class RoutingAndTemplateTests(AzureFixture):
             'aws_access_key': 'aws-config',
             'aws_secret_key': 'aws-config-secret',
             'linode_token': 'excluded-config',
-            'flokinet_api_key': 'excluded-floki',
             'smtp_auth_pass': 'smtp-secret',
         }
         previous = Path.cwd()
@@ -2685,17 +2557,15 @@ class ProviderContractTests(AzureFixture):
     def test_standalone_cleanup_uses_registered_route_before_legacy(self):
         import teardown as standalone
 
-        config = {'provider': 'aws', 'provider_workload': 'c2',
+        config = {'provider': 'legacyco', 'provider_workload': 'c2',
                   'deployment_id': 'legacy-1'}
-        with mock.patch.object(
+        with legacy_provider(), mock.patch.object(
                 cleanup_engine, 'execute_legacy_teardown', return_value=False) as legacy:
             self.assertFalse(standalone.execute_teardown(config))
         legacy.assert_called_once_with(config)
 
         native = mock.Mock()
-        spec = registry.PROVIDER_SPECS['aws']._replace(
-            routes={'c2': 'synthetic:Adapter'})
-        with mock.patch.dict(registry.PROVIDER_SPECS, {'aws': spec}), \
+        with legacy_provider(routes={'c2': 'synthetic:Adapter'}), \
                 mock.patch.object(registry, '_load', return_value=lambda: native), \
                 mock.patch.object(cleanup_engine, 'execute_legacy_teardown') as legacy:
             native.cleanup.return_value = False
@@ -2707,7 +2577,7 @@ class ProviderContractTests(AzureFixture):
             legacy.assert_not_called()
 
         missing = {**config, 'provider_workload': 'unmigrated'}
-        with mock.patch.object(
+        with legacy_provider(), mock.patch.object(
                 cleanup_engine, 'execute_legacy_teardown', return_value=True) as legacy:
             self.assertTrue(standalone.execute_teardown(missing))
         legacy.assert_called_once_with(missing)
@@ -2732,8 +2602,8 @@ class ProviderContractTests(AzureFixture):
     def test_standalone_discovery_merges_state_and_logs_with_adapter_priority(self):
         import teardown as standalone
         state = self.prepare()
-        legacy = {'provider': 'aws', 'deployment_id': 'legacy-1'}
-        with mock.patch.object(standalone.glob, 'glob', return_value=['azure.txt', 'legacy.txt']), mock.patch.object(standalone, 'parse_deployment_info', side_effect=[{'provider': 'azure', 'deployment_id': state['deployment_id']}, legacy]):
+        legacy = {'provider': 'legacyco', 'deployment_id': 'legacy-1'}
+        with legacy_provider(), mock.patch.object(standalone.glob, 'glob', return_value=['azure.txt', 'legacy.txt']), mock.patch.object(standalone, 'parse_deployment_info', side_effect=[{'provider': 'azure', 'deployment_id': state['deployment_id']}, legacy]):
             deployments, adapter_ids = standalone.discover_deployments()
             self.assertEqual(deployments, [state, legacy])
             self.assertEqual(adapter_ids, {state['deployment_id']})
@@ -2761,9 +2631,9 @@ class ProviderContractTests(AzureFixture):
     def test_standalone_batch_does_not_duplicate_canonical_legacy_closeout(self):
         import teardown as standalone
         state = self.prepare()
-        legacy = {'provider': 'aws', 'deployment_id': 'legacy-1'}
+        legacy = {'provider': 'legacyco', 'deployment_id': 'legacy-1'}
         for adapter_ok in (True, False):
-            with self.subTest(adapter_ok=adapter_ok), mock.patch.object(standalone.glob, 'glob', return_value=['legacy.txt']), mock.patch.object(standalone, 'parse_deployment_info', return_value=legacy), mock.patch.object(azure, 'cleanup_azure', return_value=adapter_ok) as adapter, mock.patch.object(standalone, 'execute_teardown', return_value=True) as execute, mock.patch.object(standalone, 'cleanup_ssh_keys') as keys, mock.patch.object(standalone, 'archive_logs') as archive, contextlib.redirect_stdout(io.StringIO()):
+            with self.subTest(adapter_ok=adapter_ok), legacy_provider(), mock.patch.object(standalone.glob, 'glob', return_value=['legacy.txt']), mock.patch.object(standalone, 'parse_deployment_info', return_value=legacy), mock.patch.object(azure, 'cleanup_azure', return_value=adapter_ok) as adapter, mock.patch.object(standalone, 'execute_teardown', return_value=True) as execute, mock.patch.object(standalone, 'cleanup_ssh_keys') as keys, mock.patch.object(standalone, 'archive_logs') as archive, contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(standalone.teardown_all_deployments(force=True), adapter_ok)
                 adapter.assert_called_once_with(state)
                 execute.assert_called_once_with(legacy)
@@ -2801,8 +2671,8 @@ class ProviderContractTests(AzureFixture):
     def test_standalone_batch_records_adapter_exception_and_continues_other_cleanup(self):
         import teardown as standalone
         self.prepare()
-        legacy = {'provider': 'aws', 'deployment_id': 'legacy-1'}
-        with mock.patch.object(standalone.glob, 'glob', return_value=['legacy.txt']), mock.patch.object(standalone, 'parse_deployment_info', return_value=legacy), mock.patch.object(azure, 'cleanup_azure', side_effect=RuntimeError('unavailable')), mock.patch.object(standalone, 'execute_teardown', return_value=True) as execute, mock.patch.object(standalone, 'cleanup_ssh_keys'), mock.patch.object(standalone, 'archive_logs'), contextlib.redirect_stdout(io.StringIO()):
+        legacy = {'provider': 'legacyco', 'deployment_id': 'legacy-1'}
+        with legacy_provider(), mock.patch.object(standalone.glob, 'glob', return_value=['legacy.txt']), mock.patch.object(standalone, 'parse_deployment_info', return_value=legacy), mock.patch.object(azure, 'cleanup_azure', side_effect=RuntimeError('unavailable')), mock.patch.object(standalone, 'execute_teardown', return_value=True) as execute, mock.patch.object(standalone, 'cleanup_ssh_keys'), mock.patch.object(standalone, 'archive_logs'), contextlib.redirect_stdout(io.StringIO()):
             self.assertFalse(standalone.teardown_all_deployments(force=True))
             execute.assert_called_once_with(legacy)
 
@@ -2818,37 +2688,40 @@ class ProviderContractTests(AzureFixture):
             "import sys; from utils import provider_utils, deployment_engine, cleanup_engine; "
             "assert 'utils.azure_cloud' not in sys.modules; "
             "assert 'utils.azure_utils' not in sys.modules; "
-            "assert provider_utils.available_providers() == ['aws', 'linode', 'flokinet']"],
+            "assert 'utils.aws_cloud' not in sys.modules; "
+            "assert provider_utils.available_providers() == ['aws', 'linode', 'flokinet', 'azure']"],
             cwd=ROOT, capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_every_provider_uses_dispatcher_and_original_configuration_loader(self):
-        from utils import aws_utils, linode_utils, flokinet_utils
-        for name, module, function in (
-            ('aws', aws_utils, 'gather_aws_config'),
-            ('linode', linode_utils, 'gather_linode_config'),
-            ('flokinet', flokinet_utils, 'gather_flokinet_config'),
-            ('azure', azure, 'gather_azure_config'),
+    def test_every_provider_uses_dispatcher_and_its_driver_configuration(self):
+        from utils import aws_cloud, flokinet_cloud, linode_cloud
+        for name, target in (
+            ('aws', aws_cloud.AwsDriver),
+            ('linode', linode_cloud.LinodeDriver),
+            ('flokinet', flokinet_cloud.FlokinetDriver),
         ):
-            with self.subTest(provider=name), mock.patch.object(module, function, return_value={'provider': name}) as gather:
+            with self.subTest(provider=name), mock.patch.object(
+                    target, 'gather_config', return_value={'provider': name}) as gather:
                 self.assertEqual(registry.provider_dispatcher(name).provider, name)
                 self.assertEqual(provider_utils.gather_provider_config(name), {'provider': name})
                 gather.assert_called_once_with()
+        with mock.patch.object(azure, 'gather_azure_config', return_value={'provider': 'azure'}) as gather:
+            self.assertEqual(provider_utils.gather_provider_config('azure'), {'provider': 'azure'})
+            gather.assert_called_once_with()
 
     def test_legacy_provider_utility_import_uses_canonical_dispatcher(self):
         from providers import provider_utils as legacy_utils
-        from utils import aws_utils
-
+        from utils import aws_cloud
         self.assertIs(legacy_utils.select_provider, provider_utils.select_provider)
         self.assertIs(
             legacy_utils.gather_provider_config,
             provider_utils.gather_provider_config)
         with mock.patch.object(
-                aws_utils, 'gather_aws_config',
+                aws_cloud.AwsDriver, 'gather_config',
                 return_value={'source': 'canonical'}) as gather:
             self.assertEqual(
                 legacy_utils.gather_provider_config('aws', 'c2'),
-                {'source': 'canonical'})
+                {'source': 'canonical', 'provider_manages_ssh_key': True})
         gather.assert_called_once_with()
 
     def test_main_menu_lists_generic_adapter_state_without_azure_import(self):
@@ -2890,26 +2763,25 @@ class ProviderContractTests(AzureFixture):
                 old_cleanup.assert_not_called()
 
     def test_legacy_routes_do_not_import_unrelated_new_adapter(self):
-        spec = registry.PROVIDER_SPECS['aws']._replace(routes={'infrastructure': 'unavailable:Adapter'})
-        with mock.patch.dict(registry.PROVIDER_SPECS, {'aws': spec}), mock.patch.object(registry, '_load', side_effect=AssertionError('unexpected adapter import')):
+        with legacy_provider(routes={'infrastructure': 'unavailable:Adapter'}), \
+                mock.patch.object(registry, '_load', side_effect=AssertionError('unexpected adapter import')):
             cases = [({}, 'c2'), ({'attack_box_deployment': True}, 'attack_box'),
                      ({'redirector_only': True}, 'redirector'),
                      ({'chat_deployment': True}, 'chat_server'), ({'c2_only': True}, 'c2')]
             for flags, playbook in cases:
-                self.assertEqual(deployment_engine.determine_playbook({'provider': 'aws', **flags}),
-                                 f'providers/AWS/{playbook}.yml')
-            config = {'provider': 'aws', 'deployment_id': 'legacy', 'chat_deployment': True}
-            with mock.patch('utils.common.setup_logging'), mock.patch.object(cleanup_engine, 'set_provider_environment_for_teardown'), mock.patch.object(cleanup_engine, 'run_teardown_playbook', return_value=False) as legacy:
+                self.assertEqual(deployment_engine.determine_playbook({'provider': 'legacyco', **flags}),
+                                 f'providers/Legacyco/{playbook}.yml')
+            config = {'provider': 'legacyco', 'deployment_id': 'legacy', 'chat_deployment': True}
+            with mock.patch('utils.common.setup_logging'), mock.patch('os.path.exists', return_value=True), mock.patch.object(cleanup_engine, 'set_provider_environment_for_teardown'), mock.patch.object(cleanup_engine, 'run_teardown_playbook', return_value=False) as legacy:
                 self.assertFalse(cleanup_engine.execute_teardown(config))
-                legacy.assert_called_once_with('providers/AWS/cleanup.yml', config)
+                legacy.assert_called_once_with('providers/Legacyco/cleanup.yml', config)
 
-    def test_missing_new_route_preserves_existing_deployment_path_for_each_provider(self):
-        for provider, directory in (('aws', 'AWS'), ('linode', 'Linode'), ('flokinet', 'FlokiNET')):
-            config = {'provider': provider, 'deployment_id': 'legacy', 'deployment_type': 'unmigrated'}
-            with self.subTest(provider=provider), mock.patch.object(deployment_engine, 'set_provider_environment') as env, mock.patch.object(deployment_engine, 'execute_playbook', return_value=True) as legacy:
-                self.assertTrue(deployment_engine.deploy_infrastructure(config))
-                env.assert_called_once_with(config)
-                legacy.assert_called_once_with(f'providers/{directory}/c2.yml', config)
+    def test_missing_new_route_preserves_existing_deployment_path(self):
+        config = {'provider': 'legacyco', 'deployment_id': 'legacy', 'deployment_type': 'unmigrated'}
+        with legacy_provider(), mock.patch('os.path.exists', return_value=True), mock.patch.object(deployment_engine, 'set_provider_environment') as env, mock.patch.object(deployment_engine, 'execute_playbook', return_value=True) as legacy:
+            self.assertTrue(deployment_engine.deploy_infrastructure(config))
+            env.assert_called_once_with(config)
+            legacy.assert_called_once_with('providers/Legacyco/c2.yml', config)
 
     def test_generic_module_runs_a_registered_adapter_without_azure_imports(self):
         spec = importlib.util.spec_from_file_location('generic_infrastructure', ROOT / 'modules/infrastructure/deploy_infrastructure.py')

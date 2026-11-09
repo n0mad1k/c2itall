@@ -162,8 +162,10 @@ class StubModuleProfileTests(unittest.TestCase):
     def test_new_workloads_are_served_by_drivers_only(self):
         for workload in ('tracker', 'logging_server', 'share', 'hashtopolis'):
             with self.subTest(workload=workload):
-                self.assertEqual(registry.providers_for(workload, legacy_fallback=True), ['azure'])
-                self.assertEqual(registry.provider_route_kind('azure', workload), 'native')
+                self.assertEqual(registry.providers_for(workload, legacy_fallback=True),
+                                 ['aws', 'linode', 'flokinet', 'azure'])
+                for provider in registry.PROVIDER_SPECS:
+                    self.assertEqual(registry.provider_route_kind(provider, workload), 'native')
                 self.assertTrue((ROOT / registry.WORKLOAD_SPECS[workload].entrypoint).is_file())
 
     def test_host_source_accepts_only_global_ipv4_hosts(self):

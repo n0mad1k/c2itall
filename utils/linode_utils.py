@@ -1,39 +1,13 @@
-#!/usr/bin/env python3
-"""
-Linode provider utilities for C2ingRed deployment system
-"""
+"""Linode controller token: the config, then Infisical."""
 
-import os
 import logging
+import os
 import subprocess
-from .common import COLORS, load_vars_file
-
-
-def apply_linode_profile(config, workload, profile, value):
-    """Translate neutral workload tuning into Linode configuration."""
-    if workload != 'attack_box' or profile != 'instance_size':
-        return config
-    sizes = {
-        'small': 'g6-standard-2',
-        'medium': 'g6-standard-4',
-        'large': 'g6-standard-8',
-        'xlarge': 'g6-standard-16',
-    }
-    if value not in sizes:
-        raise ValueError('Unsupported Linode attack-box instance size')
-    config['linode_instance_type'] = sizes[value]
-    return config
 
 
 def prepare_linode_environment(config, teardown=False):
-    """Preserve deployment and teardown token fallback order for Linode."""
+    """Export the Linode token for the controller; load it when the config lacks it."""
     token = config.get('linode_token', '')
-    if not token and teardown:
-        try:
-            provider_vars = load_vars_file('linode')
-            token = provider_vars.get('linode_token', '') if provider_vars else ''
-        except Exception as exc:
-            logging.warning('Failed to load Linode token from vars file: %s', exc)
     if not token:
         try:
             token = subprocess.check_output(
@@ -41,79 +15,8 @@ def prepare_linode_environment(config, teardown=False):
                  'LINODE_TOKEN', 'homelab'],
                 text=True, stderr=subprocess.DEVNULL,
             ).strip()
-        except Exception as exc:
+        except (OSError, subprocess.CalledProcessError) as exc:
             logging.warning('Failed to load Linode token from Infisical: %s', exc)
     if token:
         os.environ['LINODE_TOKEN'] = token
         config['linode_token'] = token
-
-def get_linode_credentials(provider_vars=None):
-    """Get Linode API token — Infisical first, vars.yaml fallback, then prompt."""
-    default_token = ''
-
-    try:
-        default_token = subprocess.check_output(
-            [os.path.expanduser('~/.local/bin/creds'), 'get', 'LINODE_TOKEN', 'homelab'],
-            text=True, stderr=subprocess.DEVNULL,
-        ).strip()
-    except Exception:
-        pass
-
-    if not default_token:
-        if not provider_vars:
-            provider_vars = load_vars_file('linode')
-        default_token = provider_vars.get('linode_token', '')
-
-    print(f"\n{COLORS['BLUE']}Linode Configuration{COLORS['RESET']}")
-    token = input(f"Linode API Token [{'*****' if default_token else 'required'}]: ") or default_token
-
-    if not token:
-        print(f"{COLORS['RED']}Linode API token is required{COLORS['RESET']}")
-        return None
-
-    return {'linode_token': token}
-
-def select_linode_regions(provider_vars=None) -> list[str]:
-    """Return region list — single entry if user specified one, all regions if blank (random per-node)."""
-    if not provider_vars:
-        provider_vars = load_vars_file('linode')
-
-    regions = provider_vars.get('region_choices', ['us-east'])
-
-    print(f"\nAvailable Linode regions:")
-    for i, region in enumerate(regions, 1):
-        print(f"  {i:2}. {region}")
-
-    region_input = input("\nSelect region (number or leave blank for random per-node): ").strip()
-
-    if not region_input:
-        return regions
-
-    try:
-        idx = int(region_input)
-        if 1 <= idx <= len(regions):
-            return [regions[idx - 1]]
-    except ValueError:
-        pass
-
-    print(f"{COLORS['RED']}Invalid input, using random per-node regions{COLORS['RESET']}")
-    return regions
-
-def gather_linode_config():
-    """Gather all Linode-specific configuration"""
-    provider_vars = load_vars_file('linode')
-    config = {}
-
-    linode_creds = get_linode_credentials(provider_vars)
-    if not linode_creds:
-        return None
-    config.update(linode_creds)
-
-    linode_regions = select_linode_regions(provider_vars)
-    config['linode_regions'] = linode_regions
-    config['linode_region'] = linode_regions[0]
-
-    config['linode_instance_type'] = provider_vars.get('linode_instance_type', 'g6-nanode-1')
-    config['linode_image'] = provider_vars.get('linode_image', 'linode/debian12')
-
-    return config

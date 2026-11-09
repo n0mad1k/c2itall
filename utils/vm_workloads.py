@@ -43,6 +43,9 @@ class SingleVmAdapter(WorkloadAdapter):
     def gather_config(self):
         return self.driver.gather_config()
 
+    def apply_profile(self, config, profile, value):
+        return self.driver.apply_profile(config, self.profile.workload, profile, value)
+
     def playbook(self, config):
         return str(ROOT / self.profile.service_playbook)
 
@@ -277,6 +280,8 @@ class NodeAdapter(WorkloadAdapter):
         raise RuntimeError(self.profile.label() + ' nodes deploy through the composite playbook')
 
     def _node_config(self, config, chunk):
+        if chunk.get('region') and self.driver.region_key:
+            config = dict(config, **{self.driver.region_key: chunk['region']})
         public = Path(config['ssh_key_path']).expanduser()
         request = ProvisionRequest(
             self.profile.node_id(config['deployment_id'], chunk['idx']),
@@ -310,7 +315,8 @@ class NodeAdapter(WorkloadAdapter):
                 nodes.append({'node_name': chunk['node_name'], 'ip': str(address),
                               'idx': chunk['idx'], 'cidrs': chunk['cidrs'],
                               'ip_count': chunk['ip_count'],
-                              'deployment_id': node['deployment_id']})
+                              'deployment_id': node['deployment_id'],
+                              'ssh_user': self.driver.ssh_user})
         except (Exception, KeyboardInterrupt) as exc:
             logging.error('%s %s provisioning failed: %s', provider, self.profile.label(), exc)
             if config.get('teardown_after_scan', True):

@@ -238,7 +238,8 @@ class FakeProviderTests(unittest.TestCase):
             legacy.assert_called_once_with(config)
             self.assertEqual(config['fakecloud_nodes'], [{
                 'node_name': 'wr-01', 'ip': '8.8.8.10', 'idx': 0,
-                'cidrs': ['8.8.4.4/32'], 'ip_count': 1, 'deployment_id': 'wr-n01'}])
+                'cidrs': ['8.8.4.4/32'], 'ip_count': 1, 'deployment_id': 'wr-n01',
+                'ssh_user': 'operator'}])
             self.assertEqual(self.driver.states, {})
             self.assertIn(('cleanup', 'wr-n01', ('deployment_id',)), self.driver.calls)
 

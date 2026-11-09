@@ -68,6 +68,17 @@ class CloudDriver:
     def region(self, config):
         return 'default'
 
+    # Configuration key that places one VM in a region; None when regions are fixed.
+    region_key = None
+
+    def regions(self, config):
+        """Regions a pool may spread nodes across; one unless the operator listed more."""
+        return [self.region(config)]
+
+    def apply_profile(self, config, workload, profile, value):
+        """Translate a neutral workload tuning knob into this provider's sizing."""
+        return config
+
     # --- lifecycle ---------------------------------------------------------
     def plan(self, config, request):
         """Return the validated infrastructure record for one requested VM."""

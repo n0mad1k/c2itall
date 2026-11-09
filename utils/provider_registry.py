@@ -1,7 +1,7 @@
-"""Provider metadata and opt-in infrastructure adapters.
+"""Provider metadata: one CloudDriver per provider serves every profiled workload.
 
-Legacy providers keep their existing dispatch until a neutral infrastructure
-adapter is implemented. Registration never implies support for every workload.
+Registration never implies support for every workload; a workload without a
+native profile stays unsupported on every provider.
 """
 
 from collections import namedtuple
@@ -125,22 +125,6 @@ class ProviderSpec(namedtuple(
         return frozenset(self.staged_routes)
 
 
-_AWS_TRANSITION = 'utils.legacy_provider_adapter:aws_adapter'
-_LINODE_TRANSITION = 'utils.legacy_provider_adapter:linode_adapter'
-_FLOKINET_TRANSITION = 'utils.legacy_provider_adapter:flokinet_adapter'
-LEGACY_TRANSITION_CAPABILITIES = {
-    'aws': frozenset({
-        'attack_box', 'c2', 'chat', 'payload_server', 'phishing', 'phantom',
-        'redirector', 'webrunner',
-    }),
-    'linode': frozenset({
-        'attack_box', 'c2', 'chat', 'payload_server', 'phishing', 'phantom',
-        'redirector', 'webrunner',
-    }),
-    'flokinet': frozenset({
-        'c2', 'chat', 'phishing', 'phantom', 'redirector', 'webrunner',
-    }),
-}
 WORKLOAD_SPECS = {
     'infrastructure': WorkloadSpec(
         'modules/infrastructure/deploy_infrastructure.py', False),
@@ -168,64 +152,42 @@ CANONICAL_WORKLOADS = tuple(WORKLOAD_SPECS)
 LEGACY_FALLBACK_WORKLOADS = frozenset(
     workload for workload, spec in WORKLOAD_SPECS.items()
     if spec.legacy_fallback)
-_TRANSITION_REFERENCES = frozenset({
-    _AWS_TRANSITION, _LINODE_TRANSITION, _FLOKINET_TRANSITION,
-})
 
 
 PROVIDER_SPECS = {
-    'aws': ProviderSpec('AWS', 'kali', config_loader='utils.aws_utils:gather_aws_config',
-                        legacy_capabilities=(
-                            LEGACY_TRANSITION_CAPABILITIES['aws'] |
-                            frozenset({'phantom', 'chat'})),
+    'aws': ProviderSpec('AWS', 'admin', False,
+                        config_loader='utils.aws_cloud:gather_aws_config',
                         environment_loader='utils.aws_utils:prepare_aws_environment',
-                        profile_loader='utils.aws_utils:apply_aws_profile',
                         credential_environment=(
                             ('aws_access_key', 'AWS_ACCESS_KEY_ID'),
                             ('aws_secret_key', 'AWS_SECRET_ACCESS_KEY'),
                         ),
-                        teardown_keys=(
-                            'aws_access_key', 'aws_secret_key', 'aws_region'),
                         cleanup_guidance=(
-                            'Open the AWS EC2 Console',
-                            'Check instances with tags containing: {deployment_id}',
-                            'Delete instances and associated resources',
-                            'Check security groups, key pairs and elastic IPs',
+                            'Open the AWS EC2 Console in the deployment region',
+                            'Search every resource type for the tag c2itall-deployment = {deployment_id}',
+                            'Terminate the instance, then delete the security group, subnet, internet gateway and VPC',
+                            'Check CloudFront for a distribution carrying the same tag',
                         ),
-                        routes={workload: _AWS_TRANSITION for workload in
-                                LEGACY_TRANSITION_CAPABILITIES['aws']}),
-    'linode': ProviderSpec('Linode', 'root', config_loader='utils.linode_utils:gather_linode_config',
-                           legacy_capabilities=(
-                               LEGACY_TRANSITION_CAPABILITIES['linode'] |
-                               frozenset({'phantom', 'chat'})),
+                        driver='utils.aws_cloud:aws_driver'),
+    'linode': ProviderSpec('Linode', 'root', False,
+                           config_loader='utils.linode_cloud:gather_linode_config',
                            environment_loader='utils.linode_utils:prepare_linode_environment',
-                           profile_loader='utils.linode_utils:apply_linode_profile',
                            credential_environment=(
                                ('linode_token', 'LINODE_TOKEN'),),
-                           teardown_keys=('linode_token', 'linode_region'),
                            cleanup_guidance=(
                                'Open the Linode Cloud Manager: https://cloud.linode.com/',
-                               'Check Linodes with labels containing: {deployment_id}',
-                               'Delete matching Linodes and NodeBalancers',
-                               'Check and delete matching firewalls',
+                               'Check Linodes and Firewalls labelled c2itall-{deployment_id}',
+                               'Delete the Linode, then the Firewall',
                            ),
-                           routes={workload: _LINODE_TRANSITION for workload in
-                                   LEGACY_TRANSITION_CAPABILITIES['linode']}),
-    'flokinet': ProviderSpec('FlokiNET', 'root', config_loader='utils.flokinet_utils:gather_flokinet_config',
-                             legacy_capabilities=(
-                                 LEGACY_TRANSITION_CAPABILITIES['flokinet'] |
-                                 frozenset({'phantom', 'chat'})),
-                             environment_loader='utils.flokinet_utils:prepare_flokinet_environment',
-                             credential_environment=(
-                                 ('flokinet_api_key', 'FLOKINET_API_KEY'),),
+                           driver='utils.linode_cloud:linode_driver'),
+    'flokinet': ProviderSpec('FlokiNET', 'root', False,
+                             config_loader='utils.flokinet_cloud:gather_flokinet_config',
                              cleanup_automated=False,
                              cleanup_guidance=(
-                                 'Open the FlokiNET control panel',
-                                 'Check for servers containing: {deployment_id}',
-                                 'Delete any matching resources',
+                                 'The deployment key for {deployment_id} was revoked from the host',
+                                 'Cancel or reinstall the server in the FlokiNET control panel when the engagement ends',
                              ),
-                             routes={workload: _FLOKINET_TRANSITION for workload in
-                                     LEGACY_TRANSITION_CAPABILITIES['flokinet']}),
+                             driver='utils.flokinet_cloud:flokinet_driver'),
     # A driver-backed provider lists no per-workload routes: every workload
     # with a native profile is served through the generic adapters.
     'azure': ProviderSpec('Azure', 'azureuser', False,
@@ -320,7 +282,7 @@ def provider_label(provider):
 
 
 def provider_driver(provider):
-    """The provider's CloudDriver instance, or None for transition providers."""
+    """The provider's CloudDriver instance, or None when it has only routes."""
     spec = PROVIDER_SPECS[provider]
     if spec.driver is None:
         return None
@@ -352,20 +314,6 @@ def prepare_provider_environment(config, teardown=False):
     if not callable(prepare):
         raise TypeError('Provider environment loader must be callable')
     return prepare(config, teardown=teardown)
-
-
-def apply_transition_profile(provider, config, workload, profile, value):
-    """Apply optional provider-owned tuning for a preserved transition route."""
-    spec = PROVIDER_SPECS.get(provider)
-    if spec is None or not spec.profile_loader:
-        return config
-    apply_profile = _load(spec.profile_loader)
-    if not callable(apply_profile):
-        raise TypeError('Provider profile loader must be callable')
-    result = apply_profile(config, workload, profile, value)
-    if result is not config:
-        raise TypeError('Provider profile loader must return the original config')
-    return config
 
 
 def provider_secret_vars(config):
@@ -421,7 +369,7 @@ def provider_cleanup_is_automated(provider):
 def providers_for(capability=None, legacy_fallback=False, variant=None):
     """Return providers that can service a workload through a new or legacy route."""
     return [key for key, spec in PROVIDER_SPECS.items()
-            if (spec.legacy_menu if capability is None else
+            if (capability is None or
                 capability in spec.capabilities or
                 (legacy_fallback and capability in spec.legacy_capabilities))
             and provider_supports_variant(key, capability, variant)]
@@ -435,8 +383,6 @@ def provider_route_kind(provider, workload):
     if spec is None:
         raise ValueError('Unknown provider: ' + str(provider))
     reference = spec.routes.get(workload)
-    if reference in _TRANSITION_REFERENCES:
-        return 'transition'
     if reference or (spec.driver and workload in driver_workloads()):
         return 'native'
     if (workload in LEGACY_FALLBACK_WORKLOADS and
@@ -455,7 +401,7 @@ def provider_supported_variants(provider, workload):
         raise ValueError('Unknown provider: ' + str(provider))
     variants = WORKLOAD_SPECS[workload].variants
     if (not variants or provider_route_kind(provider, workload) not in
-            ('native', 'transition', 'legacy_fallback')):
+            ('native', 'legacy_fallback')):
         return frozenset()
     spec = PROVIDER_SPECS[provider]
     if workload in spec.variant_support:
@@ -698,20 +644,8 @@ def validate_provider_registry(load_references=True):
                 raise ValueError(
                     'Invalid provider cleanup guidance template: ' + provider) from exc
 
-    for provider, workloads in LEGACY_TRANSITION_CAPABILITIES.items():
-        if provider not in PROVIDER_SPECS:
-            raise ValueError('Transition provider is not registered: ' + provider)
-        if not workloads or not workloads.issubset(LEGACY_FALLBACK_WORKLOADS):
-            raise ValueError('Invalid transition capability set: ' + provider)
-        if not workloads.issubset(PROVIDER_SPECS[provider].legacy_capabilities):
-            raise ValueError('Transition capabilities are not legacy-enabled: ' + provider)
-        for workload in workloads:
-            if provider_route_kind(provider, workload) != 'transition':
-                raise ValueError('Transition route metadata drift: {0}/{1}'.format(
-                    provider, workload))
-
     counts = {kind: 0 for kind in (
-        'native', 'transition', 'legacy_fallback', 'staged', 'unsupported')}
+        'native', 'legacy_fallback', 'staged', 'unsupported')}
     rows = provider_support_matrix()
     for row in rows:
         provider = row['provider']
@@ -720,12 +654,11 @@ def validate_provider_registry(load_references=True):
         counts[route_kind] += 1
         available = provider in providers_for(
             workload, legacy_fallback=workload in LEGACY_FALLBACK_WORKLOADS)
-        if available != (route_kind in (
-                'native', 'transition', 'legacy_fallback')):
+        if available != (route_kind in ('native', 'legacy_fallback')):
             raise ValueError('Provider selection disagrees with coverage: {0}/{1}'.format(
                 provider, workload))
         route = workload in PROVIDER_SPECS[provider].capabilities
-        if (route_kind in ('native', 'transition')) != route:
+        if (route_kind == 'native') != route:
             raise ValueError('Provider route classification drift: {0}/{1}'.format(
                 provider, workload))
         staged_route = PROVIDER_SPECS[provider].staged_routes.get(workload)

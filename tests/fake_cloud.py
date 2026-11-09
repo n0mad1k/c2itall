@@ -43,6 +43,8 @@ class FakeDriver(CloudDriver):
     def image(self, role):
         return {'ubuntu': 'img-ubuntu', 'kali': 'img-kali'}[role]
 
+    region_key = 'fakecloud_region'
+
     def region(self, config):
         return config.get('fakecloud_region', 'moon-1')
 
