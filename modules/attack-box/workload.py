@@ -33,7 +33,7 @@ class AttackBoxProfile(WorkloadProfile):
         return variant['image_role'] if variant else self.image_role
 
     def service_timeout(self, config):
-        return 1800 if config.get('attack_box_type') == 'quick_recon' else 3600
+        return 1800 if config.get('attack_box_type') == 'quick_recon' else 7200
 
     def validate(self, config):
         variant = VARIANTS.get(config.get('attack_box_type'))

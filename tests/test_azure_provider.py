@@ -1706,7 +1706,7 @@ class RoutingAndTemplateTests(AzureFixture):
             'deployment_type': 'kali_attack_box'})
         self.assertEqual(kali['azure_image']['publisher'], 'kali-linux')
         self.assertEqual(adapter.profile.service_timeout({
-            **config, 'attack_box_type': 'kali'}), 3600)
+            **config, 'attack_box_type': 'kali'}), 7200)
         ubuntu = adapter._infrastructure_config({
             **config, 'attack_box_type': 'ubuntu',
             'deployment_type': 'ubuntu_attack_box'})
