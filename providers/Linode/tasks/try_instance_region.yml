@@ -12,6 +12,7 @@
     state: present
   register: linode_fallback_region_attempt
   failed_when: false
+  when: not (linode_instance_created | bool)
 
 - name: "Accept Linode fallback region {{ linode_candidate_region }}"
   set_fact:
@@ -19,5 +20,6 @@
     linode_created_instance: "{{ linode_fallback_region_attempt }}"
     linode_created_region: "{{ linode_candidate_region }}"
   when:
+    - not (linode_instance_created | bool)
     - not (linode_fallback_region_attempt.failed | default(false))
     - linode_fallback_region_attempt.instance is defined

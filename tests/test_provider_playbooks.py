@@ -73,6 +73,7 @@ class ProviderPlaybookSyntaxTests(unittest.TestCase):
         self.assertIn("Require a successful Linode region", helper)
         self.assertIn("linode_created_instance", candidate)
         self.assertIn("linode_created_region", candidate)
+        self.assertEqual(candidate.count("not (linode_instance_created | bool)"), 2)
 
     def test_aws_cleanup_proves_absence_before_local_closeout(self):
         cleanup = (ROOT / "providers/AWS/cleanup.yml").read_text()
