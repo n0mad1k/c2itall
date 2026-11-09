@@ -112,9 +112,20 @@ def _active_config(deployment_id):
     return config
 
 
+def _validate_room_id(room_id):
+    """Accept opaque Matrix room IDs, including domainless room v12 IDs."""
+    if not isinstance(room_id, str) or not room_id.startswith("!"):
+        return False
+    try:
+        encoded = room_id.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return len(encoded) > 1 and len(encoded) <= 255 and b"\x00" not in encoded
+
+
 def initialise(name, active_deployment, room_id, domain_template,
                interval_days=7, grace_hours=24, uses_allowed=100, now=None):
-    if not room_id.startswith("!") or ":" not in room_id:
+    if not _validate_room_id(room_id):
         raise ValueError("Announcement room must be a Matrix room ID")
     if "{id}" not in domain_template and "{generation}" not in domain_template:
         raise ValueError("Domain template must contain {id} or {generation}")

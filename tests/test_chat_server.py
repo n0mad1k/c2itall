@@ -168,6 +168,16 @@ class MatrixRotationTests(unittest.TestCase):
         with self.assertRaisesRegex(self.rotation.RotationError, "owner-only"):
             self.rotation._load_state(self.state_path)
 
+    def test_room_id_validation_accepts_matrix_v12_opaque_ids(self):
+        self.assertTrue(self.rotation._validate_room_id(
+            "!31hneApxJ_1o-63DmFrpeqnkFfWppnzWso1JvH3ogLM"))
+        self.assertTrue(self.rotation._validate_room_id(
+            "!room:matrix-1.example.test"))
+        invalid_ids = (
+            None, "", "!", "room", "!room\x00server", "!" + "a" * 255)
+        for invalid in invalid_ids:
+            self.assertFalse(self.rotation._validate_room_id(invalid))
+
     def test_timer_install_rejects_symlinked_state(self):
         self.write_state(self.state())
         link = self.base / "linked.json"
