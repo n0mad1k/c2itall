@@ -140,7 +140,7 @@ def activate(operator_ip=None):
             "curl", "-4", "--fail", "--silent", "--show-error",
             "--max-time", "15", "https://api.ipify.org",
         ]))
-        preflight(runner)
+        preflight(runner, config)
 
         config["azure_deadline"] = time.monotonic() + 1800
         azure_utils.prepare_state(config)

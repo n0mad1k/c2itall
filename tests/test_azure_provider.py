@@ -3015,6 +3015,14 @@ class SmokeTests(unittest.TestCase):
             self.assertEqual(harness.main([]), 0)
         activate.assert_not_called()
 
+    def test_specialized_live_harnesses_pass_config_to_shared_preflight(self):
+        for name in ('test_azure_infrastructure_live.py',
+                     'test_azure_attack_box_live.py'):
+            with self.subTest(harness=name):
+                content = (ROOT / 'scripts' / name).read_text()
+                self.assertIn('preflight(runner, config)', content)
+                self.assertNotIn('preflight(runner)', content)
+
     def test_attack_box_live_harness_dry_run_has_no_cloud_calls(self):
         harness_spec = importlib.util.spec_from_file_location(
             'azure_attack_box_live',
