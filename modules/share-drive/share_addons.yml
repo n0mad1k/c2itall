@@ -45,6 +45,14 @@
         proto: tcp
       loop: ["80", "443"]
 
+    - name: Drop the public web rules Phantom's cloud play opened
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+        delete: true
+      loop: ["80", "443"]
+
     - name: Enable and start tailscaled
       service:
         name: tailscaled
