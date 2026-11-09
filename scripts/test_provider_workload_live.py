@@ -233,6 +233,8 @@ class AttackBox:
                 ('workspace_targets', 'sudo -n test -s /root/' + deployment_id + '/targets/targets.txt'),
                 ('opsec_script', 'sudo -n test -x /root/' + deployment_id + '/tools/scripts/opsec-check.sh'),
                 ('pipx', 'command -v pipx >/dev/null'),
+                ('go_runtime', 'sudo -n test -x /usr/local/go/bin/go'),
+                ('go_tool', 'sudo -n test -x /root/' + deployment_id + '/tools/go/bin/assetfinder'),
                 ('workspace_alias', "sudo -n grep -Fq \"alias ops=\" /root/.bashrc"),
             ]
         report = checks(context, common + specific, timeout=180)

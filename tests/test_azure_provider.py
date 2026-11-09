@@ -2087,6 +2087,11 @@ class RoutingAndTemplateTests(AzureFixture):
         source = (ROOT / 'modules/attack-box/tasks/configure_attack_box.yml').read_text()
         self.assertNotIn('ansible_date_time', source)
         self.assertIn('name: plocate', source)
+        self.assertIn("OPERATOR_DIR=\"{{ work_dir }}\"", source)
+        self.assertIn('https://go.dev/dl/?mode=json', source)
+        self.assertNotIn('    - rpcclient\n', source)
+        self.assertNotIn('    - showmount\n', source)
+        self.assertNotIn('    - rpcinfo\n', source)
         updatedb = source.split('- name: Update locate database', 1)[1].split('\n- name:', 1)[0]
         self.assertNotIn('ignore_errors', updatedb)
         for task in (

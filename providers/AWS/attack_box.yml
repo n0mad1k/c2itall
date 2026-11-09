@@ -144,8 +144,8 @@
         instance_type: "{{ instance_type }}"
         image_id: "{{ attack_box_ami }}"
         region: "{{ aws_region }}"
-        network:
-          assign_public_ip: true
+        network_interfaces:
+          - assign_public_ip: true
         wait: true
         state: running
         volumes:

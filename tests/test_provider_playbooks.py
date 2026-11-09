@@ -77,6 +77,8 @@ class ProviderPlaybookSyntaxTests(unittest.TestCase):
         self.assertIn('deployment_id: "{{ deployment_id }}"', attack_box)
         self.assertIn("aws_volume_size | default(64)", attack_box)
         self.assertIn("'/dev/sda1' if attack_box_type == 'ubuntu'", attack_box)
+        self.assertIn("network_interfaces:", attack_box)
+        self.assertNotIn("\n        network:\n", attack_box)
         self.assertIn("volume_type: gp3", attack_box)
         self.assertIn("delete_on_termination: true", attack_box)
         self.assertIn("Require enough root capacity for the full toolset", attack_box)

@@ -150,9 +150,8 @@
     - nbtscan
     - enum4linux
     - smbclient
-    - rpcclient
-    - showmount
-    - rpcinfo
+    - nfs-common
+    - rpcbind
     - snmp
     - snmp-mibs-downloader
     - onesixtyone
@@ -219,7 +218,18 @@
     - libgtk2.0-dev
     - libgtk-3-dev
   register: apt_install_result
-  ignore_errors: true
+  retries: 2
+  delay: 5
+  vars:
+    attack_box_kali_only_packages:
+      - exploitdb
+      - uniscan
+      - theharvester
+      - unicornscan
+      - enum4linux
+      - sslyze
+      - radare2
+  when: ansible_facts['distribution'] == 'Kali' or item not in attack_box_kali_only_packages
 
 - name: Show package installation progress
   debug:
@@ -299,14 +309,67 @@
   delay: 5
   ignore_errors: true
 
-- name: Check if Go is available
-  ansible.builtin.command: go version
-  register: go_version_check
+- name: Check for the managed Go runtime
+  ansible.builtin.command: /usr/local/go/bin/go version
+  register: managed_go_check
   failed_when: false
+  changed_when: false
+
+- name: Query official stable Go release metadata
+  ansible.builtin.uri:
+    url: https://go.dev/dl/?mode=json
+    return_content: true
+  register: go_release_response
+  retries: 3
+  delay: 10
+  until: go_release_response.status == 200
+  when: managed_go_check.rc != 0
+
+- name: Select the official stable Go release
+  set_fact:
+    go_stable_release: "{{ go_release_response.json | selectattr('stable', 'equalto', true) | first }}"
+  when: managed_go_check.rc != 0
+
+- name: Select the Go archive for this architecture
+  set_fact:
+    go_runtime_archive: "{{ go_stable_release.files | selectattr('os', 'equalto', 'linux') | selectattr('arch', 'equalto', {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(ansible_facts['architecture'], ansible_facts['architecture'])) | selectattr('kind', 'equalto', 'archive') | first }}"
+  when: managed_go_check.rc != 0
+
+- name: Download the checksummed Go runtime
+  ansible.builtin.get_url:
+    url: "https://go.dev/dl/{{ go_runtime_archive.filename }}"
+    dest: "/tmp/{{ go_runtime_archive.filename }}"
+    checksum: "sha256:{{ go_runtime_archive.sha256 }}"
+    mode: '0644'
+  when: managed_go_check.rc != 0
+
+- name: Remove an incomplete managed Go runtime
+  ansible.builtin.file:
+    path: /usr/local/go
+    state: absent
+  when: managed_go_check.rc != 0
+
+- name: Install the managed Go runtime
+  ansible.builtin.unarchive:
+    src: "/tmp/{{ go_runtime_archive.filename }}"
+    dest: /usr/local
+    remote_src: true
+  when: managed_go_check.rc != 0
+
+- name: Remove the downloaded Go runtime archive
+  ansible.builtin.file:
+    path: "/tmp/{{ go_runtime_archive.filename }}"
+    state: absent
+  when: managed_go_check.rc != 0
+
+- name: Verify the managed Go runtime
+  ansible.builtin.command: /usr/local/go/bin/go version
+  register: go_version_check
+  changed_when: false
 
 - name: Display Go version
   debug:
-    msg: "Go version: {{ go_version_check.stdout if go_version_check.rc == 0 else 'Go not found - skipping Go tools installation' }}"
+    msg: "Go version: {{ go_version_check.stdout }}"
 
 - name: Upload Go tools installation script
   ansible.builtin.copy:
@@ -315,10 +378,8 @@
     mode: '0755'
 
 - name: Execute Go tools installation script
-  ansible.builtin.shell: WORK_DIR="{{ work_dir }}" /tmp/install_go_tools.sh
+  ansible.builtin.shell: PATH="/usr/local/go/bin:$PATH" OPERATOR_DIR="{{ work_dir }}" /tmp/install_go_tools.sh
   register: go_install_result
-  when: go_version_check.rc == 0
-  ignore_errors: true
 
 - name: Display Go tools installation summary
   debug:
