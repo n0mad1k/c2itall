@@ -171,4 +171,5 @@ to it.
 | `venv/bin/python scripts/audit_provider_coverage.py [--require-provider P]` | which provider/workload pairs are native, legacy fallback, staged or unsupported |
 | `venv/bin/python scripts/test_provider_workload_live.py --provider P --workload W --activate` | real deploy, verify over SSH, repeat, standalone teardown, inventory restored |
 | `venv/bin/python scripts/test_azure_phantom_live.py --activate` | the Phantom handoff route on Azure |
+| `venv/bin/python scripts/test_flokinet_live.py --activate` | the FlokiNET route, with an Azure VM as the hand-ordered host |
 | `venv/bin/python deploy.py --deploy --azure-smoke --dry-run` | the reviewed Azure infrastructure smoke, non-mutating |

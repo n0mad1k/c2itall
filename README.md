@@ -309,6 +309,7 @@ Step-by-step recipes, skeletons and the validation errors you may hit:
 | `venv/bin/python scripts/audit_provider_coverage.py` | the provider/workload coverage matrix |
 | `venv/bin/python scripts/test_provider_workload_live.py --provider <p> --workload <w>` | dry run; add `--activate` for a real deploy, SSH verification, repeat, standalone teardown and inventory restore |
 | `venv/bin/python scripts/test_azure_phantom_live.py --activate [--service share]` | the Phantom handoff route on Azure, or the share drive built on it |
+| `venv/bin/python scripts/test_flokinet_live.py --activate` | the FlokiNET route against an Azure VM standing in for a hand-ordered root host |
 
 Live runs write evidence under `logs/<provider>-<workload>-live/<deployment_id>/`
 with the commit they executed from.
