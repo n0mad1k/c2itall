@@ -533,6 +533,157 @@ class PayloadServer:
         return report
 
 
+class SingleHost:
+    """Shared shape for the single-VM team services added with the stubs."""
+    repeat = {}
+    legacy_paths = ()
+    prefix = ''
+
+    def base_config(self, provider, deployment_id, operator_ip):
+        config = {
+            'deployment_id': deployment_id, 'provider': provider,
+            'provider_workload': self.name, 'deployment_type': self.deployment_type,
+            self.name + '_name': self.prefix + deployment_id, 'operator_ip': operator_ip,
+            'ssh_after_deploy': False,
+        }
+        config.update(live_config(provider, self.name))
+        # The profile sizes its own disk; the account default must not shrink it.
+        config.pop('azure_os_disk_gb', None)
+        ready, _ = prepare_module_ssh_key(config, deployment_id)
+        require(ready, 'Could not generate the module SSH key')
+        return config
+
+    def identity(self, config):
+        deployment_id = config['deployment_id']
+        return {'deployment_id': deployment_id, 'names': [self.prefix + deployment_id],
+                'key_names': ['c2deploy_' + deployment_id], 'sg_names': []}
+
+    def target(self, provider, config):
+        return driver_target(provider, self.prefix + config['deployment_id'], config['deployment_id'])
+
+    def local_artifacts(self, provider, config):
+        return key_files('c2deploy_' + config['deployment_id']) + shared_artifacts(config['deployment_id'])
+
+    def expect_rules(self, context, config, expected):
+        rules = context.cloud.inbound_rules(config['deployment_id'])
+        require(rules == sorted(expected), provider_label(context.provider) + ' ' + self.name +
+                ' rules differ from the profile: ' + str(rules))
+        return rules
+
+
+class Tracker(SingleHost):
+    name = 'tracker'
+    deployment_type = 'email_tracker'
+    prefix = 't-'
+    source_paths = ('modules/tracker',)
+
+    def config(self, provider, deployment_id, operator_ip):
+        config = self.base_config(provider, deployment_id, operator_ip)
+        config.update(domain='tracker-lab.test', tracker_subdomain='track',
+                      letsencrypt_email='admin@tracker-lab.test', zero_logs=True)
+        return config
+
+    def verify(self, context, config):
+        local = "curl -ks -o /dev/null -w '%{http_code}' --max-time 10 -H 'Host: track.tracker-lab.test' "
+        report = checks(context, [
+            ('tracker_active', 'test "$(systemctl is-active tracker)" = active'),
+            ('tracker_enabled', 'test "$(systemctl is-enabled tracker)" = enabled'),
+            ('nginx_active', 'test "$(systemctl is-active nginx)" = active'),
+            ('https_listening', "ss -ltn | grep -q ':443 '"),
+            ('app_outside_root', 'sudo -n test -x /opt/tracker/simple_email_tracker.py'),
+            ('runs_as_tracker', 'test "$(ps -o user= -C python)" = tracker || ps -o user= -C python | grep -qx tracker'),
+            ('pixel_public', 'test "$(' + local + 'https://127.0.0.1/pixel/local.png)" = 200'),
+            ('dashboard_not_local', 'test "$(' + local + 'https://127.0.0.1/)" = 403'),
+            ('sshd_no_password', "sudo -n /usr/sbin/sshd -T | grep -iq '^passwordauthentication no$'"),
+        ], timeout=180)
+        base = ['curl', '-ks', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '20']
+        pixel = context.run(base + ['https://' + context.address + '/pixel/live.png'])
+        require(pixel == '200', 'Tracking pixel is not public: ' + pixel)
+        dashboard = context.run(base + ['https://' + context.address + '/'])
+        require(dashboard == '200', 'Dashboard does not answer the operator: ' + dashboard)
+        details = context.run(base + ['https://' + context.address + '/details/live'])
+        require(details == '200', 'Pixel hit was not recorded: ' + details)
+        report.update({'pixel_public': True, 'dashboard_operator_only': True, 'hit_recorded': True})
+        report['security_group_rules'] = self.expect_rules(context, config, [
+            ('tcp', '22', config['operator_ip'] + '/32'), ('tcp', '443', '*'), ('tcp', '80', '*')])
+        return report
+
+
+class LoggingServer(SingleHost):
+    name = 'logging_server'
+    deployment_type = 'logging_server'
+    prefix = 'log-'
+    source_paths = ('modules/logging-server',)
+    shipper = '192.0.2.10'
+
+    def config(self, provider, deployment_id, operator_ip):
+        config = self.base_config(provider, deployment_id, operator_ip)
+        config.update(logging_ingest_sources=[self.shipper], logging_cert_name='logs.internal',
+                      redelk_ref='master')
+        return config
+
+    def verify(self, context, config):
+        report = checks(context, [
+            ('docker_active', 'test "$(systemctl is-active docker)" = active'),
+            ('elasticsearch_up', "sudo -n docker ps --format '{{.Names}}' | grep -qx redelk-elasticsearch"),
+            ('logstash_up', "sudo -n docker ps --format '{{.Names}}' | grep -qx redelk-logstash"),
+            ('kibana_up', "sudo -n docker ps --format '{{.Names}}' | grep -qx redelk-kibana"),
+            ('nginx_up', "sudo -n docker ps --format '{{.Names}}' | grep -qx redelk-nginx"),
+            ('beats_listening', "ss -ltn | grep -q ':5044 '"),
+            ('packages_kept', 'sudo -n test -s /opt/redelk/redirs.tgz -a -s /opt/redelk/c2servers.tgz'),
+            ('creds_private', 'test "$(sudo -n stat -c %a /opt/redelk-elk/elkserver/.env)" = 600'),
+            ('creds_present', "sudo -n grep -q '^CREDS_redelk=.\\+' /opt/redelk-elk/elkserver/.env"),
+            ('no_placeholders', "! sudo -n grep -q 'MODIFYME' /opt/redelk/certs/config.cnf"),
+            ('sshd_no_password', "sudo -n /usr/sbin/sshd -T | grep -iq '^passwordauthentication no$'"),
+        ], timeout=240)
+        status = context.run(['curl', '-ks', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '20',
+                              'https://' + context.address + '/'])
+        require(status in ('200', '302', '401'), 'Kibana front end does not answer the operator: ' + status)
+        report['kibana_reachable'] = status
+        report['security_group_rules'] = self.expect_rules(context, config, [
+            ('tcp', '22', config['operator_ip'] + '/32'), ('tcp', '443', config['operator_ip'] + '/32'),
+            ('tcp', '5044', self.shipper + '/32')])
+        return report
+
+
+class Hashtopolis(SingleHost):
+    name = 'hashtopolis'
+    deployment_type = 'hashtopolis'
+    prefix = 'h-'
+    source_paths = ('modules/hashtopolis',)
+    agent = '192.0.2.10'
+
+    def config(self, provider, deployment_id, operator_ip):
+        config = self.base_config(provider, deployment_id, operator_ip)
+        config.update(hashtopolis_agent_sources=[self.agent], hashtopolis_admin_user='liveadmin',
+                      domain='')
+        return config
+
+    def verify(self, context, config):
+        report = checks(context, [
+            ('docker_active', 'test "$(systemctl is-active docker)" = active'),
+            ('backend_up', "sudo -n docker ps --format '{{.Names}}' | grep -qx hashtopolis-backend"),
+            ('frontend_up', "sudo -n docker ps --format '{{.Names}}' | grep -qx hashtopolis-frontend"),
+            ('db_up', "sudo -n docker ps --format '{{.Names}}' | grep -qx hashtopolis-db"),
+            ('loopback_only', "! ss -ltn | grep -E '0\\.0\\.0\\.0:(8080|4200) '"),
+            ('creds_private', 'test "$(sudo -n stat -c %a /opt/hashtopolis/.env)" = 600'),
+            ('admin_set', "sudo -n grep -q '^HASHTOPOLIS_ADMIN_USER=liveadmin$' /opt/hashtopolis/.env"),
+            ('nginx_active', 'test "$(systemctl is-active nginx)" = active'),
+            ('local_denied', 'test "$(curl -ks -o /dev/null -w \'%{http_code}\' --max-time 10 https://127.0.0.1/)" = 403'),
+            ('sshd_no_password', "sudo -n /usr/sbin/sshd -T | grep -iq '^passwordauthentication no$'"),
+        ], timeout=240)
+        base = ['curl', '-ks', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '20']
+        ui = context.run(base + ['https://' + context.address + '/'])
+        require(ui == '200', 'Hashtopolis UI does not answer the operator: ' + ui)
+        api = context.run(base + ['https://' + context.address + '/api/server.php'])
+        require(api in ('200', '400', '405'), 'Hashtopolis agent API does not answer: ' + api)
+        report.update({'ui_reachable': True, 'agent_api': api})
+        report['security_group_rules'] = self.expect_rules(context, config, [
+            ('tcp', '22', config['operator_ip'] + '/32'), ('tcp', '443', config['operator_ip'] + '/32'),
+            ('tcp', '443', self.agent + '/32')])
+        return report
+
+
 class Phishing:
     """Basic phishing: an MTA front plus a GoPhish server, verified from the operator."""
     name = 'phishing'
@@ -654,7 +805,8 @@ class Phishing:
         return report
 
 
-WORKLOADS = {cls.name: cls for cls in (AttackBox, Redirector, FrontedRedirector, C2, PayloadServer, Phishing)}
+WORKLOADS = {cls.name: cls for cls in (AttackBox, Redirector, FrontedRedirector, C2, PayloadServer, Phishing,
+                                        Tracker, LoggingServer, Hashtopolis)}
 
 
 class Webrunner:

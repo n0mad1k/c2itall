@@ -11,6 +11,7 @@ from pathlib import Path
 import secrets
 import shutil
 import signal
+import subprocess
 import sys
 import time
 from unittest import mock
@@ -28,7 +29,7 @@ PHANTOM_ROOT = ROOT / "ghost_protocol" / "phantom"
 STATE_DIR = ROOT / "deployments" / "azure"
 EMAIL_IMAGE = "Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest"
 SERVICES = ("vpn", "matrix", "matrix_rotation", "tak", "dns", "cloud", "vault",
-            "media", "email", "all_in_one")
+            "media", "email", "all_in_one", "share")
 
 
 class LiveTestError(RuntimeError):
@@ -144,6 +145,9 @@ def expected_allow_rules(config):
                 ("tcp", "465", "*"), ("tcp", "587", "*"),
                 ("tcp", "993", "*"), ("tcp", "4190", "*"),
                 ("tcp", "53", "*"), ("udp", "53", "*")}
+    if config.get("provider_workload") == "share":
+        # The drive is tailnet-only: no public web ports at all.
+        return {("tcp", "22", operator), ("udp", "41641", "*")}
     if service in ("cloud", "vault", "media"):
         return {("tcp", "22", operator), ("tcp", "80", "*"),
                 ("tcp", "443", "*")}
@@ -387,6 +391,38 @@ def verify_cloud(runner, config):
             "ssh_password_authentication": False}
 
 
+def verify_share(runner, config):
+    """Nextcloud is installed, bound to the tailnet, and closed to the internet."""
+    command = (
+        "set -eu; "
+        "test \"$(systemctl is-active mariadb)\" = active; "
+        "test \"$(systemctl is-active nginx)\" = active; "
+        "test \"$(systemctl is-active tailscaled)\" = active; "
+        "test \"$(systemctl is-enabled tailscaled)\" = enabled; "
+        "command -v tailscale >/dev/null; "
+        "sudo -n test -s /var/www/nextcloud/.admin_password; "
+        "test \"$(sudo -n stat -c %a /var/www/nextcloud/.admin_password)\" = 600; "
+        "sudo -n -u www-data php /var/www/nextcloud/occ status --output=json "
+        "| grep -Eq '\"installed\"[[:space:]]*:[[:space:]]*true'; "
+        "sudo -n -u www-data php /var/www/nextcloud/occ config:system:get trusted_domains "
+        "| grep -qx share.internal; "
+        "sudo -n ufw status | grep -q 'tailscale0'; "
+        "! sudo -n ufw status | grep -Eq '^(80|443)/tcp +ALLOW +Anywhere'; "
+        "test \"$(curl -ks -o /dev/null -w '%{http_code}' -H 'Host: share.internal' "
+        "https://127.0.0.1/status.php)\" = 200; "
+        "sudo -n /usr/sbin/sshd -T | grep -q '^passwordauthentication no$'"
+    )
+    run_ssh(runner, config, command)
+    exposed = subprocess.run(
+        ["curl", "-k", "--silent", "--max-time", "15", "-o", "/dev/null",
+         f"https://{config['target_host']}/status.php"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    require(exposed.returncode != 0, "The share drive answered the public internet")
+    return {"nextcloud_installed": True, "tailscale_active": True,
+            "tailnet_only_firewall": True, "closed_to_internet": True,
+            "ssh_password_authentication": False}
+
+
 def verify_vault(runner, config):
     command = (
         "set -eu; "
@@ -533,6 +569,8 @@ def verify_service(runner, config):
         return verify_tak(runner, config)
     if config["server_type"] == "dns":
         return verify_dns(runner, config)
+    if config.get("provider_workload") == "share":
+        return verify_share(runner, config)
     if config["server_type"] == "cloud":
         return verify_cloud(runner, config)
     if config["server_type"] == "vault":
@@ -585,6 +623,12 @@ def preserve_failure_log(phantom, runner, deployment_id, config):
 
 
 def service_config(service):
+    if service == "share":
+        return {
+            "provider_workload": "share", "domain": "share.internal",
+            "cloud_admin_user": "liveadmin", "cloud_storage_gb": "10",
+            "tailscale_auth_key": "", "deployment_type": "share_drive",
+        }
     if service == "vpn":
         return {
             "provider_workload": "phantom", "vpn_port": 51820,
@@ -670,9 +714,20 @@ def load_chat_module():
     return module
 
 
+def load_share_module():
+    path = ROOT / "modules" / "share-drive" / "deploy_share.py"
+    spec = importlib.util.spec_from_file_location("azure_live_share", path)
+    require(spec is not None and spec.loader is not None, "Could not load share module")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def deploy_service(service, phantom, config):
     if service in ("matrix", "matrix_rotation", "tak"):
         return load_chat_module().deploy_chat(config)
+    if service == "share":
+        return load_share_module().deploy_share(config)
     return phantom.deploy(service, config)
 
 
@@ -782,7 +837,7 @@ def activate(service="vpn", operator_ip=None):
         "azure_subscription_id": SUBSCRIPTION, "azure_location": LOCATION,
         "azure_vm_size": SIZE, "azure_state_dir": str(STATE_DIR),
         "operator_ip": "",
-        "server_type": "matrix" if service == "matrix_rotation" else service,
+        "server_type": {"matrix_rotation": "matrix", "share": "cloud"}.get(service, service),
         "ssh_after_deploy": False,
     }
     config.update(service_config(service))

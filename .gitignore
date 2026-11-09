@@ -120,3 +120,6 @@ GATE_*.md
 deployments/azure/
 deployments/chat/
 artifacts/takserver/
+
+# Payloads pulled from deployed C2 servers
+payloads/
