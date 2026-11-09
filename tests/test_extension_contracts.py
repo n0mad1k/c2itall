@@ -115,6 +115,12 @@ class FakeProviderTests(unittest.TestCase):
                 harness.driver_target('fakecloud', 'r-x', 'x'),
                 ('r-x', 'operator', Path.home() / '.ssh' / 'c2deploy_x'))
             self.assertIn(Path('/nonexistent/fakecloud/x.json'), harness.driver_artifacts('x'))
+            with mock.patch.object(harness, 'live_config', return_value={}), \
+                    mock.patch.object(harness, 'prepare_module_ssh_key',
+                                      return_value=(True, Path('/tmp/test-key'))):
+                redirector = harness.Redirector().config('fakecloud', 'lt', '8.8.8.8')
+            self.assertEqual(redirector['backend_ip'], harness.Redirector.test_backend_ip)
+            self.assertNotEqual(redirector['backend_ip'], redirector['operator_ip'])
             self.assertEqual(harness.Webrunner().identity('fakecloud', 'lt'),
                              {'deployment_id': 'lt-n01', 'names': ['wr-lt-01']})
 

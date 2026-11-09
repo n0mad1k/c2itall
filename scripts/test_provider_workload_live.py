@@ -256,13 +256,16 @@ class Redirector:
     repeat = {'aws': True, 'linode': True}
     source_paths = ('modules/redirectors', 'common')
     legacy_paths = ('providers/{dir}/redirector.yml',)
+    test_backend_ip = '192.0.2.10'
 
     def config(self, provider, deployment_id, operator_ip):
         config = {
             'deployment_id': deployment_id, 'provider': provider,
             'provider_workload': 'redirector', 'domain': 'redirector-lab.test',
             'redirector_subdomain': 'cdn', 'backend_type': 'c2',
-            'backend_ip': operator_ip,
+            # A documentation-only address deliberately distinct from the
+            # operator proves that providers wire backend_ip, not operator_ip.
+            'backend_ip': self.test_backend_ip,
             'redirector_type': 'https', 'letsencrypt_email': 'admin@redirector-lab.test',
             'operator_ip': operator_ip, 'ssh_after_deploy': False,
             'deployment_type': 'c2_redirector', 'redirector_only': True,
@@ -302,6 +305,10 @@ class Redirector:
             ('shell_handler_enabled', 'test "$(systemctl is-enabled shell-handler)" = enabled'),
             ('http_listening', "ss -ltn | grep -q ':80 '"),
             ('https_listening', "ss -ltn | grep -q ':443 '"),
+            ('nginx_backend_wired', "sudo -n grep -Rqs -- 'proxy_pass https://" +
+             self.test_backend_ip + ":' /etc/nginx"),
+            ('shell_backend_wired', "sudo -n grep -qs -- 'Environment=\"C2_HOST=" +
+             self.test_backend_ip + "\"' /etc/systemd/system/shell-handler.service"),
             ('local_https', 'test "$(curl -ks -o /dev/null -w \'%{http_code}\' -H \'Host: ' + host +
              '\' https://127.0.0.1/)" = 200'),
             ('post_install_script', 'sudo -n test -x /root/Tools/post_install_redirector.sh'),
