@@ -1021,8 +1021,10 @@ def cleanup(runner, cloud, provider, workload, config, identity, deployed):
     deployment_id = config['deployment_id']
     info = ROOT / 'logs' / ('deployment_info_' + deployment_id + '.txt')
     report = {'standalone_teardown': None}
-    if info.exists():
+    if info.exists() or deployed:
         # Prove recovery from a fresh process that holds no provider credential.
+        # Driver state alone must be enough: a handoff module may record its
+        # deployment elsewhere (Phantom writes under the main checkout's logs/).
         env = {key: value for key, value in os.environ.items() if key not in CREDENTIAL_ENVIRONMENT}
         result = subprocess.run(
             [sys.executable, 'teardown.py', '--deployment-id', deployment_id, '--force'],
@@ -1031,8 +1033,6 @@ def cleanup(runner, cloud, provider, workload, config, identity, deployed):
                                                    'output': result.stdout[-30000:]})
         report['standalone_teardown'] = result.returncode == 0
         require(result.returncode == 0, 'Standalone routed teardown failed')
-    elif deployed:
-        report['standalone_teardown'] = 'not-recorded'
     deadline = time.monotonic() + 600
     while True:
         remaining = cloud.inventory(identity)
