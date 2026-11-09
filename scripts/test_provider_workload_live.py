@@ -20,6 +20,7 @@ import signal
 import subprocess
 import sys
 import time
+from unittest import mock
 import uuid
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -736,7 +737,9 @@ class Share(SingleHost):
         return config
 
     def deploy(self, config):
-        return self.module().deploy_share(config)
+        # Phantom asks "Deploy? [y/N]" on its own; the Azure Phantom harness answers the same way.
+        with mock.patch('builtins.input', return_value='y'):
+            return self.module().deploy_share(config)
 
     def verify(self, context, config):
         local = "curl -ks -o /dev/null -w '%{http_code}' --max-time 10 -H 'Host: share.internal' "
