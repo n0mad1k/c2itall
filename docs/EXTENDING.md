@@ -89,6 +89,13 @@ class NameDriver(CloudDriver):
     def public_address(self, deployment_id, config):
         """Return the VM's public IPv4 as a string."""
 
+    # edge (optional) ---------------------------------------------------------
+    # supports_edge = True
+    # def plan(...): translate rule source 'edge' to your CDN's source ranges
+    #                or service tag and keep request.edge in the record
+    # def edge_endpoint(self, deployment_id, config):
+    #     return {'edge_id': ..., 'edge_hostname': ..., 'edge_header': ...}
+
     def cleanup(self, request):
         """Delete owned resources; True only after proving they are absent.
 
@@ -133,6 +140,9 @@ Rules the adapters rely on:
   share with the parent ID.
 - Never read provider credentials from the config; use the environment
   mapping declared in the registry or the vault.
+- Leave `supports_edge` false unless `plan` really honours
+  `request.edge` and `edge_endpoint` returns the identifier the edge stamps
+  on every forwarded request; a fronted profile is refused otherwise.
 
 ### 2. Register it
 
@@ -307,7 +317,11 @@ PROFILE = ExampleProfile()
 ```
 
 SSH from the operator's /32 is always opened by the driver; list only the
-service ports. `source` is `'*'` or one IPv4 host or CIDR. Use `'components'`
+service ports. `source` is `'*'`, one global IPv4 host (`utils.workloads.host_source`
+normalizes it to a /32), or `'edge'` when the profile also returns an edge
+request from `edge(config)`; the driver then admits only its own edge network
+on that port and the service play receives `edge_id`, `edge_hostname` and
+`edge_header` (see `modules/redirectors/workload.py`). Use `'components'`
 with a `components = ((flag, Profile()), ...)` tuple for several VMs (see
 `modules/phishing/workload.py`), `'nodes'` for scan pools (see
 `modules/webrunner/workload.py`), or `'handoff'` when the module runs its own
@@ -387,7 +401,10 @@ venv/bin/python scripts/test_provider_workload_live.py --provider azure --worklo
 
 The live harness needs a workload class in
 `scripts/test_provider_workload_live.py` (config, identity, target, verify,
-local_artifacts) before the last command works; copy `PayloadServer`.
+local_artifacts) before the last command works; copy `PayloadServer`, or
+subclass `SingleHost` as the tracker, logging server and Hashtopolis do. A
+handoff workload built on Phantom (the share drive) is verified by
+`scripts/test_azure_phantom_live.py --service <name>` instead.
 
 ---
 
@@ -398,6 +415,8 @@ local_artifacts) before the last command works; copy `PayloadServer`.
 | C2 framework | an entry in `FRAMEWORKS` in `modules/c2/workload.py` (label, task file, operator and redirector listener ports) plus `modules/c2/tasks/configure_<fw>.yml` | both C2 menus, the C2 inbound rules, the service play's include |
 | Attack-box subtype | an entry in `VARIANTS` in `modules/attack-box/workload.py` (task file, deployment_type) plus `modules/attack-box/tasks/configure_<subtype>.yml`; the name must already be in the attack-box `WorkloadSpec` variants | the attack-box menu's provider list for that subtype, the coverage audit |
 | Phantom or chat service | a branch in `service_rules` in `modules/phantom/workload.py` and, if the disk differs, `disk_gb` | Phantom's own menus; the rules reach every driver |
+| Service built on a Phantom play (share drive pattern) | a `handoff` profile with its own rules, a controller that calls `phantom.deploy(<service>, config)` then its own addon play | the main menu; teardown routes through the same adapter |
+| Fronted redirector on another provider | `supports_edge`, the `'edge'` source mapping and `edge_endpoint` in that driver | the redirector's CDN-fronted entry |
 | Phishing component | a `PhishingComponent` subclass with its own `component`, play and ports, plus a `(flag, profile)` entry in `PhishingProfile.components` and `modules/phishing/service-<component>.yml` | the phishing controller's component flags |
 
 A transition provider's legacy play has to understand the new variant
@@ -425,6 +444,9 @@ separately; the native path does not.
 | `Provider workload controller catalog drift` | a `modules/*/deploy_*.py` calls `gather_provider_config` but has no `WorkloadSpec`, or vice versa |
 | `Cloud driver must define <name>` | `provider`, `ssh_user` or `prefix` is unset on the driver |
 | `<p> <w> deployment returned an invalid public IP` | the driver returned something other than a global IPv4 string |
+| `<p> cannot front <w> with an edge` | the profile returned an edge request but the driver has `supports_edge = False` |
+| `Invalid Azure edge request` | `azure_edge` is not `{host_header, forwarding, name}` with a hostname, `HttpsOnly`/`HttpOnly`/`MatchRequest` and a short lowercase label |
+| `<key> must be one global IPv4 host` | a profile's operator or allowlist input is private, a CIDR, or not IPv4 |
 
 ## Guardrails
 

