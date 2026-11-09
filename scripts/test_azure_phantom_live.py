@@ -603,6 +603,7 @@ def service_config(service):
         return {
             "provider_workload": "phantom", "domain": "mail.test",
             "email_first_user": "admin@mail.test",
+            "email_skip_network_checks": True,
         }
     if service == "all_in_one":
         return {

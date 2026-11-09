@@ -2137,11 +2137,19 @@ class RoutingAndTemplateTests(AzureFixture):
             self.assertEqual(probe[0], sys.executable)
             compile(probe[2], '<live-probe>', 'exec')
 
-    def test_mailinabox_installer_has_a_cloud_safe_bounded_timeout(self):
+    def test_mailinabox_installer_has_cloud_safe_noninteractive_inputs(self):
         configure = (ROOT / 'ghost_protocol/phantom/playbooks/email/tasks/configure.yml')
         text = configure.read_text()
         self.assertIn('Run Mail-in-a-Box installer (non-interactive)', text)
         self.assertIn('timeout: 3600', text)
+        self.assertIn('PUBLIC_IP: "auto"', text)
+        self.assertIn('PUBLIC_IPV6: "auto"', text)
+        self.assertIn('STORAGE_USER: "user-data"', text)
+        self.assertIn('STORAGE_ROOT: "/home/user-data"', text)
+        self.assertIn('email_skip_network_checks | default(false)', text)
+
+        live_harness = (ROOT / 'scripts/test_azure_phantom_live.py').read_text()
+        self.assertIn('"email_skip_network_checks": True', live_harness)
 
     def test_azure_inbound_rules_reject_unsafe_or_ambiguous_values(self):
         invalid = (
