@@ -14,6 +14,7 @@ import signal
 import sys
 import time
 from unittest import mock
+from urllib.parse import quote
 import uuid
 import zipfile
 
@@ -26,8 +27,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PHANTOM_ROOT = ROOT / "ghost_protocol" / "phantom"
 STATE_DIR = ROOT / "deployments" / "azure"
 EMAIL_IMAGE = "Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest"
-SERVICES = ("vpn", "matrix", "tak", "dns", "cloud", "vault", "media", "email",
-            "all_in_one")
+SERVICES = ("vpn", "matrix", "matrix_rotation", "tak", "dns", "cloud", "vault",
+            "media", "email", "all_in_one")
 
 
 class LiveTestError(RuntimeError):
@@ -51,6 +52,7 @@ def verify_committed_source(runner):
     parent_paths = (
         "README.md", "providers/Azure/templates/infrastructure.json.j2",
         "modules/chat-server/deploy_chat.py",
+        "modules/chat-server/rotate_matrix.py",
         "modules/chat-server/chat_addons.yml",
         "modules/chat-server/tak_server.yml",
         "modules/chat-server/templates",
@@ -123,7 +125,7 @@ def expected_allow_rules(config):
         return {("tcp", "22", operator), ("tcp", "53", operator),
                 ("udp", "53", operator), ("tcp", "80", operator),
                 ("tcp", "443", operator)}
-    if service == "matrix":
+    if service in ("matrix", "matrix_rotation"):
         rules = {("tcp", "22", operator), ("tcp", "80", "*"),
                  ("tcp", "443", "*"), ("tcp", "8448", "*")}
         if config.get("provider_workload") == "chat":
@@ -559,6 +561,11 @@ def service_config(service):
             "matrix_macaroon_secret": secrets.token_hex(32),
             "tailscale_auth_key": "", "enable_bot_support": True,
         }
+    if service == "matrix_rotation":
+        config = service_config("matrix")
+        config.update(domain="matrix-1.test", matrix_server_name="matrix-1.test",
+                      matrix_registration_requires_token=False)
+        return config
     if service == "tak":
         chat = load_chat_module()
         return {
@@ -622,9 +629,80 @@ def load_chat_module():
 
 
 def deploy_service(service, phantom, config):
-    if service in ("matrix", "tak"):
+    if service in ("matrix", "matrix_rotation", "tak"):
         return load_chat_module().deploy_chat(config)
     return phantom.deploy(service, config)
+
+
+def load_rotation_module():
+    path = ROOT / "modules" / "chat-server" / "rotate_matrix.py"
+    spec = importlib.util.spec_from_file_location("azure_live_matrix_rotation", path)
+    require(spec is not None and spec.loader is not None,
+            "Could not load Matrix rotation module")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def verify_matrix_rotation_live(runner, config, context):
+    rotation = load_rotation_module()
+    context["module"] = rotation
+    access = rotation._login(config)
+    created = rotation._matrix_request(
+        config, "POST", "/_matrix/client/v3/createRoom",
+        {"preset": "private_chat", "visibility": "private",
+         "name": "c2itall live rotation"}, access)
+    room_id = created.get("room_id")
+    require(isinstance(room_id, str) and room_id.startswith("!"),
+            "Matrix announcement room was not created")
+    now = time.time()
+    state_path, _ = rotation.initialise(
+        "live-" + config["deployment_id"], config["deployment_id"], room_id,
+        "matrix-{generation}.test", interval_days=1, grace_hours=1,
+        uses_allowed=5, now=now - 86401)
+    context["state_path"] = state_path
+    with mock.patch("builtins.input", return_value="y"):
+        require(rotation.run_once(state_path, now=now) == "replacement announced",
+                "Matrix replacement was not announced")
+    state = rotation._load_state(state_path)
+    replacement = state.get("replacement")
+    require(state.get("phase") == "grace" and replacement,
+            "Matrix rotation did not enter the grace phase")
+    context["replacement"] = replacement
+    azure = resource_snapshot(runner, replacement)
+    service = verify_matrix(runner, replacement)
+    run_ssh(
+        runner, replacement,
+        "sudo -n grep -Fxq 'registration_requires_token: true' "
+        "/etc/matrix-synapse/homeserver.yaml")
+    messages = rotation._matrix_request(
+        config, "GET",
+        f"/_matrix/client/v3/rooms/{quote(room_id, safe='')}/messages?dir=b&limit=10",
+        token=access)
+    bodies = [event.get("content", {}).get("body", "")
+              for event in messages.get("chunk", [])
+              if event.get("type") == "m.room.message"]
+    require(any(replacement["domain"] in body and "Registration token:" in body
+                for body in bodies),
+            "Old Matrix server does not contain the replacement announcement")
+    require("Registration token:" not in state_path.read_text(),
+            "Rotation state persisted the posted registration token")
+    require(rotation.run_once(
+        state_path, now=float(state["teardown_at"])) == "old deployment retired",
+        "Matrix rotation did not retire the old deployment")
+    final_state = rotation._load_state(state_path)
+    require(final_state["phase"] == "active"
+            and final_state["active"]["deployment_id"] == replacement["deployment_id"],
+            "Replacement Matrix server was not promoted")
+    require(runner.az("group", "exists", "--name",
+                      config["azure_resource_group"]) is False,
+            "Old Matrix resource group remains after rotation")
+    return {
+        "replacement_azure": azure, "replacement_service": service,
+        "announcement_posted": True, "registration_token_required": True,
+        "posted_token_absent_from_state": True, "old_server_retired": True,
+        "replacement_promoted": True,
+    }
 
 
 def clean_phantom_files(phantom, deployment_id, config=None):
@@ -660,7 +738,9 @@ def activate(service="vpn", operator_ip=None):
         "deployment_id": deployment_id, "azure_resource_group": group,
         "azure_subscription_id": SUBSCRIPTION, "azure_location": LOCATION,
         "azure_vm_size": SIZE, "azure_state_dir": str(STATE_DIR),
-        "operator_ip": "", "server_type": service, "ssh_after_deploy": False,
+        "operator_ip": "",
+        "server_type": "matrix" if service == "matrix_rotation" else service,
+        "ssh_after_deploy": False,
     }
     config.update(service_config(service))
     if service == "tak":
@@ -671,6 +751,7 @@ def activate(service="vpn", operator_ip=None):
         config["tak_artifact_dir"] = str(
             ROOT / "deployments" / "chat" / deployment_id)
     phantom = None
+    rotation_context = {}
     live_passed = cleanup_passed = False
     failure = None
     previous = {sig: signal.signal(sig, runner.handle_signal)
@@ -720,6 +801,10 @@ def activate(service="vpn", operator_ip=None):
                                                   "service": repeated_service,
                                                   "log_redaction": redaction,
                                                   "resource_identity_preserved": True})
+        if service == "matrix_rotation":
+            rotation_result = verify_matrix_rotation_live(
+                runner, config, rotation_context)
+            runner.record("matrix-rotation.json", rotation_result)
         live_passed = True
     except BaseException as error:
         failure = str(error)
@@ -730,22 +815,53 @@ def activate(service="vpn", operator_ip=None):
         runner.deadline = time.monotonic() + 600
         config["azure_cleanup_deadline"] = runner.deadline
         try:
-            active_state = STATE_DIR / f"{deployment_id}.json"
-            group_exists = runner.az("group", "exists", "--name", group)
-            if active_state.exists() or group_exists is not False:
-                require(phantom is not None, "Phantom could not be loaded for cleanup")
-                require(phantom.teardown_instance(config), "Phantom teardown failed")
-            require(runner.az("group", "exists", "--name", group) is False,
-                    "Phantom resource group remains after teardown")
+            cleanup_configs = {config["deployment_id"]: config}
+            rotation_state_path = rotation_context.get("state_path")
+            rotation = rotation_context.get("module")
+            if rotation_state_path and Path(rotation_state_path).exists() and rotation:
+                rotation_state = rotation._load_state(rotation_state_path)
+                for candidate in (rotation_state.get("active"),
+                                  rotation_state.get("replacement")):
+                    if candidate and candidate.get("deployment_id"):
+                        cleanup_configs[candidate["deployment_id"]] = candidate
+            if rotation_context.get("replacement"):
+                candidate = rotation_context["replacement"]
+                cleanup_configs[candidate["deployment_id"]] = candidate
+            require(phantom is not None or not cleanup_configs,
+                    "Phantom could not be loaded for cleanup")
+            cleaned_groups = []
+            for candidate in reversed(list(cleanup_configs.values())):
+                candidate_id = candidate["deployment_id"]
+                candidate_group = candidate.get(
+                    "azure_resource_group", f"c2itall-{candidate_id}")
+                active_state = STATE_DIR / f"{candidate_id}.json"
+                group_exists = runner.az(
+                    "group", "exists", "--name", candidate_group)
+                if active_state.exists() or group_exists is not False:
+                    candidate["azure_cleanup_deadline"] = runner.deadline
+                    require(phantom.teardown_instance(candidate),
+                            f"Phantom teardown failed for {candidate_id}")
+                require(runner.az("group", "exists", "--name",
+                                  candidate_group) is False,
+                        f"Phantom resource group remains: {candidate_group}")
+                require(not active_state.exists(),
+                        f"Active Azure recovery state remains: {candidate_id}")
+                clean_phantom_files(phantom, candidate_id, candidate)
+                candidate_key = phantom._ssh_key_path(candidate_id)
+                require(not candidate_key.exists()
+                        and not Path(str(candidate_key) + ".pub").exists(),
+                        f"Generated Azure SSH key remains: {candidate_id}")
+                cleaned_groups.append(candidate_group)
+            if rotation_state_path:
+                Path(rotation_state_path).unlink(missing_ok=True)
+                with contextlib.suppress(OSError):
+                    Path(rotation_state_path).parent.rmdir()
             runner.cleanup_subscription()
             final_inventory = runner.inventory()
             require(final_inventory == runner.subscription_baseline,
                     "Azure subscription inventory was not restored")
-            require(not active_state.exists(), "Active Azure recovery state remains")
             require(not key.exists() and not Path(str(key) + ".pub").exists(),
                     "Generated Azure SSH key remains")
-            if phantom is not None:
-                clean_phantom_files(phantom, deployment_id, config)
             if config.get("tak_artifact_dir"):
                 require(not Path(config["tak_artifact_dir"]).exists(),
                         "Fetched TAK artifacts remain after cleanup")
@@ -753,6 +869,7 @@ def activate(service="vpn", operator_ip=None):
                 "resource_group_absent": True, "active_state_absent": True,
                 "generated_key_absent": True, "inventory": final_inventory,
                 "phantom_work_files_removed": phantom is not None,
+                "cleaned_groups": cleaned_groups,
             })
             cleanup_passed = True
         except BaseException as cleanup_error:
