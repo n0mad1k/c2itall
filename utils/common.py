@@ -151,6 +151,9 @@ def setup_logging(deployment_id=None, operation_type="deployment"):
     
     # Configure root logger
     root_logger.setLevel(logging.DEBUG)  # Capture everything at root level
+    # Provider SDKs log signed request headers at DEBUG; keep credentials out of the file.
+    for name in ('botocore', 'boto3', 's3transfer', 'urllib3'):
+        logging.getLogger(name).setLevel(logging.INFO)
     root_logger.addHandler(file_handler)
     root_logger.addHandler(console_handler)
     
