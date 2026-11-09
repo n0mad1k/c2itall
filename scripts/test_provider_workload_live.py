@@ -605,9 +605,11 @@ class Hashtopolis(SingleHost):
         base = ['curl', '-ks', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '20']
         ui = context.run(base + ['https://' + context.address + '/'])
         require(ui == '200', 'Hashtopolis UI does not answer the operator: ' + ui)
-        api = context.run(base + ['https://' + context.address + '/api/server.php'])
-        require(api in ('200', '400', '405'), 'Hashtopolis agent API does not answer: ' + api)
-        report.update({'ui_reachable': True, 'agent_api': api})
+        # The agent handshake is the only query the API answers without credentials.
+        api = context.run(['curl', '-ks', '--max-time', '20', '-H', 'Content-Type: application/json',
+                           '-d', '{"action":"testConnection"}', 'https://' + context.address + '/api/server.php'])
+        require('"response":"SUCCESS"' in api, 'Hashtopolis agent API did not accept testConnection: ' + api[:200])
+        report.update({'ui_reachable': True, 'agent_api': 'testConnection SUCCESS'})
         report['security_group_rules'] = self.expect_rules(context, config, [
             ('tcp', '22', config['operator_ip'] + '/32'), ('tcp', '443', config['operator_ip'] + '/32'),
             ('tcp', '443', self.agent + '/32')])
