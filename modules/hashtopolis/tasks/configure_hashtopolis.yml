@@ -169,13 +169,13 @@
         method: POST
         body_format: json
         body:
-          section: test
+          action: testConnection
         return_content: true
         status_code: 200
       register: hashtopolis_api
       retries: 60
       delay: 10
-      until: hashtopolis_api is success and (hashtopolis_api.json.response | default('')) == 'OK'
+      until: hashtopolis_api is success and (hashtopolis_api.json.response | default('')) == 'SUCCESS'
   rescue:
     - name: Collect the container logs that explain the failure
       ansible.builtin.command:
