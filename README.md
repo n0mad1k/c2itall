@@ -175,6 +175,12 @@ system logs and managed boot diagnostics stay enabled. Service ports come
 from the workload profile. Kali marketplace terms must be accepted before the
 Quick Recon, Kali attack-box and C2 routes can provision their image.
 
+The CDN-fronted redirector adds an Azure Front Door Standard profile to the
+same resource group. The `Microsoft.Cdn` resource provider must be registered
+in the subscription, and Azure refuses Front Door on Free Trial and Student
+subscriptions ("Free Trial and Student account is forbidden for Azure
+Frontdoor resources"); a pay-as-you-go or enterprise subscription is required.
+
 Authentication prefers an existing `az` session and recovers an expired one
 from the automation identity. Run
 `venv/bin/python scripts/setup_azure_automation.py --activate` once to create

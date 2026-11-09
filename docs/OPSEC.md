@@ -66,6 +66,7 @@ inventories and is listed under Open items below.
 | Client address | the origin trusts `X-Forwarded-For` only in fronted mode, where the edge is the only possible sender, so the security-IP maps judge the real client and not the edge |
 | Teardown | the resource group deletion removes the edge; a Front Door profile takes several minutes longer to delete than a VM and the cleanup deadline is extended accordingly |
 | Cost | Front Door Standard carries a base monthly fee plus egress; it is billed hourly while it exists |
+| Subscription | Azure refuses Front Door on Free Trial and Student subscriptions; the fronted route needs a pay-as-you-go or enterprise subscription and the `Microsoft.Cdn` provider registered |
 
 What the fronted redirector is not: true domain fronting (a TLS SNI for one
 domain and a Host header for another) no longer works on the major CDNs. This
