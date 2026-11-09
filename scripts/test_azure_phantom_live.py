@@ -783,6 +783,7 @@ def activate(service="vpn", operator_ip=None):
         with mock.patch("builtins.input", return_value="y"):
             require(deploy_service(service, phantom, config),
                     f"Initial Phantom {service} deployment failed")
+        runner.deadline = time.monotonic() + 600
         first = resource_snapshot(runner, config)
         first_service = verify_service(runner, config)
         runner.record("first-deployment.json", {"azure": first,
@@ -792,6 +793,7 @@ def activate(service="vpn", operator_ip=None):
         with mock.patch("builtins.input", return_value="y"):
             require(deploy_service(service, phantom, config),
                     f"Repeated Phantom {service} deployment failed")
+        runner.deadline = time.monotonic() + 600
         repeated = resource_snapshot(runner, config)
         repeated_service = verify_service(runner, config)
         redaction = verify_service_log_redaction(phantom, deployment_id, config)
@@ -803,6 +805,7 @@ def activate(service="vpn", operator_ip=None):
                                                   "log_redaction": redaction,
                                                   "resource_identity_preserved": True})
         if service == "matrix_rotation":
+            runner.deadline = time.monotonic() + 1800
             rotation_result = verify_matrix_rotation_live(
                 runner, config, rotation_context)
             runner.record("matrix-rotation.json", rotation_result)

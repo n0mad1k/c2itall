@@ -2195,6 +2195,9 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertIn('"domain": "box.example.com"', live_harness)
         self.assertIn('"email_first_user": "admin@example.com"', live_harness)
         self.assertNotIn('"email_first_user": "admin@mail.test"', live_harness)
+        self.assertGreaterEqual(
+            live_harness.count('runner.deadline = time.monotonic() + 600'), 3)
+        self.assertIn('runner.deadline = time.monotonic() + 1800', live_harness)
 
     def test_azure_inbound_rules_reject_unsafe_or_ambiguous_values(self):
         invalid = (
