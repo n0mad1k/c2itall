@@ -114,6 +114,7 @@ class ProviderPlaybookSyntaxTests(unittest.TestCase):
         self.assertNotIn("- bless", base)
         self.assertIn("Check availability of optional attack-box packages", content)
         self.assertIn("Install available optional attack-box packages", content)
+        self.assertIn("attack_box_kali_only_packages:\n      - recon-ng", content)
 
     def test_webrunner_teardown_verifies_nodes_and_auxiliaries(self):
         playbook = (ROOT / "providers/webrunner.yml").read_text()

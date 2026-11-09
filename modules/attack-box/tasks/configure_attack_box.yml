@@ -220,6 +220,7 @@
   delay: 5
   vars:
     attack_box_kali_only_packages:
+      - recon-ng
       - exploitdb
       - uniscan
       - theharvester
