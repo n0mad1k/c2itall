@@ -62,76 +62,20 @@
         deployment_region: "{{ region_choices | random }}"
       when: region_choices is defined and region_choices|length > 0 and not selected_region is defined and not linode_region is defined and not deployment_region is defined
 
-    - name: Create phishing webserver Linode instance
-      block:
-        - name: Try creating instance in specified region
-          community.general.linode_v4:
-            access_token: "{{ linode_token }}"
-            label: "{{ webserver_name }}"
-            type: "{{ webserver_plan | default('g6-nanode-1') }}"
-            region: "{{ deployment_region }}"
-            image: "linode/debian12"
-            root_pass: "{{ lookup('password', '/dev/null length=16') }}"
-            authorized_keys:
-              - "{{ lookup('file', ssh_key_path) }}"
-            state: present
-          register: webserver_instance
-      rescue:
-        - name: Log region restriction error
-          debug:
-            msg: "Region {{ deployment_region }} is restricted. Trying fallback regions..."
+    - name: Create phishing webserver Linode instance with region fallback
+      include_tasks: tasks/create_instance_with_fallback.yml
+      vars:
+        linode_instance_label: "{{ webserver_name }}"
+        linode_instance_type: "{{ webserver_plan | default('g6-nanode-1') }}"
+        linode_instance_image: "linode/debian12"
+        linode_requested_region: "{{ deployment_region }}"
 
-        - name: Set fallback regions (most reliable ones first)
-          set_fact:
-            fallback_regions:
-              - "us-east"
-              - "us-central"
-              - "eu-west"
-              - "us-west"
-
-        - name: Try fallback regions
-          community.general.linode_v4:
-            access_token: "{{ linode_token }}"
-            label: "{{ webserver_name }}"
-            type: "{{ webserver_plan | default('g6-nanode-1') }}"
-            region: "{{ item }}"
-            image: "linode/debian12"
-            root_pass: "{{ lookup('password', '/dev/null length=16') }}"
-            authorized_keys:
-              - "{{ lookup('file', ssh_key_path) }}"
-            state: present
-          register: webserver_instance
-          loop: "{{ fallback_regions }}"
-          when: webserver_instance is not defined or webserver_instance.failed
-          ignore_errors: yes
-
-        - name: Update deployment region with successful fallback
-          set_fact:
-            deployment_region: "{{ item }}"
-          loop: "{{ fallback_regions }}"
-          loop_control:
-            extended: true
-          when: webserver_instance.results is defined and webserver_instance.results[ansible_loop.index0] is defined and not webserver_instance.results[ansible_loop.index0].failed
-
-        - name: Fail if all regions are restricted
-          fail:
-            msg: "All attempted regions are restricted. Please try again later or contact Linode support."
-          when: webserver_instance.failed | default(true)
-
-    - name: Set webserver_ip for later use
-      block:
-        - name: Extract instance info from direct creation
-          set_fact:
-            webserver_ip: "{{ webserver_instance.instance.ipv4[0] }}"
-            webserver_instance_id: "{{ webserver_instance.instance.id }}"
-          when: webserver_instance.instance is defined
-
-        - name: Extract instance info from fallback creation
-          set_fact:
-            webserver_ip: "{{ item.instance.ipv4[0] }}"
-            webserver_instance_id: "{{ item.instance.id }}"
-          loop: "{{ webserver_instance.results | default([]) }}"
-          when: webserver_instance.results is defined and item.instance is defined and not item.failed
+    - name: Store phishing webserver Linode result
+      set_fact:
+        webserver_instance: "{{ linode_created_instance }}"
+        deployment_region: "{{ linode_created_region }}"
+        webserver_ip: "{{ linode_created_instance.instance.ipv4[0] }}"
+        webserver_instance_id: "{{ linode_created_instance.instance.id }}"
 
     # Persist webserver_ip into infrastructure state for downstream playbooks
     - name: Merge webserver IP into infrastructure state

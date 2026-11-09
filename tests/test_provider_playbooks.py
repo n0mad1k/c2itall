@@ -55,6 +55,25 @@ class ProviderPlaybookSyntaxTests(unittest.TestCase):
             self.assertIn(marker, cleanup)
         self.assertNotIn("ignore_errors", cleanup)
 
+    def test_linode_region_fallback_normalizes_the_first_success(self):
+        playbooks = ("redirector.yml", "c2.yml", "mta.yml", "gophish.yml", "webserver.yml")
+        for name in playbooks:
+            with self.subTest(playbook=name):
+                content = (ROOT / "providers/Linode" / name).read_text()
+                self.assertIn("include_tasks: tasks/create_instance_with_fallback.yml", content)
+                self.assertNotIn("fallback_regions:", content)
+                self.assertNotIn("ansible_loop.index0", content)
+                self.assertNotIn(".results | default([])", content)
+
+        helper = (ROOT / "providers/Linode/tasks/create_instance_with_fallback.yml").read_text()
+        candidate = (ROOT / "providers/Linode/tasks/try_instance_region.yml").read_text()
+        self.assertIn("failed_when: false", helper)
+        self.assertIn("include_tasks: try_instance_region.yml", helper)
+        self.assertIn("when: not (linode_instance_created | bool)", helper)
+        self.assertIn("Require a successful Linode region", helper)
+        self.assertIn("linode_created_instance", candidate)
+        self.assertIn("linode_created_region", candidate)
+
     def test_aws_cleanup_proves_absence_before_local_closeout(self):
         cleanup = (ROOT / "providers/AWS/cleanup.yml").read_text()
         for marker in (

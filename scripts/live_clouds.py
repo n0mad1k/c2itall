@@ -178,7 +178,8 @@ class LinodeCloud:
             if deployment_id in (item.get('tags') or []) or item.get('label') in identity['names']:
                 instances.append({'id': item['id'], 'name': item['label'], 'state': item['status'],
                                   'public_ip': (item.get('ipv4') or [''])[0],
-                                  'instance_type': item.get('type'), 'image_id': item.get('image')})
+                                  'instance_type': item.get('type'), 'image_id': item.get('image'),
+                                  'region': item.get('region')})
         keys = [item['label'] for item in self._pages('/profile/sshkeys')
                 if item.get('label') in identity['key_names']]
         return {'instances': sorted(instances, key=lambda item: item['id']),

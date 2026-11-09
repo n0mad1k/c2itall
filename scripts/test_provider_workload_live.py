@@ -42,6 +42,7 @@ CREDENTIAL_ENVIRONMENT = tuple(
     environment for spec in PROVIDER_SPECS.values()
     for _, environment in spec.credential_environment) + ('AWS_DEFAULT_REGION',)
 SSH_DIR = Path.home() / '.ssh'
+FORCED_LINODE_REGION = 'c2itall-invalid-region'
 # Never fails; records why an sshd check could fail without a second deployment.
 SSHD_DIAGNOSTICS = (
     "sudo -n /usr/sbin/sshd -T 2>&1 | grep -i '^passwordauthentication'; "
@@ -755,7 +756,8 @@ def empty(inventory):
     return not any(inventory.values())
 
 
-def activate(provider, workload_name, operator_ip=None, repeat=None, variant=None):
+def activate(provider, workload_name, operator_ip=None, repeat=None, variant=None,
+             force_linode_region_fallback=False):
     workload = (WORKLOADS[workload_name](variant or 'quick_recon')
                 if workload_name == 'attack_box' else WORKLOADS[workload_name]())
     os.chdir(ROOT)
@@ -784,6 +786,12 @@ def activate(provider, workload_name, operator_ip=None, repeat=None, variant=Non
             'curl', '-4', '--fail', '--silent', '--show-error', '--max-time', '15',
             'https://api.ipify.org']))
         config = workload.config(provider, deployment_id, operator_ip)
+        if force_linode_region_fallback:
+            config.update({
+                'linode_region': FORCED_LINODE_REGION,
+                'linode_regions': [FORCED_LINODE_REGION],
+                'selected_region': FORCED_LINODE_REGION,
+            })
         identity = workload.identity(config)
         require(empty(cloud.inventory(identity)), 'Live-test identity already owns cloud resources')
         generated = [path for path in workload.local_artifacts(provider, config) if path.exists()]
@@ -811,6 +819,15 @@ def activate(provider, workload_name, operator_ip=None, repeat=None, variant=Non
         context = Context(runner, cloud, provider, address, user, key)
         runner.record('host-diagnostics.json', {'sshd': context.ssh(SSHD_DIAGNOSTICS)})
         service = workload.verify(context, config)
+        if force_linode_region_fallback:
+            deployed_regions = sorted({item.get('region') for item in first['instances']})
+            require(deployed_regions == [REGIONS['linode']],
+                    'Linode fallback did not land in {0}: {1}'.format(
+                        REGIONS['linode'], deployed_regions))
+            service['region_fallback'] = {
+                'requested': FORCED_LINODE_REGION,
+                'deployed': REGIONS['linode'],
+            }
         runner.record('first-deployment.json', {'cloud': first, 'address': address, 'service': service})
 
         # Driver-backed adapters are idempotent by contract; legacy plays vary.
@@ -996,9 +1013,14 @@ def main(argv=None):
     parser.add_argument('--operator-ip')
     parser.add_argument('--repeat', dest='repeat', action='store_true', default=None)
     parser.add_argument('--no-repeat', dest='repeat', action='store_false')
+    parser.add_argument('--force-linode-region-fallback', action='store_true',
+                        help='start from a deliberately invalid Linode region and require fallback')
     args = parser.parse_args(argv)
     if args.variant and args.workload != 'attack_box':
         parser.error('--variant is only valid with --workload attack_box')
+    if args.force_linode_region_fallback and not (
+            args.provider == 'linode' and args.workload in ('redirector', 'c2', 'phishing')):
+        parser.error('--force-linode-region-fallback requires a Linode redirector, C2, or phishing run')
     if not args.activate:
         print('DRY RUN: no cloud mutations. Target: {0} / {1} / {2}'.format(
             args.provider, REGIONS[args.provider], args.workload))
@@ -1006,7 +1028,7 @@ def main(argv=None):
     if args.workload == 'webrunner':
         return activate_webrunner(args.provider, args.operator_ip)
     return activate(args.provider, args.workload, args.operator_ip, args.repeat,
-                    args.variant)
+                    args.variant, args.force_linode_region_fallback)
 
 
 if __name__ == '__main__':
