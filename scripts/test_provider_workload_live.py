@@ -770,16 +770,26 @@ class Share(SingleHost):
             ('tcp', '22', config['operator_ip'] + '/32'), ('udp', '41641', '*')])
         return report
 
-    def phantom_work(self, config):
-        return self.module()._load_phantom().WORK_DIR / config['deployment_id']
+    def phantom_files(self, config):
+        phantom = self.module()._load_phantom()
+        deployment_id = config['deployment_id']
+        names = ['deployment_info_' + deployment_id + '.txt', 'deployment_' + deployment_id + '.log']
+        files = [phantom.WORK_DIR / deployment_id]
+        for directory in {phantom.PHANTOM_LOGS, phantom.WORK_DIR}:
+            files += [directory / name for name in names]
+        return files
 
     def local_artifacts(self, provider, config):
-        return super().local_artifacts(provider, config) + [self.phantom_work(config)]
+        return super().local_artifacts(provider, config) + self.phantom_files(config)
 
     def clean_local(self, config):
-        # Phantom keeps its own vars and inventory per deployment; the Azure
-        # Phantom harness removes them the same way after a verified teardown.
-        shutil.rmtree(self.phantom_work(config), ignore_errors=True)
+        # Phantom keeps its own vars, inventory and records per deployment; the
+        # Azure Phantom harness removes them the same way after a verified teardown.
+        for path in self.phantom_files(config):
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            elif path.exists():
+                path.unlink()
 
 
 WORKLOADS = {cls.name: cls for cls in (Share, AttackBox, Redirector, FrontedRedirector, C2, PayloadServer, Phishing,

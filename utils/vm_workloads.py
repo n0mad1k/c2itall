@@ -373,9 +373,6 @@ class HandoffAdapter(SingleVmAdapter):
         self._export_ssh_known_hosts(config)
         return True
 
-    def cleanup(self, config):
-        return self.driver.cleanup(self.driver.cleanup_request(config))
-
 
 _KINDS = {'single': SingleVmAdapter, 'components': ComponentAdapter,
           'nodes': NodeAdapter, 'handoff': HandoffAdapter}
