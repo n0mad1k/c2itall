@@ -2144,6 +2144,13 @@ class RoutingAndTemplateTests(AzureFixture):
         composite = module.service_config('all_in_one')
         self.assertEqual(composite['services'], ['vpn', 'vault'])
         self.assertEqual(composite['service_domains']['vault'], 'vault.all.test')
+        vpn_handler = (ROOT / 'ghost_protocol/phantom/playbooks/vpn/handlers/main.yml')
+        self.assertIn('- name: reload ufw', vpn_handler.read_text())
+        vpn_main = (ROOT / 'ghost_protocol/phantom/playbooks/vpn/main.yml').read_text()
+        composite_main = (
+            ROOT / 'ghost_protocol/phantom/playbooks/all_in_one/main.yml').read_text()
+        self.assertIn('import_tasks: handlers/main.yml', vpn_main)
+        self.assertIn('../vpn/handlers/main.yml', composite_main)
 
         class CaptureRunner:
             evidence = Path('/tmp')
