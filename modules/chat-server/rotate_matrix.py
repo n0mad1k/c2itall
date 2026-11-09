@@ -29,7 +29,7 @@ _DYNAMIC_KEYS = {
     "target_host", "ssh_key", "timestamp", "ownership_marker",
     "planned_resource_ids", "outputs", "status", "error", "verified_disk",
     "deletion_started", "azure_resource_group", "ssh_private_key_path",
-    "ssh_key_path", "ssh_key_generated", "azure_deadline",
+    "ssh_key_path", "ssh_key_generated", "ssh_known_hosts_path", "azure_deadline",
     "azure_cleanup_deadline", "_host_output_file",
 }
 
@@ -218,8 +218,10 @@ print(json.dumps({"status": response.status, "body": content}))
 
 def _matrix_admin_request(config, method, path, payload, token):
     """Call Synapse's loopback-only admin API without exposing credentials."""
-    key = Path(config.get("ssh_key") or config.get("ssh_private_key_path", ""))
-    known_hosts = _phantom()._ssh_known_hosts_path(config["deployment_id"])
+    key = Path(config.get("ssh_private_key_path") or config.get("ssh_key", ""))
+    known_hosts_value = config.get("ssh_known_hosts_path")
+    known_hosts = (Path(known_hosts_value) if known_hosts_value else
+                   _phantom()._ssh_known_hosts_path(config["deployment_id"]))
     if (not key.is_file() or key.is_symlink() or not known_hosts.is_file()
             or known_hosts.is_symlink()):
         raise RotationError("Secure SSH material is unavailable for Matrix admin API")

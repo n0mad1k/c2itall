@@ -239,7 +239,9 @@ class MatrixRotationTests(unittest.TestCase):
         key.chmod(0o600)
         known_hosts.write_text("host key")
         config = dict(
-            self.active, ssh_key=str(key), ssh_user="azureuser")
+            self.active, ssh_key=str(self.base / "stale-legacy-key"),
+            ssh_private_key_path=str(key), ssh_known_hosts_path=str(known_hosts),
+            ssh_user="azureuser")
         response = {
             "status": 200,
             "body": json.dumps({"token": "limited-join-token"}),
@@ -247,13 +249,11 @@ class MatrixRotationTests(unittest.TestCase):
         completed = mock.Mock(
             returncode=0, stdout=json.dumps(response), stderr="")
         with mock.patch.object(
-                self.rotation, "_phantom",
-                return_value=mock.Mock(
-                    _ssh_known_hosts_path=mock.Mock(return_value=known_hosts))):
-            with mock.patch.object(
-                    self.rotation.subprocess, "run", return_value=completed) as run:
-                token = self.rotation._create_registration_token(
-                    config, "admin-access-token", 5, 3700)
+                self.rotation, "_phantom") as phantom, mock.patch.object(
+                self.rotation.subprocess, "run", return_value=completed) as run:
+            token = self.rotation._create_registration_token(
+                config, "admin-access-token", 5, 3700)
+        phantom.assert_not_called()
         self.assertEqual(token, "limited-join-token")
         command = run.call_args.args[0]
         self.assertNotIn("admin-access-token", " ".join(command))
@@ -261,6 +261,25 @@ class MatrixRotationTests(unittest.TestCase):
         request = json.loads(run.call_args.kwargs["input"])
         self.assertEqual(request["token"], "admin-access-token")
         self.assertEqual(request["payload"]["uses_allowed"], 5)
+
+    def test_registration_token_keeps_legacy_ssh_fallback(self):
+        key = self.base / "legacy-key"
+        known_hosts = self.base / "legacy-known-hosts"
+        key.write_text("private key")
+        known_hosts.write_text("host key")
+        config = dict(self.active, ssh_key=str(key))
+        response = {"status": 200, "body": json.dumps({"token": "legacy-token"})}
+        with mock.patch.object(
+                self.rotation, "_phantom",
+                return_value=mock.Mock(
+                    _ssh_known_hosts_path=mock.Mock(return_value=known_hosts))), \
+                mock.patch.object(
+                    self.rotation.subprocess, "run",
+                    return_value=mock.Mock(
+                        returncode=0, stdout=json.dumps(response), stderr="")):
+            token = self.rotation._create_registration_token(
+                config, "legacy-access", 2, 3700)
+        self.assertEqual(token, "legacy-token")
 
     def test_failed_replacement_is_removed_and_active_server_is_kept(self):
         self.write_state(self.state())

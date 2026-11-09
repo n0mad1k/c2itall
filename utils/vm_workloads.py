@@ -95,6 +95,7 @@ class SingleVmAdapter(WorkloadAdapter):
                 self.driver.provider, self._label()))
         log_dir = self.driver.log_dir(config)
         known_hosts = log_dir / (config['deployment_id'] + '-known-hosts')
+        config['ssh_known_hosts_path'] = str(known_hosts)
         service_vars = self._service_variables(config)
         service_vars.update(
             ansible_python_interpreter='/usr/bin/python3',

@@ -144,6 +144,9 @@ class FakeProviderTests(unittest.TestCase):
             self.assertEqual(config['ssh_user'], 'operator')
             self.assertEqual(config['fakecloud_region'], 'moon-1')
             self.assertEqual(config['ssh_key'], str(Path(temp) / '.ssh' / 'c2deploy_ext-ps'))
+            self.assertEqual(
+                config['ssh_known_hosts_path'],
+                str(Path(temp) / 'logs' / 'ext-ps-known-hosts'))
             run = self.driver.runs[0]
             self.assertTrue(run['argv'][1].endswith('modules/payload-server/service.yml'))
             self.assertEqual(run['argv'][4:6], ['-u', 'operator'])
