@@ -12,26 +12,14 @@
       elif inventory_hostname in groups['sharedrives'] | default([]) %}sharedrive{% 
       else %}unknown{% endif %}
 
-# Determine if we're using AWS provider
-- name: Determine if using AWS provider
-  set_fact:
-    is_aws_provider: "{{ provider | default('unknown') == 'aws' }}"
-
-# Skip firewall configuration for AWS instances
-- name: Skip firewall configuration for AWS instances
-  debug:
-    msg: "Skipping host-based firewall configuration for AWS instance. Security Groups are handling this at the infrastructure level."
-  when: is_aws_provider
-
 # Check if UFW is installed or can be installed
 - name: Check if UFW is installed
   command: which ufw
   register: ufw_check
   failed_when: false
   changed_when: false
-  when: not is_aws_provider
 
-# Try to install UFW if not found and we're not on AWS
+# Try to install UFW if not found
 - name: Install UFW if not present
   apt:
     name: ufw
@@ -42,15 +30,14 @@
   retries: 3
   delay: 5
   ignore_errors: yes
-  when: not is_aws_provider and ufw_check.rc != 0
+  when: ufw_check.rc != 0
 
 # Set a fact to track if UFW is available
 - name: Determine if UFW is available
   set_fact:
     ufw_available: "{{ (ufw_check.rc == 0) or (ufw_install is defined and ufw_install is success) }}"
-  when: not is_aws_provider
 
-# UFW Configuration Block (non-AWS only)
+# UFW Configuration Block
 - name: Configure C2 server routing with UFW
   block:
     - name: Allow SSH only from operator IP
@@ -80,7 +67,6 @@
         - { ip: "{{ redirector_ip }}", port: "{{ havoc_https_port | default('9443') }}" }
   when: 
     - server_role == 'c2'
-    - not is_aws_provider
     - ufw_available | default(false) | bool
 
 # Fallback to iptables if UFW is not available
@@ -113,7 +99,6 @@
       when: redirector_ip is defined
   when: 
     - server_role == 'c2'
-    - not is_aws_provider
     - not (ufw_available | default(false) | bool)
 
 # Configure redirector routing with UFW when available
@@ -142,7 +127,6 @@
         proto: tcp
   when: 
     - server_role == 'redirector'
-    - not is_aws_provider
     - ufw_available | default(false) | bool
 
 # Fallback to iptables for redirector if UFW is not available
@@ -174,7 +158,6 @@
         ip6tables -A INPUT -p tcp --dport {{ shell_handler_port | default('4444') }} -j ACCEPT
   when:
     - server_role == 'redirector'
-    - not is_aws_provider
     - not (ufw_available | default(false) | bool)
 
 # The rest of your tasks remain unchanged...
@@ -198,35 +181,20 @@
         - "{{ redirector_ip }}"
   when: 
     - server_role == 'logserver'
-    - not is_aws_provider
     - ufw_available | default(false) | bool
 
 - name: Update security group to allow SSH from C2 to redirector
   block:
-    - name: Allow SSH from C2 to redirector (AWS)
-      amazon.aws.ec2_security_group:
-        name: "{{ redirector_name }}-sg"
-        description: "Security group for redirector {{ redirector_name }}"
-        vpc_id: "{{ vpc_id }}"
-        region: "{{ aws_redirector_region }}"
-        rules:
-          - proto: tcp
-            ports: 22
-            cidr_ip: "{{ c2_ip }}/32"
-        state: present
-      when: provider == "aws"
-      delegate_to: localhost
-      
     - name: Allow SSH from C2 to redirector (UFW)
       ufw:
         rule: allow
         port: 22
         src: "{{ c2_ip }}"
         proto: tcp
-      when: provider != "aws" and not is_aws_provider and ufw_available | default(false) | bool
+      when: ufw_available | default(false) | bool
       
     - name: Allow SSH from C2 to redirector (iptables fallback)
       shell: |
         iptables -A INPUT -p tcp --dport 22 -s {{ c2_ip }} -j ACCEPT
-      when: provider != "aws" and not is_aws_provider and not (ufw_available | default(false) | bool)
+      when: not (ufw_available | default(false) | bool)
   when: server_role == 'redirector' and c2_ip is defined and redirector_ip is defined

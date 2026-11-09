@@ -308,23 +308,13 @@
 
 - name: Ensure SSH key for redirector access is available
   block:
-    - name: Copy deployment SSH key to C2 for redirector access (AWS)
-      copy:
-        src: "~/.ssh/c2deploy_{{ deployment_id }}.pem"
-        dest: "/root/.ssh/redirector_key"
-        mode: '0600'
-        owner: root
-        group: root
-      when: provider == "aws"
-      
-    - name: Copy deployment SSH key to C2 for redirector access (non-AWS)
+    - name: Copy deployment SSH key to C2 for redirector access
       copy:
         src: "{{ ssh_key_path | replace('.pub', '') }}"
         dest: "/root/.ssh/redirector_key"
         mode: '0600'
         owner: root
         group: root
-      when: provider != "aws"
       
     - name: Create SSH config for redirector access
       blockinfile:
