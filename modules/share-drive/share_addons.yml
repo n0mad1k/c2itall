@@ -1,0 +1,106 @@
+---
+# Share-drive layer on top of Phantom's Nextcloud: the drive answers on the
+# tailnet only. Phantom's hardening already denies every other inbound port.
+
+- name: Bind the share drive to the team tailnet
+  hosts: all
+  become: true
+  vars:
+    share_tailscale_auth_key: "{{ tailscale_auth_key | default('') }}"
+    share_hostname: "share-{{ deployment_id }}"
+    share_distribution: "{{ ansible_distribution | lower }}"
+    share_release: "{{ ansible_distribution_release }}"
+
+  tasks:
+    - name: Install Tailscale repository key
+      get_url:
+        url: "https://pkgs.tailscale.com/stable/{{ share_distribution }}/{{ share_release }}.noarmor.gpg"
+        dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
+        mode: "0644"
+
+    - name: Install Tailscale repository
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/{{ share_distribution }} {{ share_release }} main"
+        filename: tailscale
+        state: present
+
+    - name: Install Tailscale
+      apt:
+        name: tailscale
+        state: present
+        update_cache: true
+
+    - name: Allow direct Tailscale UDP
+      ufw:
+        rule: allow
+        port: "41641"
+        proto: udp
+
+    - name: Admit web traffic from the tailnet interface only
+      ufw:
+        rule: allow
+        interface: tailscale0
+        direction: in
+        port: "{{ item }}"
+        proto: tcp
+      loop: ["80", "443"]
+
+    - name: Enable and start tailscaled
+      service:
+        name: tailscaled
+        state: started
+        enabled: true
+
+    - name: Read Tailscale state
+      command: tailscale status --json
+      register: share_tailscale_status
+      changed_when: false
+      failed_when: false
+
+    - name: Authenticate Tailscale when a key was supplied
+      command:
+        argv:
+          - tailscale
+          - up
+          - "--auth-key={{ share_tailscale_auth_key }}"
+          - "--hostname={{ share_hostname }}"
+          - --ssh
+          - --accept-dns=false
+      when:
+        - share_tailscale_auth_key | length > 0
+        - share_tailscale_status.rc != 0 or
+          (share_tailscale_status.stdout | from_json).BackendState != 'Running'
+      no_log: true
+
+    - name: Read the tailnet address and name
+      command: tailscale status --json
+      register: share_tailnet
+      changed_when: false
+      failed_when: false
+
+    - name: Derive the tailnet identity
+      set_fact:
+        share_tailnet_ip: "{{ ((share_tailnet.stdout | from_json).Self.TailscaleIPs | default([]) | select('match', '^[0-9.]+$') | first | default('')) if share_tailnet.rc == 0 else '' }}"
+        share_tailnet_name: "{{ ((share_tailnet.stdout | from_json).Self.DNSName | default('') | regex_replace('\\.$', '')) if share_tailnet.rc == 0 else '' }}"
+
+    - name: Trust the tailnet address in Nextcloud
+      command: "php /var/www/nextcloud/occ config:system:set trusted_domains 1 --value={{ share_tailnet_ip }}"
+      become_user: www-data
+      when: share_tailnet_ip | length > 0
+
+    - name: Trust the tailnet name in Nextcloud
+      command: "php /var/www/nextcloud/occ config:system:set trusted_domains 2 --value={{ share_tailnet_name }}"
+      become_user: www-data
+      when: share_tailnet_name | length > 0
+
+    - name: Point Nextcloud's base URL at the tailnet
+      command: "php /var/www/nextcloud/occ config:system:set overwrite.cli.url --value=https://{{ share_tailnet_name or share_tailnet_ip }}"
+      become_user: www-data
+      when: (share_tailnet_name or share_tailnet_ip) | length > 0
+
+    - name: Report how to reach the drive
+      debug:
+        msg:
+          - "Share drive: https://{{ share_tailnet_name or share_tailnet_ip or 'TAILNET-ADDRESS' }}/ (tailnet only, self-signed certificate)"
+          - "Admin user: {{ cloud_admin_user | default('admin') }}; password: /var/www/nextcloud/.admin_password on the host"
+          - "{{ 'Tailscale is authenticated.' if share_tailnet_ip | length > 0 else 'Finish on the host: tailscale up --hostname=' ~ share_hostname ~ ' --ssh --accept-dns=false; then sudo -u www-data php /var/www/nextcloud/occ config:system:set trusted_domains 1 --value=$(tailscale ip -4)' }}"

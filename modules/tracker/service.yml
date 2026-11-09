@@ -1,0 +1,48 @@
+---
+- name: Wait for the email tracker
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Wait for SSH connectivity
+      ansible.builtin.wait_for_connection:
+        delay: 10
+        timeout: 300
+
+- name: Configure the email tracker
+  hosts: trackers
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Validate the tracker route inputs
+      ansible.builtin.assert:
+        that:
+          - provider_workload == 'tracker'
+          - domain | length > 0
+          - operator_ip | length > 0
+        fail_msg: Email tracker requires a domain and the operator address
+
+    - name: Wait for the host to finish first boot
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+      failed_when: false
+
+    - name: Configure the tracking service
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/configure_tracker.yml"
+
+    - name: Print deployment summary
+      ansible.builtin.debug:
+        msg:
+          - "Email tracker deployed: https://{{ tracker_domain }}/ (point the DNS A record at {{ inventory_hostname }})"
+          - "Pixel: <img src=\"https://{{ tracker_domain }}/pixel/ID.png\" width=\"1\" height=\"1\">"
+          - "Dashboard and details answer only from {{ operator_ip }}"
+  handlers:
+    - name: restart tracker
+      ansible.builtin.systemd:
+        name: tracker
+        state: restarted
+        daemon_reload: yes
+
+    - name: reload nginx
+      ansible.builtin.service:
+        name: nginx
+        state: reloaded

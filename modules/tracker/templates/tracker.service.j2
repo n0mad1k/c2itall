@@ -1,18 +1,20 @@
 [Unit]
-Description=Email Tracking Server
+Description=Pixel service
 After=network.target
 
 [Service]
 User=tracker
 Group=tracker
-WorkingDirectory=/root/Tools/tracker
-ExecStart=/root/Tools/tracker/venv/bin/python /root/Tools/tracker/simple_email_tracker.py
+WorkingDirectory={{ tracker_home }}
+ExecStart={{ tracker_home }}/venv/bin/python {{ tracker_home }}/simple_email_tracker.py
 Restart=always
 RestartSec=10
 
 # Security settings
 PrivateTmp=true
-ProtectSystem=full
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ tracker_home }}/data
 NoNewPrivileges=true
 
 # Hide process information

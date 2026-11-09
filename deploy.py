@@ -40,9 +40,9 @@ def main_menu():
         print(f"4) Deploy Phishing Infrastructure")
         print(f"5) Deploy Payload Server")
         print(f"6) Deploy Email Tracker")
-        print(f"7) Deploy Logging Server {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
-        print(f"8) Deploy Share-Drive {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
-        print(f"9) Deploy Hashtopolis {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
+        print(f"7) Deploy Logging Server {COLORS['GREEN']}(RedELK, infrastructure only){COLORS['RESET']}")
+        print(f"8) Deploy Share-Drive {COLORS['GREEN']}(Nextcloud over Tailscale){COLORS['RESET']}")
+        print(f"9) Deploy Hashtopolis {COLORS['GREEN']}(cracking coordinator){COLORS['RESET']}")
         print(f"10) Deploy Chat Server {COLORS['GREEN']}(Matrix + Element + Tailscale){COLORS['RESET']}")
         print(f"11) Deploy Privacy Server {COLORS['GREEN']}(Phantom — VPN, DNS, Matrix, etc.){COLORS['RESET']}")
         print(f"12) Tools & Utilities")
@@ -63,9 +63,12 @@ def main_menu():
             deploy_payload_server()
         elif choice == "6":
             deploy_tracker()
-        elif choice in ["7", "8", "9"]:
-            print(f"\n{COLORS['YELLOW']}This feature is currently under construction.{COLORS['RESET']}")
-            wait_for_input()
+        elif choice == "7":
+            deploy_logging_server()
+        elif choice == "8":
+            deploy_share_drive()
+        elif choice == "9":
+            deploy_hashtopolis()
         elif choice == "10":
             deploy_chat_server()
         elif choice == "11":
@@ -190,12 +193,37 @@ def deploy_phantom():
     wait_for_input()
 
 
+def launch_module(directory, filename, entrypoint):
+    """Load modules/<directory>/<filename> and run its menu."""
+    archive_logs_before_deployment()
+    module_path = os.path.join(os.path.dirname(__file__), 'modules', directory, filename)
+    if not os.path.exists(module_path):
+        print(f"\n{COLORS['RED']}Module not found at: {module_path}{COLORS['RESET']}")
+        wait_for_input()
+        return
+    module = import_module_from_path(filename.removesuffix('.py'), module_path)
+    if module:
+        getattr(module, entrypoint)()
+
+
 def deploy_tracker():
-    """Deploy email tracking server"""
-    print(f"\n{COLORS['BLUE']}Email Tracker Deployment{COLORS['RESET']}")
-    print(f"{COLORS['YELLOW']}This would deploy a standalone email tracking server{COLORS['RESET']}")
-    print(f"{COLORS['YELLOW']}Feature coming soon...{COLORS['RESET']}")
-    wait_for_input()
+    """Launch the standalone email tracker module"""
+    launch_module('tracker', 'deploy_tracker.py', 'tracker_menu')
+
+
+def deploy_logging_server():
+    """Launch the RedELK logging server module"""
+    launch_module('logging-server', 'deploy_logging.py', 'logging_menu')
+
+
+def deploy_share_drive():
+    """Launch the team share drive module"""
+    launch_module('share-drive', 'deploy_share.py', 'share_menu')
+
+
+def deploy_hashtopolis():
+    """Launch the Hashtopolis module"""
+    launch_module('hashtopolis', 'deploy_hashtopolis.py', 'hashtopolis_menu')
 
 def deploy_attack_box():
     """Launch the attack box deployment module"""
@@ -239,7 +267,7 @@ def tools_menu():
         print(f"2) Test Provider Connectivity")
         print(f"3) Validate Configuration Files")
         print(f"4) Recon & Red Team Tools {COLORS['GREEN']}(Umbra + Custom Tools){COLORS['RESET']}")
-        print(f"5) Payload Generation Tools {COLORS['GRAY']}*UNDER-CONSTRUCTION*{COLORS['RESET']}")
+        print(f"5) Payload Generation Tools {COLORS['CYAN']}(Havoc payloads on a deployed C2){COLORS['RESET']}")
         print(f"6) Infrastructure Health Check")
         print(f"7) Ops Dashboard {COLORS['CYAN']}(Real-Time Engagement Monitor){COLORS['RESET']}")
         print(f"8) Claude Bot {COLORS['CYAN']}(Matrix-Claude Code Bridge){COLORS['RESET']}")
@@ -262,8 +290,10 @@ def tools_menu():
             if recon_module:
                 recon_module.recon_tools_menu()
         elif choice == "5":
-            print(f"\n{COLORS['YELLOW']}This feature is currently under construction.{COLORS['RESET']}")
-            wait_for_input()
+            payload_module_path = os.path.join(os.path.dirname(__file__), 'modules', 'tools', 'payload_tools.py')
+            payload_module = import_module_from_path('payload_tools', payload_module_path)
+            if payload_module:
+                payload_module.payload_tools_menu()
         elif choice == "6":
             infrastructure_health_check()
         elif choice == "7":

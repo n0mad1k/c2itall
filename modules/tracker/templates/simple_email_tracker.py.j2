@@ -18,7 +18,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('/root/Tools/tracker/data/tracker.log'),
+        logging.FileHandler('{{ tracker_home }}/data/tracker.log'),
         logging.StreamHandler()
     ]
 )
@@ -27,7 +27,7 @@ logging.basicConfig(
 app = Flask(__name__)
 
 # Directory to store tracking data
-DATA_DIR = '/root/Tools/tracker/data'
+DATA_DIR = '{{ tracker_home }}/data'
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # Path to 1x1 transparent pixel
@@ -62,7 +62,8 @@ def tracking_pixel(tracking_id):
     """Serve a tracking pixel and log the request"""
     # Get client information
     user_agent = request.headers.get('User-Agent', 'Unknown')
-    ip_address = request.remote_addr
+    # nginx fronts the service, so the client address arrives in a header
+    ip_address = request.headers.get('X-Real-IP', request.remote_addr)
     timestamp = datetime.now().isoformat()
     referer = request.headers.get('Referer', 'Unknown')
     
@@ -106,7 +107,7 @@ def dashboard():
     stats.sort(key=lambda x: x['views'], reverse=True)
     
     # Simple HTML dashboard template
-    template = """
+    template = """{% raw %}
     <!DOCTYPE html>
     <html>
     <head>
@@ -125,9 +126,11 @@ def dashboard():
         <div class="container">
             <h1>Email Tracking Dashboard</h1>
             <p>To track email opens, add this HTML to your emails:</p>
-            <pre>&lt;img src="https://{{ redirector_domain }}/px/YOUR_TRACKING_ID.png" height="1" width="1" /&gt;</pre>
-            <p>Alternatively, use this URL with your C2 server directly:</p>
             <pre>&lt;img src="https://{{ tracker_domain }}/pixel/YOUR_TRACKING_ID.png" height="1" width="1" /&gt;</pre>
+            {% if redirector_domain %}
+            <p>Or through the redirector:</p>
+            <pre>&lt;img src="https://{{ redirector_domain }}/px/YOUR_TRACKING_ID.png" height="1" width="1" /&gt;</pre>
+            {% endif %}
             
             <h2>Tracking Statistics</h2>
             <table>
@@ -151,13 +154,13 @@ def dashboard():
         </div>
     </body>
     </html>
-    """
+    {% endraw %}"""
     
     return render_template_string(
         template, 
         stats=stats, 
-        tracker_domain="{{ tracker_domain }}", 
-        redirector_domain="{{ redirector_subdomain }}.{{ domain }}"
+        tracker_domain="{{ tracker_domain }}",
+        redirector_domain="{{ (redirector_subdomain ~ '.' ~ domain) if setup_integrated_tracker | default(false) | bool else '' }}"
     )
 
 @app.route('/details/<tracking_id>')
@@ -171,7 +174,7 @@ def tracking_details(tracking_id):
     events = tracking_data[tracking_id]
     
     # Simple HTML template for details
-    template = """
+    template = """{% raw %}
     <!DOCTYPE html>
     <html>
     <head>
@@ -213,9 +216,9 @@ def tracking_details(tracking_id):
         </div>
     </body>
     </html>
-    """
+    {% endraw %}"""
     
     return render_template_string(template, tracking_id=tracking_id, events=events)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='{{ tracker_bind | default("127.0.0.1") }}', port=5000, debug=False)

@@ -272,7 +272,8 @@ class ProfileContractTests(unittest.TestCase):
     def test_every_profiled_workload_is_complete_with_an_existing_play(self):
         self.assertEqual(profiled_workloads(), [
             'attack_box', 'c2', 'redirector', 'phishing', 'payload_server',
-            'webrunner', 'phantom', 'chat'])
+            'webrunner', 'phantom', 'chat', 'tracker', 'logging_server', 'share',
+            'hashtopolis'])
         self.assertEqual(registry.driver_workloads(), ['infrastructure', *profiled_workloads()])
         for workload in profiled_workloads():
             profile = load_profile(workload)

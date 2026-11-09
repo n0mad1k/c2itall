@@ -1016,11 +1016,11 @@ class RoutingAndTemplateTests(AzureFixture):
     def test_provider_coverage_audit_reports_actual_azure_gaps(self):
         validation = registry.validate_provider_registry(load_references=True)
         self.assertEqual(validation, {
-            'providers': 4, 'workloads': 9, 'controllers': 9,
-            'pairs': 36, 'routes': 22, 'driver_routes': 9, 'staged_routes': 0,
+            'providers': 4, 'workloads': 13, 'controllers': 13,
+            'pairs': 52, 'routes': 22, 'driver_routes': 13, 'staged_routes': 0,
             'counts': {
-                'native': 9, 'transition': 22,
-                'legacy_fallback': 0, 'staged': 0, 'unsupported': 5,
+                'native': 13, 'transition': 22,
+                'legacy_fallback': 0, 'staged': 0, 'unsupported': 17,
             },
         })
         rows = registry.provider_support_matrix()
@@ -1030,7 +1030,8 @@ class RoutingAndTemplateTests(AzureFixture):
             {workload for provider, workload in lookup
              if provider == 'azure' and lookup[(provider, workload)] == 'native'},
             {'infrastructure', 'attack_box', 'phantom', 'chat', 'redirector', 'c2',
-             'payload_server', 'webrunner', 'phishing'})
+             'payload_server', 'webrunner', 'phishing', 'tracker', 'logging_server',
+             'share', 'hashtopolis'})
         self.assertEqual(
             {workload for provider, workload in lookup
              if provider == 'azure' and
@@ -1078,7 +1079,7 @@ class RoutingAndTemplateTests(AzureFixture):
     def test_provider_registry_validation_rejects_route_drift(self):
         azure = registry.PROVIDER_SPECS['azure']
         unknown = azure._replace(
-            routes=dict(azure.routes, tracker='fake:factory'))
+            routes=dict(azure.routes, bogus='fake:factory'))
         with mock.patch.dict(registry.PROVIDER_SPECS, {'azure': unknown}), \
                 self.assertRaisesRegex(ValueError, 'Unknown provider route workload'):
             registry.validate_provider_registry(load_references=False)
@@ -1261,6 +1262,10 @@ class RoutingAndTemplateTests(AzureFixture):
             'webrunner': 'modules/webrunner/deploy_webrunner.py',
             'phantom': 'ghost_protocol/phantom/phantom.py',
             'chat': 'modules/chat-server/deploy_chat.py',
+            'tracker': 'modules/tracker/deploy_tracker.py',
+            'logging_server': 'modules/logging-server/deploy_logging.py',
+            'share': 'modules/share-drive/deploy_share.py',
+            'hashtopolis': 'modules/hashtopolis/deploy_hashtopolis.py',
         }
         self.assertEqual(
             {workload: spec.entrypoint
@@ -2888,7 +2893,7 @@ class ProviderContractTests(AzureFixture):
         spec = registry.PROVIDER_SPECS['aws']._replace(routes={'infrastructure': 'unavailable:Adapter'})
         with mock.patch.dict(registry.PROVIDER_SPECS, {'aws': spec}), mock.patch.object(registry, '_load', side_effect=AssertionError('unexpected adapter import')):
             cases = [({}, 'c2'), ({'attack_box_deployment': True}, 'attack_box'),
-                     ({'redirector_only': True}, 'redirector'), ({'tracker_deployment': True}, 'tracker'),
+                     ({'redirector_only': True}, 'redirector'),
                      ({'chat_deployment': True}, 'chat_server'), ({'c2_only': True}, 'c2')]
             for flags, playbook in cases:
                 self.assertEqual(deployment_engine.determine_playbook({'provider': 'aws', **flags}),

@@ -159,6 +159,10 @@ WORKLOAD_SPECS = {
     'phantom': WorkloadSpec('ghost_protocol/phantom/phantom.py', True,
                             profile='modules/phantom/workload.py'),
     'chat': WorkloadSpec('modules/chat-server/deploy_chat.py', True),
+    'tracker': WorkloadSpec('modules/tracker/deploy_tracker.py', False),
+    'logging_server': WorkloadSpec('modules/logging-server/deploy_logging.py', False),
+    'share': WorkloadSpec('modules/share-drive/deploy_share.py', False),
+    'hashtopolis': WorkloadSpec('modules/hashtopolis/deploy_hashtopolis.py', False),
 }
 CANONICAL_WORKLOADS = tuple(WORKLOAD_SPECS)
 LEGACY_FALLBACK_WORKLOADS = frozenset(

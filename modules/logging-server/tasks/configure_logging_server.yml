@@ -1,0 +1,112 @@
+---
+# RedELK infrastructure only: the ELK server is installed and reachable by
+# the operator. Nothing is onboarded; redirectors and C2 servers get their
+# packages by hand later, which is why the ingest port opens only to the
+# addresses given at deploy time.
+
+- name: Install container runtime and installer prerequisites
+  ansible.builtin.apt:
+    name:
+      - docker.io
+      - docker-compose-v2
+      - jq
+      - apache2-utils
+      - curl
+      - git
+    state: present
+    update_cache: yes
+  register: logging_packages
+  until: logging_packages is success
+  retries: 5
+  delay: 10
+
+- name: Provide the docker-compose command the installer expects
+  ansible.builtin.copy:
+    dest: /usr/local/bin/docker-compose
+    mode: '0755'
+    content: |
+      #!/bin/sh
+      exec docker compose "$@"
+
+- name: Raise the memory map limit Elasticsearch needs
+  ansible.posix.sysctl:
+    name: vm.max_map_count
+    value: '262144'
+    sysctl_set: yes
+    state: present
+
+- name: Enable the container runtime
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: yes
+
+- name: Fetch RedELK
+  ansible.builtin.git:
+    repo: https://github.com/outflanknl/RedELK.git
+    dest: /opt/redelk
+    version: "{{ redelk_ref }}"
+    depth: 1
+
+- name: Write the certificate request for the ELK server
+  ansible.builtin.template:
+    src: "../templates/redelk-certs.cnf.j2"
+    dest: /opt/redelk/certs/config.cnf
+    mode: '0600'
+
+- name: Generate certificates and onboarding packages
+  ansible.builtin.command:
+    cmd: ./initial-setup.sh certs/config.cnf
+    chdir: /opt/redelk
+    creates: /opt/redelk/elkserver.tgz
+
+- name: Unpack the ELK server package
+  ansible.builtin.unarchive:
+    src: /opt/redelk/elkserver.tgz
+    dest: /opt/redelk-elk
+    remote_src: yes
+    creates: /opt/redelk-elk/elkserver/install-elkserver.sh
+  vars:
+    ansible_unarchive_create_dest: true
+
+- name: Install the ELK server (limited profile)
+  ansible.builtin.command:
+    cmd: ./install-elkserver.sh limited
+    chdir: /opt/redelk-elk/elkserver
+    creates: /opt/redelk-elk/.installed
+
+- name: Mark the installation
+  ansible.builtin.file:
+    path: /opt/redelk-elk/.installed
+    state: touch
+    mode: '0600'
+    modification_time: preserve
+    access_time: preserve
+
+- name: Keep the generated credentials private
+  ansible.builtin.file:
+    path: /opt/redelk-elk/elkserver/.env
+    mode: '0600'
+
+- name: Wait for Kibana behind nginx
+  ansible.builtin.uri:
+    url: https://127.0.0.1/
+    validate_certs: no
+    status_code: [200, 302, 401]
+  register: logging_kibana
+  retries: 60
+  delay: 10
+  until: logging_kibana is success
+
+- name: Restrict the host firewall to SSH from the operator
+  community.general.ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+    src: "{{ operator_ip }}"
+
+- name: Enable the host firewall
+  community.general.ufw:
+    state: enabled
+    policy: deny
+    direction: incoming

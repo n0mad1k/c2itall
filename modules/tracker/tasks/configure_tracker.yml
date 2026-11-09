@@ -1,0 +1,166 @@
+---
+# Standalone email tracker: a Flask pixel service behind nginx. The pixel is
+# public, the dashboard is operator-only, and the application runs as an
+# unprivileged user under /opt so nothing of it lives in root's home.
+
+- name: Install tracker packages
+  ansible.builtin.apt:
+    name:
+      - nginx
+      - openssl
+      - certbot
+      - python3-venv
+      - python3-pip
+      - python3-pillow
+    state: present
+    update_cache: yes
+  register: tracker_packages
+  until: tracker_packages is success
+  retries: 5
+  delay: 10
+
+- name: Settle tracker names
+  ansible.builtin.set_fact:
+    tracker_home: /opt/tracker
+    tracker_domain: "{{ tracker_subdomain | default('track') }}.{{ domain }}"
+    tracker_bind: 127.0.0.1
+
+- name: Create the tracker service user
+  ansible.builtin.user:
+    name: tracker
+    system: yes
+    shell: /usr/sbin/nologin
+    home: "{{ tracker_home }}"
+    create_home: no
+
+- name: Create tracker directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: tracker
+    group: tracker
+    mode: '0750'
+  loop:
+    - "{{ tracker_home }}"
+    - "{{ tracker_home }}/data"
+
+- name: Create the tracker virtual environment
+  ansible.builtin.pip:
+    virtualenv: "{{ tracker_home }}/venv"
+    virtualenv_command: /usr/bin/python3 -m venv
+    name:
+      - flask
+      - pillow
+
+- name: Install the tracker application
+  ansible.builtin.template:
+    src: "../templates/simple_email_tracker.py.j2"
+    dest: "{{ tracker_home }}/simple_email_tracker.py"
+    owner: tracker
+    group: tracker
+    mode: '0750'
+  notify: restart tracker
+
+- name: Install the tracker service unit
+  ansible.builtin.template:
+    src: "../templates/tracker.service.j2"
+    dest: /etc/systemd/system/tracker.service
+    mode: '0644'
+  notify: restart tracker
+
+- name: Create the certificate directory
+  ansible.builtin.file:
+    path: /etc/nginx/ssl
+    state: directory
+    mode: '0700'
+
+- name: Generate a self-signed certificate for the tracker
+  ansible.builtin.command:
+    cmd: >-
+      openssl req -x509 -nodes -newkey rsa:2048 -days 365
+      -subj "/CN={{ tracker_domain }}"
+      -keyout /etc/nginx/ssl/tracker.key -out /etc/nginx/ssl/tracker.crt
+    creates: /etc/nginx/ssl/tracker.crt
+
+- name: Request a Let's Encrypt certificate when DNS already resolves here
+  ansible.builtin.command:
+    cmd: >-
+      certbot certonly --webroot -w /var/www/html -d {{ tracker_domain }}
+      --non-interactive --agree-tos --no-eff-email
+      -m {{ letsencrypt_email | default('admin@' + domain) }}
+    creates: "/etc/letsencrypt/live/{{ tracker_domain }}/fullchain.pem"
+  failed_when: false
+
+- name: Check for a Let's Encrypt certificate
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ tracker_domain }}/fullchain.pem"
+  register: tracker_letsencrypt
+
+- name: Select the certificate the site serves
+  ansible.builtin.set_fact:
+    tracker_cert: "{{ tracker_letsencrypt.stat.exists | ternary('/etc/letsencrypt/live/' ~ tracker_domain ~ '/fullchain.pem', '/etc/nginx/ssl/tracker.crt') }}"
+    tracker_key: "{{ tracker_letsencrypt.stat.exists | ternary('/etc/letsencrypt/live/' ~ tracker_domain ~ '/privkey.pem', '/etc/nginx/ssl/tracker.key') }}"
+
+- name: Install the tracker site
+  ansible.builtin.template:
+    src: "../templates/tracker-nginx.conf.j2"
+    dest: /etc/nginx/sites-available/tracker
+    mode: '0644'
+  notify: reload nginx
+
+- name: Enable the tracker site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/tracker
+    dest: /etc/nginx/sites-enabled/tracker
+    state: link
+  notify: reload nginx
+
+- name: Remove the default site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: reload nginx
+
+- name: Hide the nginx version
+  ansible.builtin.lineinfile:
+    path: /etc/nginx/nginx.conf
+    regexp: '^\s*#?\s*server_tokens'
+    line: "\tserver_tokens off;"
+    insertafter: 'http {'
+  notify: reload nginx
+
+- name: Enable the tracker service
+  ansible.builtin.systemd:
+    name: tracker
+    enabled: yes
+    state: started
+    daemon_reload: yes
+
+- name: Restrict the host firewall to SSH from the operator and the web ports
+  community.general.ufw:
+    rule: allow
+    port: "{{ item.port }}"
+    proto: tcp
+    src: "{{ item.src | default(omit) }}"
+  loop:
+    - { port: "22", src: "{{ operator_ip }}" }
+    - { port: "80" }
+    - { port: "443" }
+
+- name: Enable the host firewall
+  community.general.ufw:
+    state: enabled
+    policy: deny
+    direction: incoming
+
+- name: Flush handlers
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for the tracker to answer locally
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:5000/pixel/healthcheck.png"
+    status_code: 200
+  register: tracker_health
+  retries: 12
+  delay: 5
+  until: tracker_health is success

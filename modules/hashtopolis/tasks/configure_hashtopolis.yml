@@ -1,0 +1,171 @@
+---
+# Hashtopolis from the upstream compose stack, published on loopback only and
+# fronted by nginx with TLS and an address allowlist.
+
+- name: Install container runtime and web front end
+  ansible.builtin.apt:
+    name:
+      - docker.io
+      - docker-compose-v2
+      - nginx
+      - openssl
+      - certbot
+    state: present
+    update_cache: yes
+  register: hashtopolis_packages
+  until: hashtopolis_packages is success
+  retries: 5
+  delay: 10
+
+- name: Settle the public name
+  ansible.builtin.set_fact:
+    hashtopolis_host: "{{ domain | default('', true) or hashtopolis_ip }}"
+
+- name: Enable the container runtime
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: yes
+
+- name: Create the application directory
+  ansible.builtin.file:
+    path: /opt/hashtopolis
+    state: directory
+    mode: '0700'
+
+- name: Install the compose definition
+  ansible.builtin.copy:
+    src: "../files/docker-compose.yml"
+    dest: /opt/hashtopolis/docker-compose.yml
+    mode: '0600'
+
+- name: Check for existing settings
+  ansible.builtin.stat:
+    path: /opt/hashtopolis/.env
+  register: hashtopolis_env
+
+- name: Generate settings and credentials once
+  ansible.builtin.template:
+    src: "../templates/env.j2"
+    dest: /opt/hashtopolis/.env
+    mode: '0600'
+  when: not hashtopolis_env.stat.exists
+  no_log: true
+
+- name: Start the stack
+  ansible.builtin.command:
+    cmd: docker compose up -d
+    chdir: /opt/hashtopolis
+  register: hashtopolis_up
+  changed_when: "'Started' in hashtopolis_up.stderr or 'Created' in hashtopolis_up.stderr"
+
+- name: Create the certificate directory
+  ansible.builtin.file:
+    path: /etc/nginx/ssl
+    state: directory
+    mode: '0700'
+
+- name: Generate a self-signed certificate
+  ansible.builtin.command:
+    cmd: >-
+      openssl req -x509 -nodes -newkey rsa:2048 -days 365
+      -subj "/CN={{ hashtopolis_host }}"
+      -keyout /etc/nginx/ssl/hashtopolis.key -out /etc/nginx/ssl/hashtopolis.crt
+    creates: /etc/nginx/ssl/hashtopolis.crt
+
+- name: Request a Let's Encrypt certificate when a public domain resolves here
+  ansible.builtin.command:
+    cmd: >-
+      certbot certonly --webroot -w /var/www/html -d {{ domain }}
+      --non-interactive --agree-tos --no-eff-email
+      -m {{ letsencrypt_email | default('admin@' + domain) }}
+    creates: "/etc/letsencrypt/live/{{ domain }}/fullchain.pem"
+  failed_when: false
+  when: domain | default('', true) | length > 0
+
+- name: Check for a Let's Encrypt certificate
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ hashtopolis_host }}/fullchain.pem"
+  register: hashtopolis_letsencrypt
+
+- name: Select the certificate the site serves
+  ansible.builtin.set_fact:
+    hashtopolis_cert: "{{ hashtopolis_letsencrypt.stat.exists | ternary('/etc/letsencrypt/live/' ~ hashtopolis_host ~ '/fullchain.pem', '/etc/nginx/ssl/hashtopolis.crt') }}"
+    hashtopolis_key: "{{ hashtopolis_letsencrypt.stat.exists | ternary('/etc/letsencrypt/live/' ~ hashtopolis_host ~ '/privkey.pem', '/etc/nginx/ssl/hashtopolis.key') }}"
+
+- name: Install the site
+  ansible.builtin.template:
+    src: "../templates/nginx-site.conf.j2"
+    dest: /etc/nginx/sites-available/hashtopolis
+    mode: '0644'
+  notify: reload nginx
+
+- name: Enable the site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/hashtopolis
+    dest: /etc/nginx/sites-enabled/hashtopolis
+    state: link
+  notify: reload nginx
+
+- name: Remove the default site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: reload nginx
+
+- name: Hide the nginx version
+  ansible.builtin.lineinfile:
+    path: /etc/nginx/nginx.conf
+    regexp: '^\s*#?\s*server_tokens'
+    line: "\tserver_tokens off;"
+    insertafter: 'http {'
+  notify: reload nginx
+
+- name: Allow SSH from the operator
+  community.general.ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+    src: "{{ operator_ip }}"
+
+- name: Allow HTTPS from the operator and the agents
+  community.general.ufw:
+    rule: allow
+    port: "443"
+    proto: tcp
+    src: "{{ item }}"
+  loop: "{{ [operator_ip] + (hashtopolis_agent_sources | default([])) }}"
+
+- name: Allow HTTP for ACME when a public domain is used
+  community.general.ufw:
+    rule: allow
+    port: "80"
+    proto: tcp
+  when: domain | default('', true) | length > 0
+
+- name: Enable the host firewall
+  community.general.ufw:
+    state: enabled
+    policy: deny
+    direction: incoming
+
+- name: Flush handlers
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for the Hashtopolis front end
+  ansible.builtin.uri:
+    url: http://127.0.0.1:4200/
+    status_code: 200
+  register: hashtopolis_frontend
+  retries: 60
+  delay: 10
+  until: hashtopolis_frontend is success
+
+- name: Wait for the Hashtopolis API
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/api/server.php
+    status_code: [200, 400, 405]
+  register: hashtopolis_api
+  retries: 60
+  delay: 10
+  until: hashtopolis_api is success

@@ -9,11 +9,26 @@ exists, so a provider driver never has to know what runs on the VM.
 """
 
 import importlib.util
+import ipaddress
 from pathlib import Path
 
 from .controller_io import ROOT
 
 _CACHE = {}
+
+
+def host_source(value, label='operator_ip'):
+    """Return one global IPv4 host as the /32 an inbound rule names."""
+    text = str(value or '').strip()
+    if '/' not in text:
+        text += '/32'
+    try:
+        network = ipaddress.ip_network(text, strict=True)
+    except ValueError:
+        raise ValueError(label + ' must be one global IPv4 host')
+    if network.version != 4 or network.prefixlen != 32 or not network.is_global:
+        raise ValueError(label + ' must be one global IPv4 host')
+    return str(network)
 
 
 class WorkloadProfile:
