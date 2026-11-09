@@ -614,7 +614,8 @@ class LoggingServer(SingleHost):
     deployment_type = 'logging_server'
     prefix = 'log-'
     source_paths = ('modules/logging-server',)
-    shipper = '192.0.2.10'
+    # A placeholder peer must be a global address: the profile refuses documentation ranges.
+    shipper = '9.9.9.9'
 
     def config(self, provider, deployment_id, operator_ip):
         config = self.base_config(provider, deployment_id, operator_ip)
@@ -651,7 +652,7 @@ class Hashtopolis(SingleHost):
     deployment_type = 'hashtopolis'
     prefix = 'h-'
     source_paths = ('modules/hashtopolis',)
-    agent = '192.0.2.10'
+    agent = '9.9.9.9'
 
     def config(self, provider, deployment_id, operator_ip):
         config = self.base_config(provider, deployment_id, operator_ip)
