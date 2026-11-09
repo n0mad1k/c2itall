@@ -601,8 +601,8 @@ def service_config(service):
         }
     if service == "email":
         return {
-            "provider_workload": "phantom", "domain": "mail.test",
-            "email_first_user": "admin@mail.test",
+            "provider_workload": "phantom", "domain": "box.example.com",
+            "email_first_user": "admin@example.com",
             "email_skip_network_checks": True,
         }
     if service == "all_in_one":

@@ -2192,6 +2192,9 @@ class RoutingAndTemplateTests(AzureFixture):
 
         live_harness = (ROOT / 'scripts/test_azure_phantom_live.py').read_text()
         self.assertIn('"email_skip_network_checks": True', live_harness)
+        self.assertIn('"domain": "box.example.com"', live_harness)
+        self.assertIn('"email_first_user": "admin@example.com"', live_harness)
+        self.assertNotIn('"email_first_user": "admin@mail.test"', live_harness)
 
     def test_azure_inbound_rules_reject_unsafe_or_ambiguous_values(self):
         invalid = (
