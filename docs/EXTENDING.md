@@ -189,9 +189,11 @@ service tasks.
 
 ### What the provider gets without further work
 
-Every workload menu offers it for attack box, C2, redirector, phishing,
-payload server, WEBRUNNER, Phantom and chat. The WEBRUNNER picker, region
-pools and quota warnings use its driver. The Tools menu's connectivity test
+Every workload menu offers it: attack box, C2, redirector (plain, and
+CDN-fronted once the driver has an edge), phishing, payload server,
+WEBRUNNER, Phantom, chat, email tracker, logging server, share drive and
+Hashtopolis. The WEBRUNNER picker, region pools and quota warnings use its
+driver. The Tools menu's connectivity test
 and configuration validation include it. Standalone `teardown.py`, the Cleanup
 menu, the infrastructure health check and the live harness all route to it.
 
