@@ -49,7 +49,6 @@
   loop:
     - "25"
     - "587"
-  when: provider | default('') != 'aws'
 
 - name: Record the relay settings for the operator
   copy:

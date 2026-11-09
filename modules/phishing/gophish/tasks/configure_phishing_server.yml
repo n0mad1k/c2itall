@@ -119,7 +119,6 @@
     rule: allow
     port: "{{ gophish_phish_port | default(80) }}"
     proto: tcp
-  when: provider | default('') != 'aws'
 
 - name: Allow the admin UI only from the operator
   community.general.ufw:
@@ -127,7 +126,6 @@
     port: "{{ gophish_admin_port | default(3333) }}"
     proto: tcp
     src: "{{ operator_ip }}"
-  when: provider | default('') != 'aws'
 
 - name: Record how to reach GoPhish
   copy:
