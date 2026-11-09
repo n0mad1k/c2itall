@@ -110,7 +110,7 @@ AWS CloudFront:
 
 | Where | Trace |
 |---|---|
-| Edge | hostname `<random>.cloudfront.net`, not chosen by you; the origin is the instance's public DNS name, so the distribution config in the account names the origin; the origin admits the `cloudfront.origin-facing` managed prefix list and checks a per-deployment `X-Origin-Verify` secret the distribution stamps on every forwarded request |
+| Edge | hostname `<random>.cloudfront.net`, not chosen by you; the origin is the instance's public DNS name, so the distribution config in the account names the origin; the origin admits the `cloudfront.origin-facing` managed prefix list on one 80-443 port range (the list counts as 55 of the 60 rules a security group may hold, so the two web ports share a reference; nothing listens in between) and checks a per-deployment `X-Origin-Verify` secret the distribution stamps on every forwarded request |
 | Caching | disabled; every viewer header except `Host` is forwarded, HTTP and HTTPS are both accepted at the edge, all HTTP methods pass |
 | Teardown | the distribution is disabled, waited on and deleted before the VPC goes; that takes ten to fifteen minutes and the cleanup deadline is extended accordingly |
 | Cost | CloudFront bills per request and per GB; a distribution serving nothing costs nothing, but the instance behind it bills as usual |

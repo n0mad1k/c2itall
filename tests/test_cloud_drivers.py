@@ -25,6 +25,7 @@ from utils.driver_base import StatefulDriver
 OPERATOR = '8.8.8.8'
 RULES = [
     {'name': 'http', 'protocol': 'Tcp', 'port': 80, 'source': 'edge'},
+    {'name': 'https', 'protocol': 'Tcp', 'port': 443, 'source': 'edge'},
     {'name': 'shell-handler', 'protocol': 'Tcp', 'port': 4488, 'source': '*'},
     {'name': 'peer', 'protocol': 'Udp', 'port': 5044, 'source': '9.9.9.9'},
 ]
@@ -361,7 +362,7 @@ class AwsDriverTests(DriverCase):
         config = self.config('aws', aws_region='us-east-1', aws_instance_type='t3.small')
         plan = self.driver.plan(config, self.request('lt-aws-unit'))
         self.assertEqual([rule['source'] for rule in self.driver.validate_config(plan)['aws_inbound_rules']],
-                         ['cloudfront', '*', '9.9.9.9/32'])
+                         ['cloudfront', 'cloudfront', '*', '9.9.9.9/32'])
         self.assertEqual(self.driver.planned_ids(plan)['edge'], 'c2itall-lt-aws-unit')
         self.driver.prepare_state(plan)
         self.assertEqual(self.driver.prepare_ssh_key(plan), str(self.private))
@@ -375,10 +376,13 @@ class AwsDriverTests(DriverCase):
         group = self.ec2.groups[resources['security_group']]
         self.assertEqual(group['IpPermissions'][0], {
             'IpProtocol': 'tcp', 'FromPort': 22, 'ToPort': 22, 'IpRanges': [{'CidrIp': OPERATOR + '/32'}]})
-        self.assertEqual(group['IpPermissions'][1]['PrefixListIds'], [{'PrefixListId': 'pl-cloudfront'}])
-        self.assertEqual(group['IpPermissions'][2]['IpRanges'], [{'CidrIp': '0.0.0.0/0'}])
-        self.assertEqual((group['IpPermissions'][3]['IpProtocol'], group['IpPermissions'][3]['FromPort']),
+        self.assertEqual(group['IpPermissions'][1]['IpRanges'], [{'CidrIp': '0.0.0.0/0'}])
+        self.assertEqual((group['IpPermissions'][2]['IpProtocol'], group['IpPermissions'][2]['FromPort']),
                          ('udp', 5044))
+        # Both edge ports share one prefix-list reference: it counts as 55 of the 60-rule quota.
+        self.assertEqual(group['IpPermissions'][3], {
+            'IpProtocol': 'tcp', 'FromPort': 80, 'ToPort': 443,
+            'PrefixListIds': [{'PrefixListId': 'pl-cloudfront'}]})
         launch = self.ec2.instances[resources['instance']]['Launch']
         self.assertIn('name: ec2-user', launch['UserData'])
         self.assertIn('ssh_pwauth: false', launch['UserData'])

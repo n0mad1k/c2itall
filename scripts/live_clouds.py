@@ -139,6 +139,8 @@ class AwsCloud:
         for group in self.ec2.describe_security_groups(Filters=self._filters([deployment_id]))['SecurityGroups']:
             for permission in group['IpPermissions']:
                 port = str(permission.get('FromPort'))
+                if permission.get('ToPort') not in (None, permission.get('FromPort')):
+                    port += '-' + str(permission['ToPort'])
                 for cidr in permission.get('IpRanges', []):
                     rules.append((permission['IpProtocol'], port,
                                   '*' if cidr['CidrIp'] == '0.0.0.0/0' else cidr['CidrIp']))

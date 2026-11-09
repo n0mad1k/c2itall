@@ -195,14 +195,18 @@ class AwsDriver(StatefulDriver):
     def _permissions(self, ec2, state):
         permissions = [{'IpProtocol': 'tcp', 'FromPort': 22, 'ToPort': 22,
                         'IpRanges': [{'CidrIp': state['operator_ip']}]}]
+        edge = sorted(int(rule['port']) for rule in state['aws_inbound_rules'] if rule['source'] == EDGE_SOURCE)
         for rule in state['aws_inbound_rules']:
-            permission = {'IpProtocol': rule['protocol'].lower(),
-                          'FromPort': int(rule['port']), 'ToPort': int(rule['port'])}
             if rule['source'] == EDGE_SOURCE:
-                permission['PrefixListIds'] = [{'PrefixListId': self._prefix_list(ec2)}]
-            else:
-                permission['IpRanges'] = [{'CidrIp': '0.0.0.0/0' if rule['source'] == '*' else rule['source']}]
-            permissions.append(permission)
+                continue
+            permissions.append({'IpProtocol': rule['protocol'].lower(),
+                                'FromPort': int(rule['port']), 'ToPort': int(rule['port']),
+                                'IpRanges': [{'CidrIp': '0.0.0.0/0' if rule['source'] == '*' else rule['source']}]})
+        if edge:
+            # The CloudFront prefix list counts as 55 of the 60 rules a group may
+            # hold, so every edge port shares one reference as a port range.
+            permissions.append({'IpProtocol': 'tcp', 'FromPort': edge[0], 'ToPort': edge[-1],
+                                'PrefixListIds': [{'PrefixListId': self._prefix_list(ec2)}]})
         return permissions
 
     def create(self, state, deadline):

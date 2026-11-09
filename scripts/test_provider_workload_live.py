@@ -327,7 +327,7 @@ class FrontedRedirector(Redirector):
         require(direct.returncode != 0, 'The origin answered the operator directly despite the edge lockdown')
         report['origin_closed_to_internet'] = True
         rules = context.cloud.inbound_rules(config['deployment_id'])
-        web = {source for proto, port, source in rules if port in ('80', '443')}
+        web = {source for proto, port, source in rules if port in ('80', '443', '80-443')}
         require(len(web) == 1 and '*' not in web and config['operator_ip'] not in str(web),
                 'Fronted redirector web ports are not limited to the edge network: ' + str(rules))
         report['security_group_rules'] = rules
