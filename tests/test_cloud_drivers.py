@@ -309,7 +309,7 @@ class RegistryTests(unittest.TestCase):
         for provider in ('aws', 'linode', 'flokinet', 'azure'):
             for workload in registry.CANONICAL_WORKLOADS:
                 self.assertEqual(registry.provider_route_kind(provider, workload), 'native')
-        self.assertEqual(registry.provider_driver('aws').ssh_user, 'admin')
+        self.assertEqual(registry.provider_driver('aws').ssh_user, 'ec2-user')
         self.assertEqual(registry.provider_driver('linode').ssh_user, 'root')
         self.assertEqual(registry.provider_driver('flokinet').ssh_user, 'root')
         self.assertTrue(registry.provider_driver('aws').supports_edge)
@@ -375,7 +375,8 @@ class AwsDriverTests(DriverCase):
         self.assertEqual((group['IpPermissions'][3]['IpProtocol'], group['IpPermissions'][3]['FromPort']),
                          ('udp', 5044))
         launch = self.ec2.instances[resources['instance']]['Launch']
-        self.assertIn('name: admin', launch['UserData'])
+        self.assertIn('name: ec2-user', launch['UserData'])
+        self.assertIn('ssh_pwauth: false', launch['UserData'])
         self.assertIn(self.public.read_text().strip(), launch['UserData'])
         self.assertEqual(launch['ImageId'], 'ami-ubuntu')
         self.assertEqual(launch['BlockDeviceMappings'][0]['Ebs']['VolumeSize'], 32)
@@ -427,6 +428,8 @@ class LinodeDriverTests(DriverCase):
         self.api = FakeLinodeApi()
         self.driver = linode_cloud.LinodeDriver()
         self.driver.request = self.api
+        self.commands = []
+        self.driver.run_command = lambda argv, **kw: self.commands.append(argv)
 
     def test_lifecycle_creates_firewall_then_linode_and_retires_both(self):
         config = self.config('linode', linode_region='us-east', linode_instance_type='g6-nanode-1')
@@ -456,6 +459,9 @@ class LinodeDriverTests(DriverCase):
         self.assertEqual(set(linode['tags']), set(firewall['tags']))
         self.assertTrue(all(len(tag) <= 50 for tag in linode['tags']))
         self.assertEqual(self.driver.public_address('lt-linode-unit', config), '8.8.8.30')
+        # The image enables password login; the driver turns it off once the key works.
+        self.assertEqual(self.commands[0][-2], 'root@8.8.8.30')
+        self.assertIn('PasswordAuthentication no', self.commands[0][-1])
         self.assertTrue(self.driver.deploy(plan))
         self.assertEqual((len(self.api.linodes), len(self.api.firewalls)), (1, 1))
         self.assertTrue(self.driver.health({'deployment_id': 'lt-linode-unit',
@@ -494,6 +500,7 @@ class FlokinetDriverTests(DriverCase):
         self.assertIn('ufw allow to any port 443 proto tcp', script)
         self.assertIn('ufw allow to any port 41641 proto udp', script)
         self.assertIn('ufw --force enable', script)
+        self.assertIn('PasswordAuthentication no', script)
         self.assertEqual(self.driver.public_address('lt-floki-unit', config), '8.8.4.4')
         self.assertTrue(self.driver.cleanup({'deployment_id': 'lt-floki-unit',
                                              'flokinet_state_dir': str(self.state_dir)}))

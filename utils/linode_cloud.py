@@ -10,11 +10,12 @@ import os
 import re
 import secrets
 import subprocess
+import tempfile
 from pathlib import Path
 
 import requests
 
-from .driver_base import STATE_ROOT, StatefulDriver, wait_until
+from .driver_base import DISABLE_PASSWORD_LOGIN, STATE_ROOT, StatefulDriver, wait_until
 
 API = 'https://api.linode.com/v4'
 IMAGES = {'ubuntu': 'linode/ubuntu24.04', 'ubuntu2204': 'linode/ubuntu22.04', 'kali': 'linode/kali'}
@@ -206,6 +207,12 @@ class LinodeDriver(StatefulDriver):
             lambda: self._running(resources['linode']),
             interval=5, what='Linode boot')
         return {'public_ip': instance['ipv4'][0]}
+
+    def after_ssh(self, state, deadline):
+        # The image enables password login for the root password the API required.
+        with tempfile.TemporaryDirectory(prefix='c2itall-linode-ssh-') as temporary:
+            argv = self.ssh_argv(state, state['outputs']['public_ip'], Path(temporary) / 'known_hosts')
+            self.run_command(argv + [' && '.join(DISABLE_PASSWORD_LOGIN)], timeout=60, deadline=deadline)
 
     def _running(self, linode_id):
         instance = self.request('GET', '/linode/instances/{0}'.format(linode_id))

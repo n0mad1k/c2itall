@@ -46,7 +46,7 @@ def cloud_config(user, public_key):
 
 class AwsDriver(StatefulDriver):
     provider = 'aws'
-    ssh_user = 'admin'
+    ssh_user = 'ec2-user'
     prefix = 'aws_'
     identity_keys = ('aws_region',)
     option_keys = ('aws_state_dir', 'aws_cleanup_deadline')

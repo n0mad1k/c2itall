@@ -155,7 +155,7 @@ LEGACY_FALLBACK_WORKLOADS = frozenset(
 
 
 PROVIDER_SPECS = {
-    'aws': ProviderSpec('AWS', 'admin', False,
+    'aws': ProviderSpec('AWS', 'ec2-user', False,
                         config_loader='utils.aws_cloud:gather_aws_config',
                         environment_loader='utils.aws_utils:prepare_aws_environment',
                         credential_environment=(

@@ -12,14 +12,12 @@ other. Read this before `docs/EXTENDING.md`.
 deploy.py main menu
   └─ modules/<module>/deploy_<module>.py        controller: prompts, builds config
        ├─ select_provider('<workload>')         registry: who can serve it
-       ├─ gather_provider_config(provider, wl)  route.gather_config() or legacy loader
+       ├─ gather_provider_config(provider, wl)  route.gather_config()
        └─ dispatch_workload(config, legacy_fn)  deployment_engine
             └─ registry.workload_route(config)
-                 ├─ driver provider ─► vm_workloads.<Kind>Adapter(driver, profile)
-                 │     plan ─► prepare_state ─► prepare_ssh_key ─► deploy
-                 │     ─► public_address ─► service play over SSH ─► record
-                 └─ transition provider ─► LegacyProviderAdapter ─► legacy_fn(config)
-                       └─ providers/<Dir>/<workload>.yml (localhost play creates + configures)
+                 └─ vm_workloads.<Kind>Adapter(driver, profile)
+                       plan ─► prepare_state ─► prepare_ssh_key ─► deploy
+                       ─► public_address ─► service play over SSH ─► record
 ```
 
 Teardown runs the same route selection in reverse: `teardown.py`, the
@@ -81,16 +79,28 @@ disk size, SSH key paths) and its own infrastructure record:
 - plumbing: `log_dir`, `run_command`, `check_connection`, `exported_config`,
   `cleanup_request`
 - identity: `provider`, `ssh_user`, `prefix` (its config-key prefix),
-  `identity_keys`, `option_keys`, `node_quota`
+  `identity_keys`, `option_keys`, `node_quota`, `region_key`
+- pools: `regions(config)` lists the regions a WEBRUNNER pool may spread
+  across; `apply_profile(config, workload, profile, value)` maps a module's
+  sizing choice (attack-box `instance_size`) onto the provider's own plan names
 
-`utils/azure_cloud.py` is the Azure driver. It wraps the Azure CLI and ARM
-template logic in `utils/azure_utils.py` and never names a workload. Its edge
-is Azure Front Door Standard, created by the same ARM deployment as the VM
-inside the deployment's resource group, so one resource-group deletion
-retires both; the origin's web ports admit the `AzureFrontDoor.Backend`
-service tag and the redirector checks `X-Azure-FDID`.
-`tests/fake_cloud.py` is a complete in-memory driver used by the contract tests
-and the reference for writing a new one.
+`utils/driver_base.py` (`StatefulDriver`) is what the real drivers share:
+the `StateStore` wiring, common validation (IDs, workload names, operator
+/32, at most sixteen inbound rules that never include 22, edge requests),
+the lifecycle lock, status transitions, the SSH wait and ownership tags.
+A subclass supplies `create`, `delete` and `inspect` against its own API.
+
+| Driver | Network boundary and VM | Edge |
+|---|---|---|
+| `utils/azure_cloud.py` | one resource group holding VNet, NSG, static IP, NIC and VM from an ARM template through the Azure CLI (`utils/azure_utils.py`) | Front Door Standard in the same ARM deployment; origin admits `AzureFrontDoor.Backend`, redirector checks `X-Azure-FDID` |
+| `utils/aws_cloud.py` | one VPC, IGW, subnet, route and security group, one EC2 instance keyed by cloud-init, through boto3 | CloudFront distribution on the instance's public DNS; origin admits the `cloudfront.origin-facing` prefix list, redirector checks `X-Origin-Verify` |
+| `utils/linode_cloud.py` | one Cloud Firewall and one Linode through the v4 REST API | none |
+| `utils/flokinet_cloud.py` | a host the operator ordered by hand, adopted over SSH: deployment key installed, `ufw` enforces the rules | none |
+
+None of them names a workload. `tests/fake_cloud.py` is a complete in-memory
+driver used by the contract tests and the reference for writing a new one;
+`tests/test_cloud_drivers.py` proves the three API-backed drivers against
+in-memory EC2, CloudFront and Linode fakes.
 
 ### Generic adapters: `utils/vm_workloads.py`
 
@@ -111,14 +121,13 @@ One adapter per profile kind binds any driver to any profile:
 entrypoint, whether legacy fallback is allowed, its declared variants and
 (optionally) where its profile lives. `PROVIDER_SPECS` lists every provider:
 
-- A **driver-backed** provider sets `driver='utils.<name>_cloud:<factory>'` and
+- Every built-in provider sets `driver='utils.<name>_cloud:<factory>'` and
   lists no per-workload routes. Its capabilities are derived:
   `infrastructure` plus every workload that has a profile. Explicit or staged
   routes that would shadow a driver workload are rejected by validation.
-- A **transition** provider (AWS, Linode, FlokiNET) maps each workload it
-  supports to `LegacyProviderAdapter`, which calls the module's preserved
-  legacy executor once. `LEGACY_TRANSITION_CAPABILITIES` is the source of
-  that list; `determine_legacy_playbook` picks `providers/<Dir>/<play>.yml`.
+- A provider registered with `legacy_menu=True` and `legacy_capabilities`
+  instead routes those workloads to the module's preserved legacy executor.
+  No built-in provider does; the path survives for the engine tests.
 
 `validate_provider_registry()` checks all of this without deploying anything
 and is run by the test suite and `scripts/audit_provider_coverage.py`.
@@ -129,11 +138,12 @@ naming providers.
 ### Durable state and recovery
 
 `utils/state_store.py` is a generic per-deployment JSON store with locking,
-ownership markers and an archive; a driver may use it or bring its own. The
-Azure driver saves intent before any resource exists under
-`deployments/azure/<id>.json`, so a lost controller recovers by ID. Successful
-teardown moves the record to `deployments/azure/archive/`. Legacy routes
-record under `logs/deployment_info_<id>.txt`; teardown tooling reads both.
+ownership markers and an archive; a driver may use it or bring its own. Every
+built-in driver saves intent before any resource exists under
+`deployments/<provider>/<id>.json`, so a lost controller recovers by ID.
+Successful teardown moves the record to `deployments/<provider>/archive/`.
+Deployment records under `logs/deployment_info_<id>.txt` are written as
+well; teardown tooling reads both.
 
 ### Process and file hygiene
 
@@ -146,11 +156,11 @@ to it.
 
 | Formerly a per-provider branch | Now |
 |---|---|
-| WEBRUNNER provider labels, region pools, quota warnings | `provider_label`, `driver.region`, `driver.node_quota`; transition tables stay inside the module |
+| WEBRUNNER provider labels, region pools, quota warnings, inline provisioning | `provider_label`, `driver.regions`, `driver.node_quota`; the drivers provision the nodes and `providers/webrunner.yml` only configures and scans |
 | Tools menu connectivity test and config validation | iterate `PROVIDER_SPECS`; drivers answer `check_connection` and `validate_config` |
 | Chat module Azure disk size | the Phantom profile's `disk_gb` |
 | C2 framework menus | the C2 profile's `FRAMEWORKS` |
-| Attack-box image names | each provider maps the subtype to an image |
+| Attack-box image names and sizes | each driver maps the subtype to an image and `instance_size` to its own plans |
 | Live harness SSH users, keys, state files, rule checks | `driver.ssh_user`, `driver.local_artifacts`; cloud inventory classes in `scripts/live_clouds.py` |
 
 ## Verification tooling
@@ -158,8 +168,7 @@ to it.
 | Command | What it proves |
 |---|---|
 | `venv/bin/python -m pytest tests/ -q` | registry validity, adapter lifecycles, provider isolation, playbook syntax |
-| `venv/bin/python scripts/audit_provider_coverage.py [--require-provider P]` | which provider/workload pairs are native, transition, legacy fallback, staged or unsupported |
+| `venv/bin/python scripts/audit_provider_coverage.py [--require-provider P]` | which provider/workload pairs are native, legacy fallback, staged or unsupported |
 | `venv/bin/python scripts/test_provider_workload_live.py --provider P --workload W --activate` | real deploy, verify over SSH, repeat, standalone teardown, inventory restored |
 | `venv/bin/python scripts/test_azure_phantom_live.py --activate` | the Phantom handoff route on Azure |
 | `venv/bin/python deploy.py --deploy --azure-smoke --dry-run` | the reviewed Azure infrastructure smoke, non-mutating |
-| `venv/bin/python smoke_test_webrunner.py` | the one-node Linode WEBRUNNER lifecycle, preview unless activated |

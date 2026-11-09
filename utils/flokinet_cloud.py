@@ -12,7 +12,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from .driver_base import STATE_ROOT, StatefulDriver, host_cidr
+from .driver_base import DISABLE_PASSWORD_LOGIN, STATE_ROOT, StatefulDriver, host_cidr
 
 
 class FlokinetDriver(StatefulDriver):
@@ -100,7 +100,7 @@ class FlokinetDriver(StatefulDriver):
             'grep -qxF ' + shlex.quote(public_key) + ' /root/.ssh/authorized_keys || '
             'printf "%s\\n" ' + shlex.quote(public_key) + ' >> /root/.ssh/authorized_keys',
             'chmod 700 /root/.ssh', 'chmod 600 /root/.ssh/authorized_keys',
-            *self._firewall_script(state), 'echo adopted']) + '\n'
+            *DISABLE_PASSWORD_LOGIN, *self._firewall_script(state), 'echo adopted']) + '\n'
         self._run_stdin(self._bootstrap_argv(state) + ['bash', '-s'], script, deadline)
         state.setdefault('resources', {})['host'] = state['flokinet_host']
         return {'public_ip': state['flokinet_host']}

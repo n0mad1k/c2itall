@@ -35,6 +35,14 @@ COMMON_KEYS = frozenset({
 })
 
 
+# Images that ship with password login enabled (Linode, hand-ordered hosts) turn it off.
+DISABLE_PASSWORD_LOGIN = (
+    "sed -i -E 's/^#?[[:space:]]*PasswordAuthentication[[:space:]].*/PasswordAuthentication no/' /etc/ssh/sshd_config",
+    "grep -q '^PasswordAuthentication no$' /etc/ssh/sshd_config || echo 'PasswordAuthentication no' >> /etc/ssh/sshd_config",
+    "systemctl reload ssh 2>/dev/null || systemctl reload sshd",
+)
+
+
 def host_cidr(value, label):
     """One global IPv4 host as the /32 a rule or identity names."""
     text = str(value or '').strip()
@@ -287,6 +295,7 @@ class StatefulDriver(CloudDriver):
                 state.update(status='waiting_for_ssh', outputs=outputs)
                 self.save(state)
                 self.wait_for_ssh(state, deadline)
+                self.after_ssh(state, deadline)
                 state['status'] = 'ready'
                 self.save(state)
                 return True
@@ -352,6 +361,9 @@ class StatefulDriver(CloudDriver):
                 '-o', 'GlobalKnownHostsFile=/dev/null',
                 '-o', 'UserKnownHostsFile=' + str(known_hosts),
                 '-o', 'ConnectTimeout=10', self.ssh_user + '@' + str(address)]
+
+    def after_ssh(self, state, deadline):
+        """Provider-specific host fix-ups that need SSH; the default needs none."""
 
     def wait_for_ssh(self, state, deadline):
         """Return only after the VM accepts the deployment key."""

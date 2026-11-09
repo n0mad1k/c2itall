@@ -18,12 +18,12 @@ the layers; `docs/EXTENDING.md` has the recipes.
 
 ## Features
 
-- **Providers**: Azure through a cloud driver that serves every workload;
-  AWS, Linode and FlokiNET through their existing plays behind explicit
-  transition routes.
+- **Providers**: Azure, AWS, Linode and FlokiNET, each through a cloud
+  driver that serves every workload the same way; Azure and AWS can front a
+  redirector with their CDN.
 - **Workloads**:
   - Quick Recon Box: Kali with recon tools, Tor, torsocks and proxychains in minutes
-  - Kali and Ubuntu attack boxes on Azure, AWS and Linode
+  - Kali and Ubuntu attack boxes on every provider
   - C2 server with the Havoc framework (dev branch), shared mail stack, optional integrated tracker
   - HTTPS redirectors with legitimate cover pages, security-scanner bouncing and a shell handler
   - Phishing: MTA front with DKIM/DMARC plus a GoPhish server
@@ -46,9 +46,11 @@ the layers; `docs/EXTENDING.md` has the recipes.
 - Provider access:
   - Azure: the Azure CLI (`az`) with a logged-in session, or the automation
     identity created by `scripts/setup_azure_automation.py`
-  - AWS: access key and secret
-  - Linode: API token
-  - FlokiNET: pre-provisioned servers
+  - AWS: access key and secret (Infisical folder `aws`, keys `AWS_ACCESS_KEY`
+    and `AWS_SECRET_KEY`, or the standard `AWS_*` environment variables)
+  - Linode: API token (`LINODE_TOKEN` in the environment or Infisical
+    `homelab/LINODE_TOKEN`)
+  - FlokiNET: a server ordered by hand that already accepts root SSH
 - A registered domain for workloads that issue Let's Encrypt certificates
 - Your workstation's public IPv4; every firewall rule for SSH is scoped to it
 
@@ -90,7 +92,7 @@ Team services are locked to the operator by construction:
 | Logging Server | RedELK (`limited` profile) in containers; nothing onboarded | Kibana from the operator /32; beats port 5044 only to hosts named at deploy time; onboarding packages stay on the host under `/opt/redelk/` |
 | Share-Drive | Phantom's Nextcloud plus Tailscale | the tailnet only: no public web ports, self-signed certificate, nothing in DNS or certificate logs |
 | Hashtopolis | upstream compose stack on loopback behind nginx with TLS | UI and agent API from the operator /32 and the agent addresses given at deploy time |
-| CDN-Fronted C2 Redirector | a redirector plus the provider's edge (Azure Front Door) in one deployment | beacons talk to the edge hostname; the origin admits only the edge network and drops requests without this deployment's edge identifier |
+| CDN-Fronted C2 Redirector | a redirector plus the provider's edge (Azure Front Door, AWS CloudFront) in one deployment | beacons talk to the edge hostname; the origin admits only the edge network and drops requests without this deployment's edge identifier |
 
 The Tools menu's Payload Generation Tools entry runs the Havoc payload
 generator on a deployed C2 (from its deployment record), pulls the results to
@@ -148,16 +150,19 @@ hostnames must be routed to each replacement by the operator's DNS automation.
 
 ## Providers
 
-| Provider | Route | Notes |
+| Provider | Driver | Notes |
 |---|---|---|
-| Azure | native driver (`utils/azure_cloud.py`) | every workload; durable state under `deployments/azure/` |
-| AWS | transition (`providers/AWS/*.yml`) | attack box (all subtypes), C2, redirector, phishing, payload server, WEBRUNNER, Phantom, chat |
-| Linode | transition (`providers/Linode/*.yml`) | same set as AWS |
-| FlokiNET | transition (`providers/FlokiNET/*.yml`) | C2, redirector, phishing, WEBRUNNER, Phantom, chat; cleanup is manual |
+| Azure | `utils/azure_cloud.py` | every workload; Front Door edge for the fronted redirector |
+| AWS | `utils/aws_cloud.py` | every workload; CloudFront edge for the fronted redirector |
+| Linode | `utils/linode_cloud.py` | every workload |
+| FlokiNET | `utils/flokinet_cloud.py` | every workload on a server you ordered by hand; the driver adopts the host over SSH and cleanup revokes its key |
 
-Transition providers run their original localhost plays, which both create
-the instance and configure it. Their repeat behaviour and cleanup are
-whatever those plays do. The coverage audit shows the exact matrix:
+Every provider runs the same lifecycle: plan, save state under
+`deployments/<provider>/<id>.json`, create the network boundary and the VM,
+wait for SSH, run the workload's service play, record. Repeating a
+deployment with the same ID reuses what already exists, and teardown
+returns true only after the provider proves the resources are gone. The
+coverage audit shows the matrix:
 
 ```bash
 venv/bin/python scripts/audit_provider_coverage.py
@@ -214,6 +219,46 @@ over SSH, and requires the subscription inventory to return to its baseline.
 It assumes an exclusive test subscription. Live defaults are subscription
 `cc2a66d1-67c2-47ca-856f-19a4eae52cfe` and `Standard_D2as_v4`.
 
+### AWS
+
+Each deployment gets its own VPC (`10.0.0.0/16`), internet gateway, subnet,
+default route and security group, then one instance (Ubuntu 24.04 from the
+public SSM parameter, or the Kali marketplace AMI for Kali-based workloads)
+with a gp3 root volume of the workload's size. No EC2 key pair is created:
+cloud-init installs the deployment key for the `ec2-user` account and disables
+password login. Everything carries the `c2itall-deployment` and
+`c2itall-owner` tags, and cleanup refuses resources that do not.
+
+The CDN-fronted redirector adds a CloudFront distribution whose origin is
+the instance's public DNS name. The origin's web ports admit only the
+`com.amazonaws.global.cloudfront.origin-facing` managed prefix list, the
+distribution stamps every forwarded request with a per-deployment
+`X-Origin-Verify` secret, and nginx returns nothing to requests without it.
+Caching is disabled and all viewer headers except `Host` are forwarded.
+Deleting a distribution takes ten to fifteen minutes (disable, wait, delete)
+and the cleanup deadline is extended accordingly.
+
+### Linode
+
+Each deployment is one Linode (Ubuntu 24.04 or the Kali image) behind one
+Cloud Firewall that drops everything except SSH from the operator and the
+workload's inbound rules. Root logs in with the deployment key only; the
+generated root password is discarded. If the requested plan's disk is
+smaller than the workload needs, the cheapest standard plan that fits is
+used instead. Tags `c2itall-deployment-<id>` and `c2itall-owner-<marker>`
+mark both resources for cleanup.
+
+### FlokiNET
+
+FlokiNET has no provisioning API. Order the server in the FlokiNET panel,
+then give the driver its address and, if needed, the key that currently
+opens `root@host`. The driver appends the deployment key to
+`/root/.ssh/authorized_keys`, resets `ufw` to deny incoming except SSH from
+the operator and the workload's rules, and runs the service play over the
+deployment key. Teardown revokes the key; the server and whatever the
+service installed stay until you cancel or reinstall it in the panel. A
+WEBRUNNER pool on FlokiNET gets exactly one node.
+
 ## Architecture in one screen
 
 ```
@@ -222,22 +267,20 @@ deploy.py ─► modules/<module>/deploy_<module>.py        controller: prompts,
                  ▼
          utils/provider_registry.py                      who serves what
                  │
-      ┌──────────┴───────────┐
-      ▼                      ▼
- driver provider        transition provider
- utils/vm_workloads     utils/legacy_provider_adapter
-   adapter(driver,        └─► providers/<Dir>/<workload>.yml
-           profile)
-   ├─ utils/<name>_cloud.py        create / address / destroy VMs
-   └─ modules/<module>/workload.py what the VM needs
-      modules/<module>/service.yml how it is configured
+                 ▼
+         utils/vm_workloads.py  adapter(driver, profile)
+                 ├─ utils/<name>_cloud.py        create / address / destroy VMs
+                 │    (azure, aws, linode, flokinet)
+                 └─ modules/<module>/workload.py what the VM needs
+                    modules/<module>/service.yml how it is configured
 ```
 
 - `modules/<module>/workload.py` is the whole statement of a workload's
   needs: inbound rules, image role, disk, validation, variants, the config
   keys its service play receives.
-- `utils/cloud_driver.py` is the whole provider contract; `utils/azure_cloud.py`
-  implements it and never names a workload.
+- `utils/cloud_driver.py` is the whole provider contract; the four drivers
+  implement it and never name a workload. `utils/driver_base.py` holds the
+  state, validation, SSH-wait and lock plumbing they share.
 - `utils/vm_workloads.py` holds the recoverable lifecycles (single VM,
   multi-component, scan nodes, handoff) shared by every driver and profile.
 - Menus, the WEBRUNNER picker, the connectivity test, validation, health,
@@ -266,7 +309,6 @@ Step-by-step recipes, skeletons and the validation errors you may hit:
 | `venv/bin/python scripts/audit_provider_coverage.py` | the provider/workload coverage matrix |
 | `venv/bin/python scripts/test_provider_workload_live.py --provider <p> --workload <w>` | dry run; add `--activate` for a real deploy, SSH verification, repeat, standalone teardown and inventory restore |
 | `venv/bin/python scripts/test_azure_phantom_live.py --activate [--service share]` | the Phantom handoff route on Azure, or the share drive built on it |
-| `venv/bin/python smoke_test_webrunner.py --activate --operator-ip <ipv4>` | one-node Linode WEBRUNNER lifecycle |
 
 Live runs write evidence under `logs/<provider>-<workload>-live/<deployment_id>/`
 with the commit they executed from.
@@ -280,11 +322,12 @@ modules/<module>/          deploy_<module>.py controller, workload.py profile,
                            service*.yml plays, tasks/, templates/, files/
 common/tasks|templates|files
                            hardening, tool install, mail, port randomization shared by plays
-providers/<Provider>/      transition plays, cleanup play, infrastructure play and
-                           templates for driver providers, vars.example.yaml
+providers/Azure/           ARM infrastructure play and templates for the Azure driver
+providers/webrunner.yml    the scan play every provider's WEBRUNNER nodes run
 utils/provider_registry.py catalog of providers and workloads
 utils/cloud_driver.py      provider contract
-utils/<name>_cloud.py      one driver per provider
+utils/driver_base.py       state, validation and SSH plumbing shared by drivers
+utils/<name>_cloud.py      one driver per provider (azure, aws, linode, flokinet)
 utils/vm_workloads.py      generic adapters
 utils/workloads.py         profile loader
 utils/state_store.py       durable state with locking and archive

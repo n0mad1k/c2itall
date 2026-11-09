@@ -17,12 +17,12 @@ recipes.
 | How that workload is configured on the host | `modules/<module>/service.yml` and `modules/<module>/tasks/` |
 | The operator menu and controller for a workload | `modules/<module>/deploy_<module>.py` |
 | The provider contract | `utils/cloud_driver.py` (`CloudDriver`, `ProvisionRequest`) |
-| One driver per provider | `utils/azure_cloud.py` (real), `tests/fake_cloud.py` (minimal reference) |
+| One driver per provider | `utils/azure_cloud.py`, `utils/aws_cloud.py`, `utils/linode_cloud.py`, `utils/flokinet_cloud.py` (real), `tests/fake_cloud.py` (minimal reference) |
+| What the real drivers share | `utils/driver_base.py` (`StatefulDriver`) |
 | Generic lifecycles that bind a driver to a profile | `utils/vm_workloads.py` |
 | Durable per-deployment state any driver can reuse | `utils/state_store.py` |
 | Bounded subprocesses and safe directory handling | `utils/controller_io.py` |
 | The catalog of providers and workloads | `utils/provider_registry.py` (`PROVIDER_SPECS`, `WORKLOAD_SPECS`) |
-| Legacy plays for transition providers | `providers/<Dir>/<workload>.yml` |
 | Live harness cloud inventories and account inputs | `scripts/live_clouds.py` |
 
 ---
@@ -243,8 +243,8 @@ def execute_deployment(config):
     setup_logging(config['deployment_id'], 'example_deployment')
     if not confirm_action('Proceed?', default=False):
         return
-    # The legacy executor only runs for transition providers that list this
-    # workload; driver providers never reach it.
+    # The legacy executor only runs for a provider registered with
+    # legacy_capabilities; none of the built-in drivers reach it.
     success = dispatch_workload(config, _execute_legacy)
     print('Deployed' if success else 'Deployment failed')
     wait_for_input()
@@ -374,23 +374,13 @@ One line in `WORKLOAD_SPECS` in `utils/provider_registry.py`, in menu order:
                         {'basic'}),          # variants, or omit
 ```
 
-The second argument says whether transition providers may fall back to a
-legacy play for it. The profile is found at `modules/example/workload.py`
-automatically; pass `profile='path'` only when it lives elsewhere.
+The second argument says whether a legacy-routed provider may fall back to
+a legacy play for it; no built-in provider is legacy-routed, so it is
+documentation of intent. The profile is found at `modules/example/workload.py`
+automatically; pass `profile='path'` only when it lives elsewhere. Every
+provider serves the new workload immediately.
 
-### 5. Transition providers
-
-Every driver-backed provider serves the new workload immediately. AWS,
-Linode and FlokiNET only serve it if you also:
-
-1. add it to that provider's set in `LEGACY_TRANSITION_CAPABILITIES`;
-2. write `providers/<Dir>/<workload>.yml`, a localhost play that creates the
-   instance and configures it, and teach `determine_legacy_playbook` which
-   config flag selects it.
-
-Leave both out and the menu simply will not offer those providers for it.
-
-### 6. Verify
+### 5. Verify
 
 ```bash
 venv/bin/ansible-playbook --syntax-check modules/example/service.yml
@@ -418,9 +408,6 @@ handoff workload built on Phantom (the share drive) is verified by
 | Service built on a Phantom play (share drive pattern) | a `handoff` profile with its own rules, a controller that calls `phantom.deploy(<service>, config)` then its own addon play | the main menu; teardown routes through the same adapter |
 | Fronted redirector on another provider | `supports_edge`, the `'edge'` source mapping and `edge_endpoint` in that driver | the redirector's CDN-fronted entry |
 | Phishing component | a `PhishingComponent` subclass with its own `component`, play and ports, plus a `(flag, profile)` entry in `PhishingProfile.components` and `modules/phishing/service-<component>.yml` | the phishing controller's component flags |
-
-A transition provider's legacy play has to understand the new variant
-separately; the native path does not.
 
 ---
 
