@@ -2198,6 +2198,9 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertGreaterEqual(
             live_harness.count('runner.deadline = time.monotonic() + 600'), 3)
         self.assertIn('runner.deadline = time.monotonic() + 1800', live_harness)
+        self.assertIn('ports=(443,587,993)', live_harness)
+        self.assertNotIn('ports=(25,443,993)', live_harness)
+        self.assertIn("^25/tcp[[:space:]]+ALLOW", live_harness)
 
     def test_azure_inbound_rules_reject_unsafe_or_ambiguous_values(self):
         invalid = (

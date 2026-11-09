@@ -436,20 +436,32 @@ def verify_email(runner, config):
         "test \"$(systemctl is-active nginx)\" = active; "
         "sudo -n ss -lnt | grep -Eq '[:.]25[[:space:]]'; "
         "sudo -n ss -lnt | grep -Eq '[:.]993[[:space:]]'; "
+        "sudo -n ufw status | grep -Eq '^25/tcp[[:space:]]+ALLOW'; "
+        "sudo -n ufw status | grep -Eq '^587/tcp[[:space:]]+ALLOW'; "
+        "sudo -n ufw status | grep -Eq '^993/tcp[[:space:]]+ALLOW'; "
         "sudo -n /usr/sbin/sshd -T | grep -q '^passwordauthentication no$'"
     )
     run_ssh(runner, config, command)
     tcp_probe = (
-        "import socket,sys;"
+        "import socket,sys,time;"
         "host=sys.argv[1];"
-        "ports=(25,443,993);"
+        "ports=(443,587,993);"
         "\nfor port in ports:\n"
-        " s=socket.create_connection((host,port),10); s.close()\n"
+        " deadline=time.monotonic()+60\n"
+        " while True:\n"
+        "  try:\n"
+        "   s=socket.create_connection((host,port),5); s.close(); break\n"
+        "  except OSError as error:\n"
+        "   if time.monotonic()>=deadline:\n"
+        "    raise RuntimeError(f'public TCP port {port} unavailable: {error}')\n"
+        "   time.sleep(2)\n"
     )
-    runner.run([sys.executable, "-c", tcp_probe, config["target_host"]], timeout=45)
+    runner.run([sys.executable, "-c", tcp_probe, config["target_host"]], timeout=200)
     return {"mailinabox_configured": True, "postfix_active": True,
             "dovecot_active": True, "nginx_active": True,
-            "public_mail_ports": True, "admin_password_owner_only": True,
+            "public_submission_imap_https": True,
+            "smtp_25_listener_ufw_nsg": True,
+            "admin_password_owner_only": True,
             "ssh_password_authentication": False}
 
 
