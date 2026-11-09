@@ -122,7 +122,9 @@ class LinodeDriver(StatefulDriver):
                 reasons = ''
             raise RuntimeError('Linode API {0} {1} failed with HTTP {2}: {3}'.format(
                 method, path, response.status_code, reasons))
-        return response.json() if response.content else {}
+        if response.status_code == 404 or not response.content:
+            return {}
+        return response.json()
 
     def pages(self, path):
         page = 1

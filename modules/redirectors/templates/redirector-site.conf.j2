@@ -120,11 +120,20 @@ map $http_{{ edge_header | lower | replace('-', '_') }} $edge_ok {
 }
 {% endif %}
 
+{% if edge_id is defined and edge_id %}
+# The edge is the only client; it may present its own origin name as Host,
+# so the fronted site is the default for both ports and there is no catch-all.
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name {{ redirector_subdomain }}.{{ domain }};
+{% else %}
 # HTTP to HTTPS redirect
 server {
     listen 80;
     listen [::]:80;
     server_name {{ redirector_subdomain }}.{{ domain }};
+{% endif %}
 {% if edge_id is defined and edge_id %}
 
     # The edge may terminate TLS itself and reach the origin over HTTP
@@ -145,8 +154,13 @@ server {
 
 # Main HTTPS server
 server {
+{% if edge_id is defined and edge_id %}
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+{% else %}
     listen 443 ssl;
     listen [::]:443 ssl;
+{% endif %}
     server_name {{ redirector_subdomain }}.{{ domain }};
     
     # SSL Configuration
@@ -173,6 +187,7 @@ server {
     include snippets/redirector-site.conf;
 }
 
+{% if not (edge_id is defined and edge_id) %}
 # Catch-all server block
 server {
     listen 80 default_server;
@@ -189,3 +204,4 @@ server {
     access_log off;
     error_log /dev/null crit;
 }
+{% endif %}

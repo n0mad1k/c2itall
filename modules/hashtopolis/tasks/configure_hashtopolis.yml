@@ -152,20 +152,37 @@
 - name: Flush handlers
   ansible.builtin.meta: flush_handlers
 
-- name: Wait for the Hashtopolis front end
-  ansible.builtin.uri:
-    url: http://127.0.0.1:4200/
-    status_code: 200
-  register: hashtopolis_frontend
-  retries: 60
-  delay: 10
-  until: hashtopolis_frontend is success
+- name: Wait for the Hashtopolis stack
+  block:
+    - name: Wait for the Hashtopolis front end
+      ansible.builtin.uri:
+        url: http://127.0.0.1:4200/
+        status_code: 200
+      register: hashtopolis_frontend
+      retries: 60
+      delay: 10
+      until: hashtopolis_frontend is success
 
-- name: Wait for the Hashtopolis API
-  ansible.builtin.uri:
-    url: http://127.0.0.1:8080/api/server.php
-    status_code: [200, 400, 405]
-  register: hashtopolis_api
-  retries: 60
-  delay: 10
-  until: hashtopolis_api is success
+    - name: Wait for the Hashtopolis agent API
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/api/server.php
+        method: POST
+        body_format: json
+        body:
+          section: test
+        return_content: true
+        status_code: 200
+      register: hashtopolis_api
+      retries: 60
+      delay: 10
+      until: hashtopolis_api is success and (hashtopolis_api.json.response | default('')) == 'OK'
+  rescue:
+    - name: Collect the container logs that explain the failure
+      ansible.builtin.command:
+        cmd: docker compose -f /opt/hashtopolis/docker-compose.yml logs --tail 60
+      changed_when: false
+      register: hashtopolis_logs
+
+    - name: Fail with the container logs
+      ansible.builtin.fail:
+        msg: "{{ hashtopolis_logs.stdout_lines | default([]) }}"

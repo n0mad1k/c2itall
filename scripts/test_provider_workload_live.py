@@ -42,7 +42,6 @@ CREDENTIAL_ENVIRONMENT = tuple(
     environment for spec in PROVIDER_SPECS.values()
     for _, environment in spec.credential_environment) + ('AWS_DEFAULT_REGION',)
 SSH_DIR = Path.home() / '.ssh'
-FORCED_LINODE_REGION = 'c2itall-invalid-region'
 # Never fails; records why an sshd check could fail without a second deployment.
 SSHD_DIAGNOSTICS = (
     "sudo -n /usr/sbin/sshd -T 2>&1 | grep -i '^passwordauthentication'; "
@@ -147,9 +146,7 @@ def driver_target(provider, name, key_stem):
 class AttackBox:
     name = 'attack_box'
     variants = ('quick_recon', 'kali', 'ubuntu')
-    repeat = {'aws': True, 'linode': False}
     source_paths = ('modules/attack-box',)
-    legacy_paths = ('providers/{dir}/attack_box.yml',)
 
     def __init__(self, variant='quick_recon'):
         if variant not in self.variants:
@@ -172,43 +169,27 @@ class AttackBox:
             'ssh_after_deploy': False, 'enhanced_opsec': True,
             'work_dir': '/root/' + deployment_id, 'tool_name': 'toolkit',
             'project_name': deployment_id, 'auto_teardown_on_fail': False,
-            'default_user': 'root', 'attack_box_deployment': True,
-            'ssh_user': 'root',
-            'attack_box_image': ('linode/ubuntu22.04' if self.variant == 'ubuntu'
-                                 else 'linode/kali'),
-            'quick_deployment': quick,
+            'attack_box_deployment': True, 'quick_deployment': quick,
         }
         config.update(live_config(provider, self.name))
         if provider == 'azure' and not quick:
             config['azure_os_disk_gb'] = 64
-        if provider_driver(provider) is None:
-            apply_provider_profile(config, 'instance_size', 'small')
+        apply_provider_profile(config, 'instance_size', config['instance_size'])
         ready, _ = prepare_module_ssh_key(config, box)
         require(ready, 'Could not generate the module SSH key')
         return config
 
     def identity(self, config):
         deployment_id = config['deployment_id']
-        return {'deployment_id': deployment_id, 'names': [config['attack_box_name']],
-                'key_names': ['attack-box-' + deployment_id, 'c2deploy_' + config['attack_box_name']],
-                'sg_names': ['attack-box-sg-' + deployment_id]}
+        return {'deployment_id': deployment_id, 'names': [config['attack_box_name']]}
 
     def target(self, provider, config):
-        if provider == 'aws':
-            user = 'ubuntu' if self.variant == 'ubuntu' else 'kali'
-            return config['attack_box_name'], user, SSH_DIR / ('attack-box-' + config['deployment_id'])
-        if provider == 'linode':
-            return config['attack_box_name'], 'root', SSH_DIR / ('c2deploy_' + config['attack_box_name'])
         return driver_target(provider, config['attack_box_name'], config['deployment_id'])
 
     def local_artifacts(self, provider, config):
         deployment_id = config['deployment_id']
         return key_files('c2deploy_' + config['attack_box_name']) + shared_artifacts(deployment_id) + [
-            SSH_DIR / ('attack-box-' + deployment_id),
-            ROOT / 'logs' / ('attack_box_' + deployment_id + '_info.txt'),
-            ROOT / 'providers' / 'Linode' / 'logs' / ('deployment_info_' + deployment_id + '.txt'),
-            ROOT / 'providers' / 'Linode' / 'logs' / ('attack_box_' + deployment_id + '.env'),
-        ]
+            ROOT / 'logs' / ('attack_box_' + deployment_id + '_info.txt')]
 
     def verify(self, context, config):
         deployment_id = config['deployment_id']
@@ -239,26 +220,16 @@ class AttackBox:
                 ('workspace_alias', "sudo -n grep -Fq \"alias ops=\" /root/.bashrc"),
             ]
         report = checks(context, common + specific, timeout=180)
-        if provider_driver(context.provider) is not None:
-            rules = context.cloud.inbound_rules(deployment_id)
-            require(rules == [('tcp', '22', config['operator_ip'] + '/32')],
-                    provider_label(context.provider) + ' attack box exposes more than operator SSH: ' + str(rules))
-            report['security_group_rules'] = rules
-        if context.provider == 'aws':
-            rules = context.cloud.inbound_rules('attack-box-sg-' + deployment_id)
-            require(('tcp', 22, 22, config['operator_ip'] + '/32') in rules,
-                    'AWS attack box does not restrict SSH to the operator /32')
-            require(all(cidr == config['operator_ip'] + '/32' for proto, low, high, cidr in rules
-                        if low <= 22 <= high), 'AWS attack box exposes SSH beyond the operator')
-            report['security_group_rules'] = rules
+        rules = context.cloud.inbound_rules(deployment_id)
+        require(rules == [('tcp', '22', config['operator_ip'] + '/32')],
+                provider_label(context.provider) + ' attack box exposes more than operator SSH: ' + str(rules))
+        report['security_group_rules'] = rules
         return report
 
 
 class Redirector:
     name = 'redirector'
-    repeat = {'aws': True, 'linode': True}
     source_paths = ('modules/redirectors', 'common')
-    legacy_paths = ('providers/{dir}/redirector.yml',)
     test_backend_ip = '192.0.2.10'
 
     def config(self, provider, deployment_id, operator_ip):
@@ -281,23 +252,14 @@ class Redirector:
 
     def identity(self, config):
         deployment_id = config['deployment_id']
-        return {'deployment_id': deployment_id, 'names': ['r-' + deployment_id],
-                'key_names': ['c2deploy_' + deployment_id],
-                'sg_names': ['r-' + deployment_id + '-sg']}
+        return {'deployment_id': deployment_id, 'names': ['r-' + deployment_id]}
 
     def target(self, provider, config):
-        deployment_id = config['deployment_id']
-        if provider == 'aws':
-            return 'r-' + deployment_id, 'ubuntu', SSH_DIR / ('c2deploy_' + deployment_id + '.pem')
-        if provider == 'linode':
-            return 'r-' + deployment_id, 'root', SSH_DIR / ('c2deploy_' + deployment_id)
-        return driver_target(provider, 'r-' + deployment_id, deployment_id)
+        return driver_target(provider, 'r-' + config['deployment_id'], config['deployment_id'])
 
     def local_artifacts(self, provider, config):
         deployment_id = config['deployment_id']
-        return key_files('c2deploy_' + deployment_id) + shared_artifacts(deployment_id) + [
-            ROOT / ('infrastructure_state_' + deployment_id + '.json'),
-            ROOT / 'providers' / PROVIDER_SPECS[provider].directory / ('infrastructure_state_' + deployment_id + '.json')]
+        return key_files('c2deploy_' + deployment_id) + shared_artifacts(deployment_id)
 
     def verify(self, context, config):
         # The site answers only its own hostname; the catch-all vhost bounces every other Host.
@@ -324,24 +286,17 @@ class Redirector:
         unknown = context.run(base + [url])
         require(unknown == '301', 'Redirector answered an unknown Host instead of bouncing it: ' + unknown)
         report['unknown_host_bounced'] = True
-        if provider_driver(context.provider) is not None:
-            rules = context.cloud.inbound_rules(config['deployment_id'])
-            require(('tcp', '22', config['operator_ip'] + '/32') in rules and
-                    all(source == '*' for proto, port, source in rules if port != '22'),
-                    provider_label(context.provider) + ' redirector rules are not operator-SSH plus public web: ' + str(rules))
-            report['security_group_rules'] = rules
-        if context.provider == 'aws':
-            rules = context.cloud.inbound_rules('r-' + config['deployment_id'] + '-sg')
-            require(('tcp', 22, 22, config['operator_ip'] + '/32') in rules,
-                    'AWS redirector does not restrict SSH to the operator /32')
-            report['security_group_rules'] = rules
+        rules = context.cloud.inbound_rules(config['deployment_id'])
+        require(('tcp', '22', config['operator_ip'] + '/32') in rules and
+                all(source == '*' for proto, port, source in rules if port != '22'),
+                provider_label(context.provider) + ' redirector rules are not operator-SSH plus public web: ' + str(rules))
+        report['security_group_rules'] = rules
         return report
 
 
 class FrontedRedirector(Redirector):
     """A redirector whose web ports admit only the provider's edge."""
     name = 'fronted_redirector'
-    repeat = {}
 
     def config(self, provider, deployment_id, operator_ip):
         config = super().config(provider, deployment_id, operator_ip)
@@ -393,9 +348,7 @@ class FrontedRedirector(Redirector):
 
 class C2:
     name = 'c2'
-    repeat = {'aws': False, 'linode': False}
     source_paths = ('modules/c2', 'common')
-    legacy_paths = ('providers/{dir}/c2.yml',)
 
     def config(self, provider, deployment_id, operator_ip):
         config = {
@@ -416,23 +369,14 @@ class C2:
 
     def identity(self, config):
         deployment_id = config['deployment_id']
-        return {'deployment_id': deployment_id, 'names': [config['c2_name']],
-                'key_names': ['c2deploy_' + deployment_id],
-                'sg_names': [config['c2_name'] + '-sg']}
+        return {'deployment_id': deployment_id, 'names': [config['c2_name']]}
 
     def target(self, provider, config):
-        deployment_id = config['deployment_id']
-        if provider == 'aws':
-            return config['c2_name'], 'kali', SSH_DIR / ('c2deploy_' + deployment_id + '.pem')
-        if provider == 'linode':
-            return config['c2_name'], 'root', SSH_DIR / ('c2deploy_' + deployment_id)
-        return driver_target(provider, config['c2_name'], deployment_id)
+        return driver_target(provider, config['c2_name'], config['deployment_id'])
 
     def local_artifacts(self, provider, config):
         deployment_id = config['deployment_id']
-        return key_files('c2deploy_' + deployment_id) + shared_artifacts(deployment_id) + [
-            ROOT / ('infrastructure_state_' + deployment_id + '.json'),
-            ROOT / 'providers' / PROVIDER_SPECS[provider].directory / ('infrastructure_state_' + deployment_id + '.json')]
+        return key_files('c2deploy_' + deployment_id) + shared_artifacts(deployment_id)
 
     def verify(self, context, config):
         report = checks(context, [
@@ -446,19 +390,16 @@ class C2:
             ('opendkim_active', 'test "$(systemctl is-active opendkim)" = active'),
             ('sshd_no_password', "sudo -n /usr/sbin/sshd -T | grep -iq '^passwordauthentication no$'"),
         ], timeout=120)
-        if context.provider == 'aws':
-            rules = context.cloud.inbound_rules(config['c2_name'] + '-sg')
-            require(('tcp', 22, 22, config['operator_ip'] + '/32') in rules,
-                    'AWS C2 does not restrict SSH to the operator /32')
-            report['security_group_rules'] = rules
+        rules = context.cloud.inbound_rules(config['deployment_id'])
+        require(('tcp', '22', config['operator_ip'] + '/32') in rules,
+                provider_label(context.provider) + ' C2 does not restrict SSH to the operator /32: ' + str(rules))
+        report['security_group_rules'] = rules
         return report
 
 
 class PayloadServer:
     name = 'payload_server'
-    repeat = {'aws': True, 'linode': True}
     source_paths = ('modules/payload-server',)
-    legacy_paths = ('providers/{dir}/payload_server.yml',)
 
     def config(self, provider, deployment_id, operator_ip):
         config = {
@@ -480,16 +421,10 @@ class PayloadServer:
 
     def identity(self, config):
         deployment_id = config['deployment_id']
-        return {'deployment_id': deployment_id, 'names': ['ps-' + deployment_id],
-                'key_names': ['c2deploy_' + deployment_id],
-                'sg_names': ['ps-' + deployment_id + '-sg']}
+        return {'deployment_id': deployment_id, 'names': ['ps-' + deployment_id]}
 
     def target(self, provider, config):
-        deployment_id = config['deployment_id']
-        if provider in ('aws', 'linode'):
-            user = 'ubuntu' if provider == 'aws' else 'root'
-            return 'ps-' + deployment_id, user, SSH_DIR / ('c2deploy_' + deployment_id)
-        return driver_target(provider, 'ps-' + deployment_id, deployment_id)
+        return driver_target(provider, 'ps-' + config['deployment_id'], config['deployment_id'])
 
     def local_artifacts(self, provider, config):
         deployment_id = config['deployment_id']
@@ -519,17 +454,11 @@ class PayloadServer:
         require(scanner == '000', 'Payload server answered a tool user agent: ' + scanner)
         report.update({'public_basic_auth': True, 'public_authorized': True,
                        'tool_user_agent_dropped': True})
-        if provider_driver(context.provider) is not None:
-            rules = context.cloud.inbound_rules(config['deployment_id'])
-            require(('tcp', '22', config['operator_ip'] + '/32') in rules and
-                    all(source == '*' for proto, port, source in rules if port != '22'),
-                    provider_label(context.provider) + ' payload server rules are not operator-SSH plus public web: ' + str(rules))
-            report['security_group_rules'] = rules
-        if context.provider == 'aws':
-            rules = context.cloud.inbound_rules('ps-' + config['deployment_id'] + '-sg')
-            require(('tcp', 22, 22, config['operator_ip'] + '/32') in rules,
-                    'AWS payload server does not restrict SSH to the operator /32')
-            report['security_group_rules'] = rules
+        rules = context.cloud.inbound_rules(config['deployment_id'])
+        require(('tcp', '22', config['operator_ip'] + '/32') in rules and
+                all(source == '*' for proto, port, source in rules if port != '22'),
+                provider_label(context.provider) + ' payload server rules are not operator-SSH plus public web: ' + str(rules))
+        report['security_group_rules'] = rules
         return report
 
 
@@ -555,8 +484,7 @@ class SingleHost:
 
     def identity(self, config):
         deployment_id = config['deployment_id']
-        return {'deployment_id': deployment_id, 'names': [self.prefix + deployment_id],
-                'key_names': ['c2deploy_' + deployment_id], 'sg_names': []}
+        return {'deployment_id': deployment_id, 'names': [self.prefix + deployment_id]}
 
     def target(self, provider, config):
         return driver_target(provider, self.prefix + config['deployment_id'], config['deployment_id'])
@@ -689,9 +617,7 @@ class Phishing:
     """Basic phishing: an MTA front plus a GoPhish server, verified from the operator."""
     name = 'phishing'
     instances = 2
-    repeat = {'aws': False, 'linode': False}
     source_paths = ('modules/phishing', 'common')
-    legacy_paths = ('providers/{dir}/mta.yml', 'providers/{dir}/gophish.yml')
 
     def config(self, provider, deployment_id, operator_ip):
         domain = 'phish-lab.test'
@@ -727,20 +653,12 @@ class Phishing:
         deployment_id = config['deployment_id']
         names = ['mta-' + deployment_id, 'gophish-' + deployment_id]
         return {'deployment_id': deployment_id, 'names': names,
-                'key_names': ['c2deploy_' + deployment_id],
-                'sg_names': [name + '-sg' for name in names],
-                # Driver-backed providers deploy one record per component.
+                # Every driver deploys one record per component.
                 'components': {'mta-' + deployment_id: deployment_id + '-mta',
                                'gophish-' + deployment_id: deployment_id + '-gophish'}}
 
     def target(self, provider, config):
-        deployment_id = config['deployment_id']
-        if provider == 'aws':
-            # The AWS component plays rename the module key to .pem.
-            return 'mta-' + deployment_id, 'ubuntu', SSH_DIR / ('c2deploy_' + deployment_id + '.pem')
-        if provider == 'linode':
-            return 'mta-' + deployment_id, 'root', SSH_DIR / ('c2deploy_' + deployment_id)
-        return driver_target(provider, 'mta-' + deployment_id, deployment_id)
+        return driver_target(provider, 'mta-' + config['deployment_id'], config['deployment_id'])
 
     def local_artifacts(self, provider, config):
         deployment_id = config['deployment_id']
@@ -785,24 +703,14 @@ class Phishing:
         report['gophish'].update({'admin_login_page': True, 'phish_listener_status': landing,
                                   'address': gophish_address})
         operator = config['operator_ip'] + '/32'
-        if provider_driver(context.provider) is not None:
-            mta_rules = context.cloud.inbound_rules(deployment_id + '-mta')
-            gophish_rules = context.cloud.inbound_rules(deployment_id + '-gophish')
-            require(mta_rules == sorted([('tcp', '22', operator), ('tcp', '25', '*'), ('tcp', '587', '*')]),
-                    provider_label(context.provider) + ' MTA front rules are not operator SSH plus mail: ' + str(mta_rules))
-            require(gophish_rules == sorted([('tcp', '22', operator), ('tcp', admin_port, operator),
-                                             ('tcp', '80', '*')]),
-                    provider_label(context.provider) + ' GoPhish rules are not operator SSH/admin plus public phish: ' + str(gophish_rules))
-            report['security_group_rules'] = {'mta': mta_rules, 'gophish': gophish_rules}
-        if context.provider == 'aws':
-            report['security_group_rules'] = {}
-            for part in ('mta', 'gophish'):
-                rules = context.cloud.inbound_rules(part + '-' + deployment_id + '-sg')
-                require(('tcp', 22, 22, operator) in rules,
-                        'AWS ' + part + ' group does not restrict SSH to the operator /32')
-                report['security_group_rules'][part] = rules
-            require(('tcp', int(admin_port), int(admin_port), operator) in report['security_group_rules']['gophish'],
-                    'AWS GoPhish group does not restrict the admin UI to the operator /32')
+        mta_rules = context.cloud.inbound_rules(deployment_id + '-mta')
+        gophish_rules = context.cloud.inbound_rules(deployment_id + '-gophish')
+        require(mta_rules == sorted([('tcp', '22', operator), ('tcp', '25', '*'), ('tcp', '587', '*')]),
+                provider_label(context.provider) + ' MTA front rules are not operator SSH plus mail: ' + str(mta_rules))
+        require(gophish_rules == sorted([('tcp', '22', operator), ('tcp', admin_port, operator),
+                                         ('tcp', '80', '*')]),
+                provider_label(context.provider) + ' GoPhish rules are not operator SSH/admin plus public phish: ' + str(gophish_rules))
+        report['security_group_rules'] = {'mta': mta_rules, 'gophish': gophish_rules}
         return report
 
 
@@ -844,19 +752,11 @@ class Webrunner:
         return config
 
     def identity(self, provider, deployment_id):
-        name = 'wr-' + deployment_id
-        if provider_driver(provider) is not None:
-            # Generic node adapters derive one state record per node.
-            return {'deployment_id': deployment_id + '-n01', 'names': [name + '-01']}
-        return {'deployment_id': deployment_id, 'names': [name + '-01'],
-                'key_names': [name], 'sg_names': ['webrunner-' + name]}
+        # The node adapters derive one state record per node.
+        return {'deployment_id': deployment_id + '-n01', 'names': ['wr-' + deployment_id + '-01']}
 
     def target(self, provider, config):
-        node = config['webrunner_name'] + '-01'
-        if provider in ('aws', 'linode'):
-            user = 'admin' if provider == 'aws' else 'root'
-            return node, user, SSH_DIR / ('c2deploy_' + config['webrunner_name'])
-        return driver_target(provider, node, config['webrunner_name'])
+        return driver_target(provider, config['webrunner_name'] + '-01', config['webrunner_name'])
 
     def local_artifacts(self, provider, config):
         deployment_id = config['deployment_id']
@@ -886,16 +786,10 @@ class Webrunner:
                 ('scanner_present', 'sudo -n test -s /root/webrunner/node_scanner.py'),
                 ('results_present', 'sudo -n test -s /root/webrunner/results.json'),
             ])
-            if provider_driver(provider) is not None:
-                rules = cloud.inbound_rules(identity['deployment_id'])
-                require(rules == [('tcp', '22', config['operator_ip'] + '/32')],
-                        provider_label(provider) + ' scan node allows more than operator SSH: ' + str(rules))
-                report['security_group_rules'] = rules
-            if provider == 'aws':
-                rules = cloud.inbound_rules('webrunner-' + config['webrunner_name'])
-                require(rules == [('tcp', 22, 22, config['operator_ip'] + '/32')],
-                        'AWS scan node allows more than operator SSH: ' + str(rules))
-                report['security_group_rules'] = rules
+            rules = cloud.inbound_rules(identity['deployment_id'])
+            require(rules == [('tcp', '22', config['operator_ip'] + '/32')],
+                    provider_label(provider) + ' scan node allows more than operator SSH: ' + str(rules))
+            report['security_group_rules'] = rules
         else:
             require(empty(inventory), 'Scan node remains after the in-play teardown')
             require(not key.exists(), 'Module key remains after the in-play teardown')
@@ -947,12 +841,8 @@ def verify_committed_source(runner, provider, workload):
     paths = ['utils', 'teardown.py', 'scripts/test_provider_workload_live.py',
              'scripts/live_clouds.py']
     paths += [path.format(dir=directory) for path in workload.source_paths]
-    if provider_driver(provider) is None:
-        paths.append('providers/{0}/cleanup.yml'.format(directory))
-        paths += [path.format(dir=directory) for path in getattr(workload, 'legacy_paths', ())]
-    else:
-        # A driver provider's whole directory is its infrastructure contract.
-        paths.append('providers/' + directory)
+    # A provider's whole directory is part of its infrastructure contract.
+    paths.append('providers/' + directory)
     for path in paths:
         runner.run(['git', 'diff', '--quiet', 'HEAD', '--', path])
     return runner.run(['git', 'rev-parse', 'HEAD'])
@@ -962,8 +852,7 @@ def empty(inventory):
     return not any(inventory.values())
 
 
-def activate(provider, workload_name, operator_ip=None, repeat=None, variant=None,
-             force_linode_region_fallback=False):
+def activate(provider, workload_name, operator_ip=None, repeat=None, variant=None):
     workload = (WORKLOADS[workload_name](variant or 'quick_recon')
                 if workload_name == 'attack_box' else WORKLOADS[workload_name]())
     os.chdir(ROOT)
@@ -992,12 +881,6 @@ def activate(provider, workload_name, operator_ip=None, repeat=None, variant=Non
             'curl', '-4', '--fail', '--silent', '--show-error', '--max-time', '15',
             'https://api.ipify.org']))
         config = workload.config(provider, deployment_id, operator_ip)
-        if force_linode_region_fallback:
-            config.update({
-                'linode_region': FORCED_LINODE_REGION,
-                'linode_regions': [FORCED_LINODE_REGION],
-                'selected_region': FORCED_LINODE_REGION,
-            })
         identity = workload.identity(config)
         require(empty(cloud.inventory(identity)), 'Live-test identity already owns cloud resources')
         generated = [path for path in workload.local_artifacts(provider, config) if path.exists()]
@@ -1025,20 +908,10 @@ def activate(provider, workload_name, operator_ip=None, repeat=None, variant=Non
         context = Context(runner, cloud, provider, address, user, key)
         runner.record('host-diagnostics.json', {'sshd': context.ssh(SSHD_DIAGNOSTICS)})
         service = workload.verify(context, config)
-        if force_linode_region_fallback:
-            deployed_regions = sorted({item.get('region') for item in first['instances']})
-            require(deployed_regions == [REGIONS['linode']],
-                    'Linode fallback did not land in {0}: {1}'.format(
-                        REGIONS['linode'], deployed_regions))
-            service['region_fallback'] = {
-                'requested': FORCED_LINODE_REGION,
-                'deployed': REGIONS['linode'],
-            }
         runner.record('first-deployment.json', {'cloud': first, 'address': address, 'service': service})
 
-        # Driver-backed adapters are idempotent by contract; legacy plays vary.
-        do_repeat = workload.repeat.get(provider, True) if repeat is None else repeat
-        if do_repeat:
+        # Every driver adapter is idempotent by contract.
+        if repeat is None or repeat:
             require(deploy(config), 'Repeated routed deployment failed')
             repeated = cloud.inventory(identity)
             require(repeated == first, 'Repeated deployment changed cloud resource identities')
@@ -1047,8 +920,7 @@ def activate(provider, workload_name, operator_ip=None, repeat=None, variant=Non
                 'cloud': repeated, 'service': workload.verify(context, config),
                 'resource_identity_preserved': True})
         else:
-            runner.record('repeat-deployment.json', {'skipped': True,
-                                                     'reason': 'provider playbook creates instances non-idempotently'})
+            runner.record('repeat-deployment.json', {'skipped': True, 'reason': 'requested'})
         live_passed = True
     except BaseException as exc:
         failure = str(exc)
@@ -1219,22 +1091,16 @@ def main(argv=None):
     parser.add_argument('--operator-ip')
     parser.add_argument('--repeat', dest='repeat', action='store_true', default=None)
     parser.add_argument('--no-repeat', dest='repeat', action='store_false')
-    parser.add_argument('--force-linode-region-fallback', action='store_true',
-                        help='start from a deliberately invalid Linode region and require fallback')
     args = parser.parse_args(argv)
     if args.variant and args.workload != 'attack_box':
         parser.error('--variant is only valid with --workload attack_box')
-    if args.force_linode_region_fallback and not (
-            args.provider == 'linode' and args.workload in ('redirector', 'c2', 'phishing')):
-        parser.error('--force-linode-region-fallback requires a Linode redirector, C2, or phishing run')
     if not args.activate:
         print('DRY RUN: no cloud mutations. Target: {0} / {1} / {2}'.format(
             args.provider, REGIONS[args.provider], args.workload))
         return 0
     if args.workload == 'webrunner':
         return activate_webrunner(args.provider, args.operator_ip)
-    return activate(args.provider, args.workload, args.operator_ip, args.repeat,
-                    args.variant, args.force_linode_region_fallback)
+    return activate(args.provider, args.workload, args.operator_ip, args.repeat, args.variant)
 
 
 if __name__ == '__main__':

@@ -24,19 +24,16 @@ for path in (SCRIPT_DIR, ROOT):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from utils.common import load_vars_file
-
 REGIONS = {'aws': 'us-east-1', 'linode': 'us-east', 'azure': 'eastus'}
 AZURE_SUBSCRIPTION = 'cc2a66d1-67c2-47ca-856f-19a4eae52cfe'
 AZURE_SIZE = 'Standard_D2as_v4'
 LINODE_API = 'https://api.linode.com/v4'
 SECRET_FRAGMENTS = ('token', 'secret', 'pass', 'access_key')
-# Workload sizing a transition provider needs beyond its vars.yaml defaults.
+# Workload sizing beyond a provider's default instance.
 LIVE_SIZING = {
-    # Havoc is compiled on the host; the vars.yaml defaults are sized for
-    # redirectors and starve the build. Match the playbook's own defaults.
-    'aws': {'c2': {'aws_instance_type': 't3.medium'}},
-    'linode': {'c2': {'linode_instance_type': 'g6-standard-2'}},
+    # RedELK runs Elasticsearch, Logstash and Kibana together; 8 GB keeps them up.
+    'aws': {'logging_server': {'aws_instance_type': 't3.large'}},
+    'linode': {'logging_server': {'linode_instance_type': 'g6-standard-4'}},
 }
 
 
@@ -68,85 +65,91 @@ def redacted(config):
 
 class AwsCloud:
     provider = 'aws'
+    TAG = 'c2itall-deployment'
 
     def __init__(self, region):
         import boto3
         self.region = region
         self.ec2 = boto3.client('ec2', region_name=region)
+        self.cloudfront = boto3.client('cloudfront', region_name='us-east-1')
+
+    @staticmethod
+    def _ids(identity):
+        return list((identity.get('components') or {}).values()) or [identity['deployment_id']]
+
+    def _filters(self, ids):
+        return [{'Name': 'tag:' + self.TAG, 'Values': list(ids)}]
 
     def _instances(self, filters):
-        found = {}
+        found = []
         for reservation in self.ec2.describe_instances(Filters=filters)['Reservations']:
             for instance in reservation['Instances']:
                 if instance['State']['Name'] == 'terminated':
                     continue
                 tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
-                found[instance['InstanceId']] = {
+                found.append({
                     'id': instance['InstanceId'], 'state': instance['State']['Name'],
-                    'name': tags.get('Name', ''), 'public_ip': instance.get('PublicIpAddress', ''),
+                    'name': tags.get(self.TAG, ''), 'public_ip': instance.get('PublicIpAddress', ''),
                     'instance_type': instance['InstanceType'], 'image_id': instance['ImageId'],
-                }
-        return found
+                })
+        return sorted(found, key=lambda item: item['id'])
+
+    def _distributions(self):
+        items = []
+        for page in self.cloudfront.get_paginator('list_distributions').paginate():
+            for distribution in page['DistributionList'].get('Items', []):
+                tags = {tag['Key']: tag['Value'] for tag in self.cloudfront.list_tags_for_resource(
+                    Resource=distribution['ARN'])['Tags']['Items']}
+                items.append({'id': distribution['Id'], 'domain': distribution['DomainName'],
+                              'status': distribution['Status'], 'name': tags.get(self.TAG, '')})
+        return sorted(items, key=lambda item: item['id'])
 
     def inventory(self, identity):
-        deployment_id = identity['deployment_id']
-        tag_filters = [[{'Name': 'tag:deployment_id', 'Values': [deployment_id]}],
-                       [{'Name': 'tag:DeploymentID', 'Values': [deployment_id]}],
-                       [{'Name': 'tag:Name', 'Values': identity['names']}]]
-        instances = {}
-        for filters in tag_filters:
-            instances.update(self._instances(filters))
-        groups = {}
-        for filters in tag_filters[:2] + [[{'Name': 'group-name', 'Values': identity['sg_names']}]]:
-            for group in self.ec2.describe_security_groups(Filters=filters)['SecurityGroups']:
-                groups[group['GroupId']] = {'id': group['GroupId'], 'name': group['GroupName'],
-                                            'vpc_id': group.get('VpcId', '')}
-        vpcs = {}
-        for filters in tag_filters[:2]:
-            for vpc in self.ec2.describe_vpcs(Filters=filters)['Vpcs']:
-                vpcs[vpc['VpcId']] = {'id': vpc['VpcId']}
-        interfaces = {}
-        for filters in tag_filters[:2]:
-            for eni in self.ec2.describe_network_interfaces(Filters=filters)['NetworkInterfaces']:
-                interfaces[eni['NetworkInterfaceId']] = {'id': eni['NetworkInterfaceId']}
-        keys = [pair['KeyName'] for pair in self.ec2.describe_key_pairs(
-            Filters=[{'Name': 'key-name', 'Values': identity['key_names']}])['KeyPairs']]
+        ids = self._ids(identity)
+        filters = self._filters(ids)
         return {
-            'instances': sorted(instances.values(), key=lambda item: item['id']),
-            'security_groups': sorted(groups.values(), key=lambda item: item['id']),
-            'vpcs': sorted(vpcs.values(), key=lambda item: item['id']),
-            'network_interfaces': sorted(interfaces.values(), key=lambda item: item['id']),
-            'key_pairs': sorted(keys),
+            'instances': self._instances(filters),
+            'security_groups': sorted(
+                [{'id': group['GroupId'], 'name': group['GroupName']}
+                 for group in self.ec2.describe_security_groups(Filters=filters)['SecurityGroups']],
+                key=lambda item: item['id']),
+            'subnets': sorted(item['SubnetId'] for item in self.ec2.describe_subnets(Filters=filters)['Subnets']),
+            'internet_gateways': sorted(item['InternetGatewayId'] for item in
+                                        self.ec2.describe_internet_gateways(Filters=filters)['InternetGateways']),
+            'vpcs': sorted(item['VpcId'] for item in self.ec2.describe_vpcs(Filters=filters)['Vpcs']),
+            'edges': [item for item in self._distributions() if item['name'] in ids],
         }
 
     def totals(self):
-        instances = len(self._instances([]))
         groups = sum(1 for group in self.ec2.describe_security_groups()['SecurityGroups']
                      if group['GroupName'] != 'default')
         vpcs = sum(1 for vpc in self.ec2.describe_vpcs()['Vpcs'] if not vpc.get('IsDefault'))
-        keys = len(self.ec2.describe_key_pairs()['KeyPairs'])
-        return {'region': self.region, 'instances': instances, 'security_groups': groups,
-                'vpcs': vpcs, 'key_pairs': keys}
+        return {'region': self.region, 'instances': len(self._instances([])), 'security_groups': groups,
+                'vpcs': vpcs, 'distributions': len(self._distributions())}
 
     def address(self, identity, name):
-        for instance in self.inventory(identity)['instances']:
-            if instance['name'] == name and instance['state'] == 'running':
+        wanted = (identity.get('components') or {}).get(name, identity['deployment_id'])
+        for instance in self._instances(self._filters([wanted])):
+            if instance['state'] == 'running':
                 return public_ipv4(instance['public_ip'])
-        raise LiveError('No running AWS instance named ' + name)
+        raise LiveError('No running AWS instance for ' + name)
 
-    def inbound_rules(self, sg_name):
+    def inbound_rules(self, deployment_id):
         rules = []
-        for group in self.ec2.describe_security_groups(
-                Filters=[{'Name': 'group-name', 'Values': [sg_name]}])['SecurityGroups']:
+        for group in self.ec2.describe_security_groups(Filters=self._filters([deployment_id]))['SecurityGroups']:
             for permission in group['IpPermissions']:
+                port = str(permission.get('FromPort'))
                 for cidr in permission.get('IpRanges', []):
-                    rules.append((permission.get('IpProtocol'), permission.get('FromPort'),
-                                  permission.get('ToPort'), cidr['CidrIp']))
-        return sorted(rules, key=str)
+                    rules.append((permission['IpProtocol'], port,
+                                  '*' if cidr['CidrIp'] == '0.0.0.0/0' else cidr['CidrIp']))
+                for _prefix in permission.get('PrefixListIds', []):
+                    rules.append((permission['IpProtocol'], port, 'cloudfront'))
+        return sorted(rules)
 
 
 class LinodeCloud:
     provider = 'linode'
+    TAG = 'c2itall-deployment-'
 
     def __init__(self, token):
         self.token = token
@@ -171,30 +174,51 @@ class LinodeCloud:
                 return
             page += 1
 
+    @staticmethod
+    def _ids(identity):
+        return list((identity.get('components') or {}).values()) or [identity['deployment_id']]
+
+    def _owner(self, item):
+        for tag in item.get('tags') or []:
+            if tag.startswith(self.TAG):
+                return tag[len(self.TAG):]
+        return ''
+
     def inventory(self, identity):
-        deployment_id = identity['deployment_id']
-        instances = []
-        for item in self._pages('/linode/instances'):
-            if deployment_id in (item.get('tags') or []) or item.get('label') in identity['names']:
-                instances.append({'id': item['id'], 'name': item['label'], 'state': item['status'],
-                                  'public_ip': (item.get('ipv4') or [''])[0],
-                                  'instance_type': item.get('type'), 'image_id': item.get('image'),
-                                  'region': item.get('region')})
-        keys = [item['label'] for item in self._pages('/profile/sshkeys')
-                if item.get('label') in identity['key_names']]
+        ids = set(self._ids(identity))
+        instances = [{'id': item['id'], 'name': self._owner(item), 'state': item['status'],
+                      'public_ip': (item.get('ipv4') or [''])[0], 'instance_type': item.get('type'),
+                      'image_id': item.get('image'), 'region': item.get('region')}
+                     for item in self._pages('/linode/instances') if self._owner(item) in ids]
+        firewalls = [{'id': item['id'], 'name': self._owner(item)}
+                     for item in self._pages('/networking/firewalls') if self._owner(item) in ids]
         return {'instances': sorted(instances, key=lambda item: item['id']),
-                'key_pairs': sorted(keys)}
+                'firewalls': sorted(firewalls, key=lambda item: item['id'])}
 
     def totals(self):
         return {'region': self.region,
                 'instances': sum(1 for _ in self._pages('/linode/instances')),
-                'key_pairs': sum(1 for _ in self._pages('/profile/sshkeys'))}
+                'firewalls': sum(1 for _ in self._pages('/networking/firewalls'))}
 
     def address(self, identity, name):
-        for instance in self.inventory(identity)['instances']:
-            if instance['name'] == name and instance['state'] == 'running':
+        wanted = (identity.get('components') or {}).get(name, identity['deployment_id'])
+        for instance in self.inventory({'deployment_id': wanted})['instances']:
+            if instance['state'] == 'running':
                 return public_ipv4(instance['public_ip'])
-        raise LiveError('No running Linode named ' + name)
+        raise LiveError('No running Linode for ' + name)
+
+    def inbound_rules(self, deployment_id):
+        rules = []
+        for firewall in self._pages('/networking/firewalls'):
+            if self._owner(firewall) != deployment_id:
+                continue
+            for rule in firewall.get('rules', {}).get('inbound', []):
+                if rule.get('action') != 'ACCEPT':
+                    continue
+                for cidr in rule.get('addresses', {}).get('ipv4', []):
+                    rules.append((rule['protocol'].lower(), str(rule['ports']),
+                                  '*' if cidr == '0.0.0.0/0' else cidr))
+        return sorted(rules)
 
 
 class AzureCloud:
@@ -266,21 +290,14 @@ def _account_inputs(provider):
             'azure_vm_size': AZURE_SIZE, 'azure_os_disk_gb': 32,
             'provider_manages_ssh_key': True,
         }
-    values = load_vars_file(provider)
     if provider == 'aws':
         return {
-            'aws_access_key': os.environ['AWS_ACCESS_KEY_ID'],
-            'aws_secret_key': os.environ['AWS_SECRET_ACCESS_KEY'],
-            'aws_regions': [REGIONS['aws']], 'aws_region': REGIONS['aws'],
-            'ami_map': values.get('ami_map', {}),
-            'aws_instance_type': values.get('aws_instance_type', 't3.micro'),
-            'aws_volume_size': values.get('aws_volume_size', 20),
+            'aws_region': REGIONS['aws'], 'aws_regions': [REGIONS['aws']],
+            'aws_instance_type': 't3.medium', 'provider_manages_ssh_key': True,
         }
     return {
-        'linode_token': os.environ['LINODE_TOKEN'],
-        'linode_regions': [REGIONS['linode']], 'linode_region': REGIONS['linode'],
-        'linode_instance_type': values.get('linode_instance_type', 'g6-nanode-1'),
-        'linode_image': values.get('linode_image', 'linode/debian12'),
+        'linode_region': REGIONS['linode'], 'linode_regions': [REGIONS['linode']],
+        'linode_instance_type': 'g6-standard-2', 'provider_manages_ssh_key': True,
     }
 
 
