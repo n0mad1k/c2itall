@@ -337,7 +337,7 @@ class FrontedRedirector(Redirector):
         url = 'https://' + config['edge_hostname'] + '/'
         deadline = time.monotonic() + 900
         while True:
-            status = context.run(base + [url], check=False)
+            status = context.runner.run(base + [url], check=False)
             if status == '200':
                 break
             require(time.monotonic() < deadline, 'Edge endpoint never served the origin page: ' + status)
