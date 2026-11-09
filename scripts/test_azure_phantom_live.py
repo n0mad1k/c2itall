@@ -3,6 +3,7 @@
 
 import argparse
 import contextlib
+import hashlib
 import importlib.util
 import json
 import os
@@ -14,6 +15,7 @@ import sys
 import time
 from unittest import mock
 import uuid
+import zipfile
 
 from deploy_azure_smoke import (IMAGE, LOCATION, SIZE, SUBSCRIPTION, Runner,
                                 SmokeError, nonnegative_count, public_ipv4,
@@ -23,7 +25,7 @@ from deploy_azure_smoke import (IMAGE, LOCATION, SIZE, SUBSCRIPTION, Runner,
 ROOT = Path(__file__).resolve().parents[1]
 PHANTOM_ROOT = ROOT / "ghost_protocol" / "phantom"
 STATE_DIR = ROOT / "deployments" / "azure"
-SERVICES = ("vpn", "matrix", "dns", "cloud", "vault", "media", "email",
+SERVICES = ("vpn", "matrix", "tak", "dns", "cloud", "vault", "media", "email",
             "all_in_one")
 
 
@@ -36,11 +38,21 @@ def require(condition, message):
         raise LiveTestError(message)
 
 
+def sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def verify_committed_source(runner):
     parent_paths = (
         "README.md", "providers/Azure/templates/infrastructure.json.j2",
         "modules/chat-server/deploy_chat.py",
         "modules/chat-server/chat_addons.yml",
+        "modules/chat-server/tak_server.yml",
+        "modules/chat-server/templates",
         "scripts/test_azure_phantom_live.py", "tests/test_azure_provider.py",
         "utils/vm_workloads.py", "utils/azure_cloud.py", "modules/phantom/workload.py", "utils/azure_utils.py",
         "utils/provider_registry.py",
@@ -114,6 +126,13 @@ def expected_allow_rules(config):
                  ("tcp", "443", "*"), ("tcp", "8448", "*")}
         if config.get("provider_workload") == "chat":
             rules.add(("udp", "41641", "*"))
+        return rules
+    if service == "tak":
+        rules = {("tcp", "22", operator), ("tcp", "8089", "*"),
+                 ("tcp", "8443", "*"), ("tcp", "8446", "*"),
+                 ("udp", "41641", "*")}
+        if config.get("tak_federation"):
+            rules.add(("tcp", "8444", "*"))
         return rules
     if service == "email":
         return {("tcp", "22", operator), ("tcp", "80", "*"),
@@ -423,11 +442,64 @@ def verify_email(runner, config):
             "ssh_password_authentication": False}
 
 
+def verify_tak(runner, config):
+    admin = config["tak_admin_name"]
+    command = (
+        "set -eu; "
+        "test \"$(systemctl is-active takserver)\" = active; "
+        "test \"$(systemctl is-enabled takserver)\" = enabled; "
+        "test \"$(systemctl is-active tailscaled)\" = active; "
+        "test \"$(systemctl is-enabled tailscaled)\" = enabled; "
+        "test \"$(dpkg-query -W -f='${Version}' takserver)\" = 5.7-RELEASE14; "
+        "sudo -n test -s /opt/tak/CoreConfig.xml; "
+        "test \"$(sudo -n stat -c %a /opt/tak/CoreConfig.xml)\" = 600; "
+        "sudo -n test -s /opt/tak/certs/files/" + admin + ".p12; "
+        "for port in 8089 8443 8446; do ss -ltn | grep -q \":${port} \"; done; "
+        "sudo -n sh -c '. /opt/tak/certs/cert-metadata.sh; "
+        "curl --fail --silent --show-error --insecure --cert-type P12 "
+        "--cert \"/opt/tak/certs/files/" + admin + ".p12:${PASS}\" "
+        "https://127.0.0.1:8443/Marti/api/version'; "
+        "sudo -n /usr/sbin/sshd -T | grep -q '^passwordauthentication no$'"
+    )
+    version = run_ssh(runner, config, command, timeout=180)
+    require(version.strip(), "TAK administration API returned no version data")
+    tcp_probe = (
+        "import socket,sys;"
+        "host=sys.argv[1];"
+        "ports=(8089,8443,8446);"
+        "\nfor port in ports:\n"
+        " s=socket.create_connection((host,port),10); s.close()\n"
+    )
+    runner.run([sys.executable, "-c", tcp_probe, config["target_host"]], timeout=45)
+    artifact_dir = Path(config["tak_artifact_dir"])
+    expected = {
+        f"tak-connection-{config['deployment_id']}.zip",
+        f"tak-admin-{config['deployment_id']}.p12",
+        f"tak-ca-{config['deployment_id']}.pem",
+    }
+    require({path.name for path in artifact_dir.iterdir()} == expected,
+            "TAK fetched artifact set is incomplete or unexpected")
+    require(all((path.stat().st_mode & 0o777) == 0o600
+                for path in artifact_dir.iterdir()),
+            "TAK fetched artifacts are not owner-only")
+    connection = artifact_dir / f"tak-connection-{config['deployment_id']}.zip"
+    with zipfile.ZipFile(connection) as archive:
+        require({"MANIFEST/manifest.xml", "config.pref", "client.p12", "caCert.p12"}
+                <= set(archive.namelist()),
+                "TAK connection package is missing required entries")
+    return {"takserver_active": True, "takserver_enabled": True,
+            "tailscaled_active": True, "public_tls_ports": [8089, 8443, 8446],
+            "admin_api": True, "connection_package": True,
+            "artifacts_owner_only": True, "ssh_password_authentication": False}
+
+
 def verify_service(runner, config):
     if config["server_type"] == "vpn":
         return verify_wireguard(runner, config)
     if config["server_type"] == "matrix":
         return verify_matrix(runner, config)
+    if config["server_type"] == "tak":
+        return verify_tak(runner, config)
     if config["server_type"] == "dns":
         return verify_dns(runner, config)
     if config["server_type"] == "cloud":
@@ -451,7 +523,8 @@ def verify_service_log_redaction(phantom, deployment_id, config):
     forbidden = ["PrivateKey =", "PresharedKey ="]
     for key in ("matrix_admin_password", "matrix_signing_key",
                 "matrix_form_secret", "matrix_macaroon_secret",
-                "tailscale_auth_key", "vault_admin_token"):
+                "tailscale_auth_key", "vault_admin_token",
+                "tak_cert_password", "tak_ca_password"):
         if config.get(key):
             forbidden.append(str(config[key]))
     require(not any(value in content for value in forbidden),
@@ -476,6 +549,17 @@ def service_config(service):
             "matrix_form_secret": secrets.token_hex(32),
             "matrix_macaroon_secret": secrets.token_hex(32),
             "tailscale_auth_key": "", "enable_bot_support": True,
+        }
+    if service == "tak":
+        chat = load_chat_module()
+        return {
+            "provider_workload": "chat", "tak_deb_path": str(chat.TAK_DEFAULT_DEB),
+            "tak_admin_name": "admin", "tak_client_name": "operator",
+            "tak_ca_name": "c2itall-live", "tak_cert_password": secrets.token_urlsafe(24),
+            "tak_ca_password": secrets.token_urlsafe(24), "tak_cert_state": "Virginia",
+            "tak_cert_city": "EastUS", "tak_cert_organization": "c2itall",
+            "tak_cert_unit": "Chat", "tak_federation": False,
+            "tailscale_auth_key": "", "enable_bot_support": False,
         }
     if service == "dns":
         return {
@@ -529,12 +613,12 @@ def load_chat_module():
 
 
 def deploy_service(service, phantom, config):
-    if service == "matrix":
+    if service in ("matrix", "tak"):
         return load_chat_module().deploy_chat(config)
     return phantom.deploy(service, config)
 
 
-def clean_phantom_files(phantom, deployment_id):
+def clean_phantom_files(phantom, deployment_id, config=None):
     work = phantom.WORK_DIR / deployment_id
     if work.exists():
         shutil.rmtree(work)
@@ -549,6 +633,10 @@ def clean_phantom_files(phantom, deployment_id):
                  phantom._ssh_known_hosts_path(deployment_id)):
         with contextlib.suppress(FileNotFoundError):
             path.unlink()
+    if config and config.get("tak_artifact_dir"):
+        artifact_dir = Path(config["tak_artifact_dir"])
+        if artifact_dir.exists():
+            shutil.rmtree(artifact_dir)
 
 
 def activate(service="vpn", operator_ip=None):
@@ -566,6 +654,13 @@ def activate(service="vpn", operator_ip=None):
         "operator_ip": "", "server_type": service, "ssh_after_deploy": False,
     }
     config.update(service_config(service))
+    if service == "tak":
+        package = Path(config["tak_deb_path"])
+        require(package.is_file(), f"Pinned TAK package is missing: {package}")
+        config["tak_deb_sha256"] = sha256(package)
+        config["tak_ca_name"] = f"c2itall-{deployment_id}"
+        config["tak_artifact_dir"] = str(
+            ROOT / "deployments" / "chat" / deployment_id)
     phantom = None
     live_passed = cleanup_passed = False
     failure = None
@@ -641,7 +736,10 @@ def activate(service="vpn", operator_ip=None):
             require(not key.exists() and not Path(str(key) + ".pub").exists(),
                     "Generated Azure SSH key remains")
             if phantom is not None:
-                clean_phantom_files(phantom, deployment_id)
+                clean_phantom_files(phantom, deployment_id, config)
+            if config.get("tak_artifact_dir"):
+                require(not Path(config["tak_artifact_dir"]).exists(),
+                        "Fetched TAK artifacts remain after cleanup")
             runner.record("final-cleanup.json", {
                 "resource_group_absent": True, "active_state_absent": True,
                 "generated_key_absent": True, "inventory": final_inventory,

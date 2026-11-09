@@ -2069,7 +2069,7 @@ class RoutingAndTemplateTests(AzureFixture):
         with mock.patch.object(sys, 'path', [str(ROOT / 'scripts'), *sys.path]):
             module_spec.loader.exec_module(module)
         expected = {
-            'vpn', 'matrix', 'dns', 'cloud', 'vault', 'media', 'email',
+            'vpn', 'matrix', 'tak', 'dns', 'cloud', 'vault', 'media', 'email',
             'all_in_one'}
         self.assertEqual(set(module.SERVICES), expected)
         for service in sorted(expected):
