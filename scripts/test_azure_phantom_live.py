@@ -866,8 +866,6 @@ def activate(service="vpn", operator_ip=None):
             if rotation_context.get("replacement"):
                 candidate = rotation_context["replacement"]
                 cleanup_configs[candidate["deployment_id"]] = candidate
-            require(phantom is not None or not cleanup_configs,
-                    "Phantom could not be loaded for cleanup")
             cleaned_groups = []
             for candidate in reversed(list(cleanup_configs.values())):
                 candidate_id = candidate["deployment_id"]
@@ -877,6 +875,8 @@ def activate(service="vpn", operator_ip=None):
                 group_exists = runner.az(
                     "group", "exists", "--name", candidate_group)
                 if active_state.exists() or group_exists is not False:
+                    require(phantom is not None,
+                            "Phantom could not be loaded for cleanup")
                     candidate["azure_cleanup_deadline"] = runner.deadline
                     require(phantom.teardown_instance(candidate),
                             f"Phantom teardown failed for {candidate_id}")
@@ -885,11 +885,12 @@ def activate(service="vpn", operator_ip=None):
                         f"Phantom resource group remains: {candidate_group}")
                 require(not active_state.exists(),
                         f"Active Azure recovery state remains: {candidate_id}")
-                clean_phantom_files(phantom, candidate_id, candidate)
-                candidate_key = phantom._ssh_key_path(candidate_id)
-                require(not candidate_key.exists()
-                        and not Path(str(candidate_key) + ".pub").exists(),
-                        f"Generated Azure SSH key remains: {candidate_id}")
+                if phantom is not None:
+                    clean_phantom_files(phantom, candidate_id, candidate)
+                    candidate_key = phantom._ssh_key_path(candidate_id)
+                    require(not candidate_key.exists()
+                            and not Path(str(candidate_key) + ".pub").exists(),
+                            f"Generated Azure SSH key remains: {candidate_id}")
                 cleaned_groups.append(candidate_group)
             if rotation_state_path:
                 Path(rotation_state_path).unlink(missing_ok=True)
