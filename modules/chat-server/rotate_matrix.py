@@ -222,16 +222,31 @@ def _matrix_admin_request(config, method, path, payload, token):
     known_hosts_value = config.get("ssh_known_hosts_path")
     known_hosts = (Path(known_hosts_value) if known_hosts_value else
                    _phantom()._ssh_known_hosts_path(config["deployment_id"]))
-    if (not key.is_file() or key.is_symlink() or not known_hosts.is_file()
-            or known_hosts.is_symlink()):
-        raise RotationError("Secure SSH material is unavailable for Matrix admin API")
-    command = [
+    if not key.is_file() or key.is_symlink():
+        raise RotationError("Secure SSH key is unavailable for Matrix admin API")
+    if (known_hosts.is_symlink() or not known_hosts.parent.is_dir()
+            or (known_hosts.exists() and not known_hosts.is_file())):
+        raise RotationError("Secure SSH trust path is unavailable for Matrix admin API")
+    ssh = [
         "ssh", "-F", "/dev/null", "-o", "BatchMode=yes",
         "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=10",
-        "-o", "StrictHostKeyChecking=yes",
         "-o", "GlobalKnownHostsFile=/dev/null",
         "-o", f"UserKnownHostsFile={known_hosts}", "-i", str(key),
         "--", f"{config.get('ssh_user', 'root')}@{config['target_host']}",
+    ]
+    if not known_hosts.is_file() or known_hosts.stat().st_size == 0:
+        enrollment = [
+            *ssh[:-2], "-o", "StrictHostKeyChecking=accept-new", *ssh[-2:], "true"]
+        try:
+            result = subprocess.run(
+                enrollment, text=True, capture_output=True, timeout=30, check=False)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise RotationError("Matrix SSH host-key enrollment failed") from error
+        if (result.returncode or not known_hosts.is_file()
+                or known_hosts.is_symlink()):
+            raise RotationError("Matrix SSH host-key enrollment failed")
+    command = [
+        *ssh[:-2], "-o", "StrictHostKeyChecking=yes", *ssh[-2:],
         "python3 -c " + shlex.quote(_REMOTE_ADMIN_REQUEST),
     ]
     request = json.dumps({

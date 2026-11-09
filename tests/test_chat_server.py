@@ -281,6 +281,32 @@ class MatrixRotationTests(unittest.TestCase):
                 config, "legacy-access", 2, 3700)
         self.assertEqual(token, "legacy-token")
 
+    def test_registration_token_enrolls_missing_deployment_host_key(self):
+        key = self.base / "key"
+        known_hosts = self.base / "known-hosts"
+        key.write_text("private key")
+        config = dict(
+            self.active, ssh_private_key_path=str(key),
+            ssh_known_hosts_path=str(known_hosts), ssh_user="azureuser")
+        response = {"status": 200, "body": json.dumps({"token": "join-token"})}
+
+        def run(command, **kwargs):
+            if command[-1] == "true":
+                known_hosts.write_text("enrolled host key")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            return mock.Mock(
+                returncode=0, stdout=json.dumps(response), stderr="")
+
+        with mock.patch.object(self.rotation.subprocess, "run", side_effect=run) as call:
+            token = self.rotation._create_registration_token(
+                config, "admin-access", 3, 3700)
+        self.assertEqual(token, "join-token")
+        self.assertEqual(call.call_count, 2)
+        self.assertIn("StrictHostKeyChecking=accept-new", call.call_args_list[0].args[0])
+        self.assertIn("StrictHostKeyChecking=yes", call.call_args_list[1].args[0])
+        self.assertNotIn(
+            "admin-access", " ".join(call.call_args_list[1].args[0]))
+
     def test_failed_replacement_is_removed_and_active_server_is_kept(self):
         self.write_state(self.state())
         retired = []
