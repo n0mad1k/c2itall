@@ -99,12 +99,14 @@
   retries: 3
   delay: 10
 
-- name: Install base packages with progress feedback
-  ansible.builtin.apt:
-    name: "{{ item }}"
-    state: present
-    update_cache: yes
-  loop:
+- name: Select required packages for the attack-box image
+  ansible.builtin.set_fact:
+    attack_box_required_packages: >-
+      {{ attack_box_common_packages +
+         (attack_box_kali_only_packages
+          if ansible_facts['distribution'] == 'Kali' else []) }}
+  vars:
+    attack_box_common_packages:
     - curl
     - wget
     - git
@@ -122,15 +124,11 @@
     - john
     - hydra
     - aircrack-ng
-    - recon-ng
-    - exploitdb
     - gobuster
     - dirb
     - nikto
     - whatweb
     - wapiti
-    - uniscan
-    - theharvester
     - dnsenum
     - dnsmap
     - dnsutils
@@ -141,14 +139,12 @@
     - ncat
     - nmap
     - masscan
-    - unicornscan
     - hping3
     - tcpdump
     - tshark
     - dsniff
     - arp-scan
     - nbtscan
-    - enum4linux
     - smbclient
     - nfs-common
     - rpcbind
@@ -157,7 +153,6 @@
     - onesixtyone
     - ldap-utils
     - sslscan
-    - sslyze
     - testssl.sh
     - openssl
     - ike-scan
@@ -171,7 +166,6 @@
     - stegosuite
     - hexedit
     - ghex
-    - radare2
     - gdb
     - valgrind
     - ltrace
@@ -215,10 +209,6 @@
     - libpcre3-dev
     - libgtk2.0-dev
     - libgtk-3-dev
-  register: apt_install_result
-  retries: 2
-  delay: 5
-  vars:
     attack_box_kali_only_packages:
       - recon-ng
       - exploitdb
@@ -228,7 +218,14 @@
       - enum4linux
       - sslyze
       - radare2
-  when: ansible_facts['distribution'] == 'Kali' or item not in attack_box_kali_only_packages
+
+- name: Install base packages in one transaction
+  ansible.builtin.apt:
+    name: "{{ attack_box_required_packages }}"
+    state: present
+  register: apt_install_result
+  retries: 2
+  delay: 5
 
 - name: Check availability of optional attack-box packages
   ansible.builtin.command:
@@ -252,9 +249,9 @@
 
 - name: Show package installation progress
   debug:
-    msg: "Package {{ item.item }} installation: {{ 'SUCCESS' if item.changed else 'ALREADY INSTALLED' }}"
-  loop: "{{ apt_install_result.results }}"
-  when: apt_install_result.results is defined
+    msg: >-
+      Required package transaction for {{ attack_box_required_packages | length }}
+      packages: {{ 'CHANGED' if apt_install_result.changed else 'ALREADY PRESENT' }}
 
 - name: Check if pipx is available
   ansible.builtin.command: pipx --version
