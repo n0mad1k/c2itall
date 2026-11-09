@@ -2137,6 +2137,12 @@ class RoutingAndTemplateTests(AzureFixture):
             self.assertEqual(probe[0], sys.executable)
             compile(probe[2], '<live-probe>', 'exec')
 
+    def test_mailinabox_installer_has_a_cloud_safe_bounded_timeout(self):
+        configure = (ROOT / 'ghost_protocol/phantom/playbooks/email/tasks/configure.yml')
+        text = configure.read_text()
+        self.assertIn('Run Mail-in-a-Box installer (non-interactive)', text)
+        self.assertIn('timeout: 3600', text)
+
     def test_azure_inbound_rules_reject_unsafe_or_ambiguous_values(self):
         invalid = (
             'not-a-list',
