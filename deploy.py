@@ -431,8 +431,9 @@ def validate_configurations():
                 print(f"{COLORS['RED']}✗{COLORS['RESET']} Missing: {vars_file}")
             continue
         if not os.path.isfile(vars_file):
-            print(f'{label} uses interactive configuration; no saved vars.yaml found. '
-                  f'See providers/{spec.directory}/vars.example.yaml for required inputs.')
+            example = os.path.join(root, 'providers', spec.directory, 'vars.example.yaml')
+            hint = f' See {example} for the inputs.' if os.path.isfile(example) else ''
+            print(f'{label} uses interactive configuration; no saved vars.yaml found.{hint}')
             continue
         try:
             with open(vars_file) as stream:

@@ -1,8 +1,7 @@
 """WEBRUNNER node profile: scan nodes any VM provider can supply.
 
-The composite playbook provisions the transition providers' nodes inline.
-Driver-backed providers provision nodes through the recoverable single-VM
-lifecycle before that playbook runs; the nodes join it as pre-provisioned
+Every provider provisions its nodes through the recoverable single-VM
+lifecycle before the scan playbook runs; the nodes join it as pre-provisioned
 hosts and are removed once it returns. Every node keeps its own durable state.
 """
 

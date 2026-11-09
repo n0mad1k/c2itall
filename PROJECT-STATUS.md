@@ -1,7 +1,7 @@
 # C2ingRed Project Management
 
 ## Project Overview
-**c2itall** - Automated red team infrastructure deployment system supporting Azure (native driver), AWS, Linode and FlokiNET (transition plays) with Havoc C2, redirectors, email infrastructure, payload hosting, WEBRUNNER recon nodes, Phantom privacy services and advanced OPSEC features. Architecture: `docs/ARCHITECTURE.md`. Adding providers, workloads or variants: `docs/EXTENDING.md`.
+**c2itall** - Automated red team infrastructure deployment system supporting Azure, AWS, Linode and FlokiNET through one cloud driver each, with Havoc C2, redirectors, email infrastructure, payload hosting, WEBRUNNER recon nodes, Phantom privacy services and advanced OPSEC features. Architecture: `docs/ARCHITECTURE.md`. Adding providers, workloads or variants: `docs/EXTENDING.md`.
 
 ---
 
@@ -25,7 +25,7 @@
 
 ### 📍 Where I Left Off
 - Working on: the modular provider/workload refactor landed (profiles in `modules/<module>/workload.py`, `CloudDriver` contract, generic adapters, Azure as one driver). Unit suite green (170 tests). Every Azure route passed the live harness on 2026-11-08 at commit 64ffb2e: redirector, attack box, payload server, C2, phishing, WEBRUNNER, Phantom. Evidence under `logs/azure-*-live/`.
-- Next Priority: push `public`; live re-run of the AWS and Linode transition routes only if their plays change.
+- Next Priority: push `public`; the AWS and Linode drivers are being validated live workload by workload (evidence under `logs/<provider>-<workload>-live/`).
 - Blockers: none
 
 ---

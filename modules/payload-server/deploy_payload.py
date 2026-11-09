@@ -253,7 +253,7 @@ def execute_payload_deployment(config):
     
     # Execute the actual deployment
     from utils.deployment_engine import dispatch_workload
-    success = dispatch_workload(config, execute_ansible_deployment)
+    success = dispatch_workload(config)
     
     if success:
         print(f"\n{COLORS['GREEN']}Payload server infrastructure deployed successfully!{COLORS['RESET']}")
@@ -265,37 +265,6 @@ def execute_payload_deployment(config):
         print(f"\n{COLORS['RED']}Payload server infrastructure deployment failed.{COLORS['RESET']}")
     
     wait_for_input()
-
-def execute_ansible_deployment(config):
-    """Execute the Ansible deployment based on configuration"""
-    deployment_type = config.get('deployment_type')
-    provider = config.get('provider')
-    
-    print(f"\n{COLORS['BLUE']}Executing {deployment_type} deployment on {provider}...{COLORS['RESET']}")
-    
-    # Every payload deployment type provisions the same hosting server.
-    from utils.common import PROVIDER_DIRS
-    playbook_path = os.path.join(
-        os.path.dirname(__file__), '..', '..', 'providers',
-        PROVIDER_DIRS.get(provider, ''), 'payload_server.yml')
-
-    if not os.path.exists(playbook_path):
-        print(f"{COLORS['RED']}Playbook not found: {playbook_path}{COLORS['RESET']}")
-        return False
-
-    from utils.deployment_engine import execute_playbook, set_provider_environment
-    set_provider_environment(config)
-    success = execute_playbook(playbook_path, config)
-    if success:
-        return True
-    from utils.cleanup_engine import execute_teardown
-    if not execute_teardown(config):
-        from utils.deployment_engine import save_deployment_info
-        save_deployment_info(config)
-        print(
-            f"{COLORS['RED']}Payload deployment cleanup was not verified; "
-            f"retain recovery data.{COLORS['RESET']}")
-    return False
 
 if __name__ == "__main__":
     payload_menu()

@@ -115,7 +115,12 @@ class FakeEc2:
         del self.gateways[InternetGatewayId]
 
     # Subnet and routes
-    def create_subnet(self, VpcId, CidrBlock, TagSpecifications):
+    def describe_instance_type_offerings(self, LocationType, Filters):
+        self.calls.append(('describe_instance_type_offerings', Filters[0]['Values'][0]))
+        return {'InstanceTypeOfferings': [{'Location': 'us-east-1e'}, {'Location': 'us-east-1a'}]}
+
+    def create_subnet(self, VpcId, CidrBlock, AvailabilityZone, TagSpecifications):
+        self.calls.append(('create_subnet', AvailabilityZone))
         subnet = {'SubnetId': self._id('subnet'), 'VpcId': VpcId, 'CidrBlock': CidrBlock,
                   'Tags': self._tags(TagSpecifications, 'subnet')}
         self.subnets[subnet['SubnetId']] = subnet

@@ -442,9 +442,8 @@ def execute_phishing_deployment(config):
     # Mark this as a phishing deployment for the deployment engine
     config['phishing_deployment'] = True
     
-    # Execute the actual deployment using component-based approach
     from utils.deployment_engine import dispatch_workload
-    success = dispatch_workload(config, execute_component_deployment)
+    success = dispatch_workload(config)
     
     if success:
         print(f"\n{COLORS['GREEN']}✅ Phishing infrastructure deployed successfully!{COLORS['RESET']}")
@@ -459,87 +458,6 @@ def execute_phishing_deployment(config):
         print(f"\n{COLORS['RED']}❌ Phishing infrastructure deployment failed.{COLORS['RESET']}")
     
     wait_for_input()
-
-def execute_component_deployment(config):
-    """Execute component-based phishing deployment"""
-    from utils.cleanup_engine import execute_teardown
-    from utils.deployment_engine import execute_playbook, set_provider_environment
-    
-    print(f"\n{COLORS['BLUE']}Executing phishing deployment: {config['deployment_type']}{COLORS['RESET']}")
-    
-    # Provider directory mapping
-    provider_dirs = {
-        "aws": "AWS",
-        "linode": "Linode", 
-        "flokinet": "FlokiNET"
-    }
-    provider_dir = provider_dirs.get(config.get('provider'))
-    if provider_dir is None:
-        print(f"{COLORS['RED']}Provider has no legacy phishing executor{COLORS['RESET']}")
-        return False
-    
-    # Component playbook mapping (dict insertion order = execution order).
-    # redirector and mta must deploy first: webserver needs the redirector IP,
-    # and gophish needs the redirector + MTA IPs from infrastructure_state.
-    component_playbooks = {
-        'deploy_mta_front': os.path.join(os.path.dirname(__file__), '..', '..', 'providers', provider_dir, 'mta.yml'),
-        'deploy_phishing_redirector': os.path.join(os.path.dirname(__file__), '..', '..', 'providers', provider_dir, 'redirector.yml'),
-        'deploy_phishing_webserver': os.path.join(os.path.dirname(__file__), '..', '..', 'providers', provider_dir, 'webserver.yml'),
-        'deploy_gophish': os.path.join(os.path.dirname(__file__), '..', '..', 'providers', provider_dir, 'gophish.yml'),
-    }
-
-    deployment_attempted = False
-
-    def cleanup_partial_deployment():
-        if not deployment_attempted:
-            return
-        print(f"{COLORS['YELLOW']}Cleaning up partial phishing deployment...{COLORS['RESET']}")
-        if not execute_teardown(config):
-            from utils.deployment_engine import save_deployment_info
-            save_deployment_info(config)
-            print(f"{COLORS['RED']}Partial deployment cleanup was not verified; retain recovery data.{COLORS['RESET']}")
-
-    try:
-        set_provider_environment(config)
-        # Deploy each enabled component
-        for component, playbook_path in component_playbooks.items():
-            if config.get(component, False):
-                print(f"\n{COLORS['YELLOW']}Deploying {component.replace('deploy_', '')}...{COLORS['RESET']}")
-
-                # Check if playbook exists
-                if not os.path.exists(playbook_path):
-                    print(f"{COLORS['RED']}Error: Playbook not found: {playbook_path}{COLORS['RESET']}")
-                    cleanup_partial_deployment()
-                    return False
-
-                print(f"{COLORS['GRAY']}Running: ansible-playbook {os.path.basename(playbook_path)}{COLORS['RESET']}")
-                deployment_attempted = True
-                if execute_playbook(playbook_path, config):
-                    print(f"{COLORS['GREEN']}✅ {component.replace('deploy_', '')} deployed successfully{COLORS['RESET']}")
-                else:
-                    print(f"{COLORS['RED']}❌ {component.replace('deploy_', '')} deployment failed{COLORS['RESET']}")
-                    cleanup_partial_deployment()
-                    return False
-        
-        # Deploy the orchestration playbook to save state
-        print(f"\n{COLORS['YELLOW']}Saving deployment state...{COLORS['RESET']}")
-        orchestration_playbook = os.path.join(os.path.dirname(__file__), 'deploy_phishing_infrastructure.yml')
-        if not os.path.exists(orchestration_playbook):
-            print(f"{COLORS['RED']}Error: Playbook not found: {orchestration_playbook}{COLORS['RESET']}")
-            cleanup_partial_deployment()
-            return False
-        if execute_playbook(orchestration_playbook, config):
-            print(f"{COLORS['GREEN']}✅ Deployment state saved{COLORS['RESET']}")
-            return True
-        else:
-            print(f"{COLORS['RED']}❌ Failed to save deployment state{COLORS['RESET']}")
-            cleanup_partial_deployment()
-            return False
-            
-    except Exception as e:
-        print(f"{COLORS['RED']}Deployment error: {str(e)}{COLORS['RESET']}")
-        cleanup_partial_deployment()
-        return False
 
 if __name__ == "__main__":
     phishing_menu()

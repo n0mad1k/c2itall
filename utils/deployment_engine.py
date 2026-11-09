@@ -32,15 +32,15 @@ def _is_legacy_bridge(adapter):
     return callable(getattr(type(adapter), 'deploy_with_legacy', None))
 
 
-def dispatch_workload(config, legacy_deploy):
-    """Prefer a registered workload handler and otherwise call legacy code once."""
+def dispatch_workload(config, legacy_deploy=None):
+    """Run the registered workload route; a legacy-routed provider gets its executor once."""
     provider = config.get('provider')
     adapter = workload_route(config)
     if adapter is not None:
         if _is_legacy_bridge(adapter):
             return adapter.deploy_with_legacy(config, legacy_deploy)
         return adapter.deploy(config)
-    if uses_legacy_routes(provider, requested_workload(config)):
+    if legacy_deploy and uses_legacy_routes(provider, requested_workload(config)):
         return legacy_deploy(config)
     logging.error('Provider has no route for this workload')
     return False

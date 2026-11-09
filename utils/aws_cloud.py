@@ -238,8 +238,14 @@ class AwsDriver(StatefulDriver):
             ec2.attach_internet_gateway(InternetGatewayId=resources['internet_gateway'], VpcId=vpc)
 
         if 'subnet' not in resources:
+            # Not every zone offers every instance type (us-east-1e has no t3); pick one that does.
+            zones = sorted(item['Location'] for item in ec2.describe_instance_type_offerings(
+                LocationType='availability-zone',
+                Filters=[{'Name': 'instance-type', 'Values': [state['aws_instance_type']]}])['InstanceTypeOfferings'])
+            if not zones:
+                raise RuntimeError(state['aws_instance_type'] + ' is not offered in ' + state['aws_region'])
             resources['subnet'] = ec2.create_subnet(
-                VpcId=vpc, CidrBlock='10.0.1.0/24',
+                VpcId=vpc, CidrBlock='10.0.1.0/24', AvailabilityZone=zones[0],
                 TagSpecifications=self._tag_specifications(state, 'subnet'))['Subnet']['SubnetId']
             self.save(state)
         ec2.modify_subnet_attribute(SubnetId=resources['subnet'], MapPublicIpOnLaunch={'Value': True})

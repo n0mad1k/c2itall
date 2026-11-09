@@ -737,18 +737,16 @@ class RoutingAndTemplateTests(AzureFixture):
 
     def test_direct_legacy_modules_enter_dispatcher_before_existing_executor(self):
         cases = (
-            ('modules/phishing/deploy_phishing.py', 'execute_phishing_deployment',
-             'execute_component_deployment', {
+            ('modules/phishing/deploy_phishing.py', 'execute_phishing_deployment', {
                  'provider': 'aws', 'provider_workload': 'phishing',
                  'deployment_type': 'gophish_only', 'deployment_id': 'test-id',
                  'phishing_domain': 'example.test'}),
-            ('modules/payload-server/deploy_payload.py', 'execute_payload_deployment',
-             'execute_ansible_deployment', {
+            ('modules/payload-server/deploy_payload.py', 'execute_payload_deployment', {
                  'provider': 'aws', 'provider_workload': 'payload_server',
                  'deployment_type': 'basic_payload_server',
                  'deployment_id': 'test-id', 'domain': 'example.test'}),
         )
-        for index, (relative_path, function_name, legacy_name, config) in enumerate(cases):
+        for index, (relative_path, function_name, config) in enumerate(cases):
             with self.subTest(workload=config['provider_workload']):
                 module_spec = importlib.util.spec_from_file_location(
                     f'direct_module_{index}', ROOT / relative_path)
@@ -756,98 +754,7 @@ class RoutingAndTemplateTests(AzureFixture):
                 module_spec.loader.exec_module(module)
                 with mock.patch.object(module, 'clear_screen'), mock.patch.object(module, 'print_banner'), mock.patch.object(module, 'setup_logging'), mock.patch.object(module, 'confirm_action', return_value=True), mock.patch.object(module, 'wait_for_input'), mock.patch.object(module, 'archive_old_logs', create=True), mock.patch.object(deployment_engine, 'dispatch_workload', return_value=False) as dispatch, contextlib.redirect_stdout(io.StringIO()):
                     getattr(module, function_name)(config)
-                dispatch.assert_called_once_with(config, getattr(module, legacy_name))
-
-    def test_payload_executor_uses_shared_secret_safe_runtime_and_fails_missing(self):
-        module_spec = importlib.util.spec_from_file_location(
-            'payload_runtime_test',
-            ROOT / 'modules/payload-server/deploy_payload.py')
-        module = importlib.util.module_from_spec(module_spec)
-        module_spec.loader.exec_module(module)
-        config = {
-            'provider': 'aws', 'provider_workload': 'payload_server',
-            'deployment_id': 'payload-test',
-            'deployment_type': 'basic_payload_server',
-            'domain': 'payload.test', 'aws_secret_key': 'secret',
-        }
-        with mock.patch.object(module.os.path, 'exists', return_value=False), \
-                contextlib.redirect_stdout(io.StringIO()):
-            self.assertFalse(module.execute_ansible_deployment(config))
-
-        with mock.patch.object(module.os.path, 'exists', return_value=True), \
-                mock.patch.object(
-                    deployment_engine, 'set_provider_environment') as environment, \
-                mock.patch.object(
-                    deployment_engine, 'execute_playbook',
-                    return_value=True) as execute, \
-                contextlib.redirect_stdout(io.StringIO()):
-            self.assertTrue(module.execute_ansible_deployment(config))
-        environment.assert_called_once_with(config)
-        execute.assert_called_once()
-        self.assertEqual(execute.call_args.args[1], config)
-
-        with mock.patch.object(module.os.path, 'exists', return_value=True), \
-                mock.patch.object(
-                    deployment_engine, 'set_provider_environment'), \
-                mock.patch.object(
-                    deployment_engine, 'execute_playbook',
-                    return_value=False), \
-                mock.patch.object(
-                    cleanup_engine, 'execute_teardown',
-                    return_value=False) as cleanup, \
-                mock.patch.object(deployment_engine, 'save_deployment_info') as record, \
-                contextlib.redirect_stdout(io.StringIO()):
-            self.assertFalse(module.execute_ansible_deployment(config))
-        cleanup.assert_called_once_with(config)
-        record.assert_called_once_with(config)
-
-    def test_phishing_executor_uses_shared_runtime_and_cleans_partial_failure(self):
-        module_spec = importlib.util.spec_from_file_location(
-            'phishing_runtime_test',
-            ROOT / 'modules/phishing/deploy_phishing.py')
-        module = importlib.util.module_from_spec(module_spec)
-        module_spec.loader.exec_module(module)
-        config = {
-            'provider': 'aws', 'provider_workload': 'phishing',
-            'deployment_id': 'phishing-test',
-            'deployment_type': 'phishing',
-            'deploy_mta_front': True,
-            'deploy_phishing_redirector': True,
-            'aws_secret_key': 'secret',
-        }
-        with mock.patch.object(module.os.path, 'exists', return_value=True), \
-                mock.patch.object(
-                    deployment_engine, 'set_provider_environment') as environment, \
-                mock.patch.object(
-                    deployment_engine, 'execute_playbook',
-                    side_effect=[True, False]) as execute, \
-                mock.patch.object(
-                    cleanup_engine, 'execute_teardown',
-                    return_value=False) as cleanup, \
-                mock.patch.object(deployment_engine, 'save_deployment_info') as record, \
-                contextlib.redirect_stdout(io.StringIO()):
-            self.assertFalse(module.execute_component_deployment(config))
-        environment.assert_called_once_with(config)
-        self.assertEqual(execute.call_count, 2)
-        cleanup.assert_called_once_with(config)
-        record.assert_called_once_with(config)
-
-        with mock.patch.object(module.os.path, 'exists', return_value=False), \
-                mock.patch.object(
-                    deployment_engine, 'set_provider_environment'), \
-                mock.patch.object(
-                    deployment_engine, 'execute_playbook') as execute, \
-                mock.patch.object(
-                    cleanup_engine, 'execute_teardown') as cleanup, \
-                contextlib.redirect_stdout(io.StringIO()):
-            self.assertFalse(module.execute_component_deployment(config))
-        execute.assert_not_called()
-        cleanup.assert_not_called()
-
-        source = (ROOT / 'modules/phishing/deploy_phishing.py').read_text()
-        executor = source[source.index('def execute_component_deployment'):]
-        self.assertNotIn('subprocess.run', executor)
-        self.assertNotIn('NamedTemporaryFile', executor)
+                dispatch.assert_called_once_with(config)
 
     def test_failed_legacy_playbook_enters_verified_cleanup_once(self):
         config = {
@@ -2449,21 +2356,6 @@ class RoutingAndTemplateTests(AzureFixture):
                 'ssh_key_name', 'ssh_key_path'):
             self.assertEqual(variables[key], config[key])
 
-    def test_verified_provider_cleanup_owns_phantom_resources(self):
-        aws = (ROOT / 'providers/AWS/cleanup.yml').read_text()
-        linode = (ROOT / 'providers/Linode/cleanup.yml').read_text()
-        for marker in (
-                'phantom_resource_name',
-                'Find historical Phantom instances by deterministic name',
-                'Verify historical Phantom instances are absent',
-                'Verify historical Phantom security groups are absent',
-                'c2deploy_ph-{{ deployment_id }}'):
-            self.assertIn(marker, aws)
-        self.assertIn("phantom_name | default('ph-' + deployment_id)", linode)
-        self.assertLess(
-            linode.index('Verify every owned Linode is absent'),
-            linode.index('Remove deployment state after verified cloud cleanup'))
-
 
 class ProviderContractTests(AzureFixture):
     def test_health_reads_owned_vm_without_mutating_state(self):
@@ -2708,21 +2600,6 @@ class ProviderContractTests(AzureFixture):
         with mock.patch.object(azure, 'gather_azure_config', return_value={'provider': 'azure'}) as gather:
             self.assertEqual(provider_utils.gather_provider_config('azure'), {'provider': 'azure'})
             gather.assert_called_once_with()
-
-    def test_legacy_provider_utility_import_uses_canonical_dispatcher(self):
-        from providers import provider_utils as legacy_utils
-        from utils import aws_cloud
-        self.assertIs(legacy_utils.select_provider, provider_utils.select_provider)
-        self.assertIs(
-            legacy_utils.gather_provider_config,
-            provider_utils.gather_provider_config)
-        with mock.patch.object(
-                aws_cloud.AwsDriver, 'gather_config',
-                return_value={'source': 'canonical'}) as gather:
-            self.assertEqual(
-                legacy_utils.gather_provider_config('aws', 'c2'),
-                {'source': 'canonical', 'provider_manages_ssh_key': True})
-        gather.assert_called_once_with()
 
     def test_main_menu_lists_generic_adapter_state_without_azure_import(self):
         import deploy

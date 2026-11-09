@@ -647,7 +647,7 @@ class Phishing:
 
     def deploy(self, config):
         module = load_module('modules/phishing/deploy_phishing.py')
-        return dispatch_workload(config, module.execute_component_deployment)
+        return dispatch_workload(config)
 
     def identity(self, config):
         deployment_id = config['deployment_id']
