@@ -475,6 +475,43 @@ def _wait_deployment(state, deadline, cancel=False):
         time.sleep(min(5, max(0, deadline - time.monotonic())))
 
 
+def _wait_for_ssh(state, deadline):
+    """Return only after the provisioned VM accepts the deployment key."""
+    outputs = state.get('outputs') or {}
+    address_value = (outputs.get('public_ip') or {}).get('value', '')
+    try:
+        address = ipaddress.ip_address(address_value)
+    except ValueError as exc:
+        raise RuntimeError('ARM deployment returned an invalid public IP') from exc
+    if address.version != 4 or not address.is_global:
+        raise RuntimeError('ARM deployment returned an invalid public IP')
+    private_key = Path(state['ssh_private_key_path'])
+    if (not private_key.is_file() or private_key.is_symlink()
+            or private_key.stat().st_uid != os.getuid()):
+        raise RuntimeError('Azure SSH private key is unavailable')
+    with tempfile.TemporaryDirectory(prefix='c2itall-azure-ssh-') as temporary:
+        known_hosts = Path(temporary) / 'known_hosts'
+        command = [
+            'ssh', '-F', '/dev/null', '-i', str(private_key),
+            '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes',
+            '-o', 'StrictHostKeyChecking=accept-new',
+            '-o', 'GlobalKnownHostsFile=/dev/null',
+            '-o', 'UserKnownHostsFile=' + str(known_hosts),
+            '-o', 'ConnectTimeout=10', 'azureuser@' + str(address), 'true',
+        ]
+        while True:
+            if time.monotonic() >= deadline:
+                raise TimeoutError('Azure SSH readiness deadline exceeded')
+            try:
+                result = run_command(command, timeout=15, deadline=deadline,
+                                     check=False)
+            except subprocess.TimeoutExpired:
+                result = None
+            if result is not None and result.returncode == 0:
+                return
+            time.sleep(min(5, max(0, deadline - time.monotonic())))
+
+
 def health_azure(config):
     """Read owned VM provisioning/power state without starting or modifying it."""
     state = load_state(config['deployment_id'], config.get('azure_state_dir'))
@@ -541,8 +578,12 @@ def _deploy_azure_locked(config):
             deployment = _wait_deployment(state, deadline)
             resources = _resources(state, deadline)
             validate_ownership(state, _group(state, deadline), resources)
-            state.update(status='ready', actual_resource_ids=[r['id'] for r in resources],
+            state.update(status='waiting_for_ssh',
+                         actual_resource_ids=[r['id'] for r in resources],
                          outputs=deployment['properties'].get('outputs', {}))
+            save_state(state, directory)
+            _wait_for_ssh(state, deadline)
+            state['status'] = 'ready'
             save_state(state, directory)
             return True
     except (Exception, KeyboardInterrupt) as exc:

@@ -384,6 +384,46 @@ with patch.object(a,'_group') as cloud:
         self.assertTrue(state["planned_resource_ids"])
         self.assertTrue(self.key.exists())
 
+    def test_successful_deployment_waits_for_authenticated_ssh(self):
+        state = self.prepare()
+        deployment = {'properties': {'outputs': {
+            'public_ip': {'value': '8.8.8.8'},
+        }}}
+        with mock.patch.object(azure, '_group', return_value=self.group(state)), \
+                mock.patch.object(azure, '_resources',
+                                  return_value=self.resources(state)), \
+                mock.patch.object(azure, '_wait_deployment',
+                                  return_value=deployment), \
+                mock.patch.object(azure, '_wait_for_ssh') as ssh, \
+                mock.patch.object(deployment_engine, 'execute_playbook',
+                                  return_value=True):
+            self.assertTrue(azure.deploy_azure(self.config))
+        ssh.assert_called_once()
+        saved = azure.load_state('test-azure')
+        self.assertEqual(saved['status'], 'ready')
+        self.assertEqual(saved['outputs'], deployment['properties']['outputs'])
+
+    def test_ssh_readiness_retries_with_isolated_host_trust(self):
+        attempts = [
+            subprocess.CompletedProcess([], 255, '', 'connection refused'),
+            subprocess.CompletedProcess([], 0, '', ''),
+        ]
+        state = {**self.config, 'outputs': {
+            'public_ip': {'value': '8.8.8.8'},
+        }}
+        with mock.patch.object(azure, 'run_command', side_effect=attempts) as run, \
+                mock.patch.object(azure.time, 'sleep'):
+            azure._wait_for_ssh(state, time.monotonic() + 60)
+        self.assertEqual(run.call_count, 2)
+        command = run.call_args.args[0]
+        self.assertEqual(command[:3], ['ssh', '-F', '/dev/null'])
+        self.assertIn('BatchMode=yes', command)
+        self.assertIn('StrictHostKeyChecking=accept-new', command)
+        self.assertIn('GlobalKnownHostsFile=/dev/null', command)
+        self.assertTrue(any(value.startswith('UserKnownHostsFile=/tmp/c2itall-azure-ssh-')
+                            for value in command))
+        self.assertEqual(command[-2:], ['azureuser@8.8.8.8', 'true'])
+
     def test_wrong_subscription_is_refused_before_cloud_calls(self):
         self.prepare()
         with mock.patch.object(azure, "run_az") as cloud, mock.patch.object(deployment_engine, "execute_playbook") as mutate:
