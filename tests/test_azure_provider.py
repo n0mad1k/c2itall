@@ -2210,6 +2210,16 @@ class RoutingAndTemplateTests(AzureFixture):
             self.assertEqual(target.stat().st_mode & 0o777, 0o600)
 
     def test_mailinabox_installer_has_cloud_safe_noninteractive_inputs(self):
+        install = (ROOT / 'ghost_protocol/phantom/playbooks/email/tasks/install.yml')
+        install_text = install.read_text()
+        self.assertIn('Check whether Mail-in-a-Box completed previously', install_text)
+        self.assertIn('path: /var/lib/c2itall/mailinabox-installed', install_text)
+        self.assertIn('register: miab_completion', install_text)
+        stop_block = install_text.split(
+            '- name: Stop conflicting nginx (MIAB manages its own)', 1)[1].split(
+                '\n- name:', 1)[0]
+        self.assertIn('when: not miab_completion.stat.exists', stop_block)
+
         configure = (ROOT / 'ghost_protocol/phantom/playbooks/email/tasks/configure.yml')
         text = configure.read_text()
         self.assertIn('Run Mail-in-a-Box installer (non-interactive)', text)
@@ -2229,6 +2239,7 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertIn('email_skip_network_checks | default(false)', text)
         self.assertIn('retries: 3', text)
         self.assertIn('no_log: true', text)
+        self.assertIn('when: not miab_completion.stat.exists', text)
         self.assertIn('mode: "0600"', text)
         self.assertIn('state: absent', text)
         self.assertNotIn('\n  environment:\n', text)
