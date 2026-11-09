@@ -179,7 +179,6 @@ class AttackBox:
         }
         config.update(live_config(provider, self.name))
         if provider == 'azure' and not quick:
-            config['azure_vm_size'] = 'Standard_D4as_v5'
             config['azure_os_disk_gb'] = 64
         if provider_driver(provider) is None:
             apply_provider_profile(config, 'instance_size', 'small')
