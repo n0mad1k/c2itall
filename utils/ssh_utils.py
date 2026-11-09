@@ -26,8 +26,9 @@ def generate_ssh_key(deployment_id=None):
     
     try:
         # Generate the SSH key
+        # An empty comment: the default user@host would name this workstation on every host.
         subprocess.run([
-            "ssh-keygen", "-t", "rsa", "-b", "4096", 
+            "ssh-keygen", "-t", "rsa", "-b", "4096", "-C", "",
             "-f", ssh_key_path, "-q", "-N", ""
         ], check=True)
         

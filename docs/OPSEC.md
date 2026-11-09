@@ -5,21 +5,54 @@ at the provider, and state on the controller workstation. This page lists
 them per module so the operator can decide what is acceptable for an
 engagement and what a teardown actually removes.
 
-## Shared by every driver-backed deployment
+## Shared by every deployment
 
 | Where | Trace | Removed by teardown |
 |---|---|---|
-| Provider | resource group `c2itall-<id>`; every resource named `c2itall-<id>-<kind>`; tags `c2itall-deployment` and `c2itall-owner` | yes |
-| Host | VM hostname `c2itall-<id>-vm` (the ARM `computerName`); the host's own logs name it | with the VM |
-| Host | Ubuntu 24.04 or Kali marketplace image, `azureuser` with the deployment's SSH key, password authentication off | with the VM |
-| Controller | `deployments/azure/<id>.json` (owner-only), `~/.ssh/c2deploy_<id>`, `logs/deployment_info_<id>.txt`, service logs under `deployments/azure/logs/` | state archived to `deployments/azure/archive/`, keys and records removed, logs archived |
+| Host | one account that holds only the deployment's SSH key (`azureuser`, `ec2-user` or `root`), password authentication off, the key line carries no comment | with the VM; FlokiNET keeps the host and loses the key line |
+| Provider | every resource named or labelled `c2itall-<id>` and marked with the deployment and owner tags below | yes, and cleanup refuses anything without the marks |
+| Controller | `deployments/<provider>/<id>.json` (owner-only), `~/.ssh/c2deploy_<id>`, `logs/deployment_info_<id>.txt`, `logs/deployment_<id>.log`, service logs under `deployments/<provider>/logs/` | state archived to `deployments/<provider>/archive/`, keys and records removed, logs archived |
 
-The `c2itall-` prefix in resource names, tags and the VM hostname is a tool
-fingerprint. It is visible to anyone with access to the subscription and to
-anyone who lands on the host; it is not visible to targets over the network.
-Changing it is a coordinated change across `utils/azure_utils.py`,
-`utils/azure_cloud.py`, the Azure infrastructure play and the live harness
+Provider SDK debug output is kept out of `logs/deployment_<id>.log`; the AWS
+log would otherwise record every signed request header, access key ID
+included.
+
+The `c2itall-` prefix in resource names, tags and labels is a tool
+fingerprint. It is visible to anyone with access to the account and, where
+it becomes the hostname, to anyone who lands on the host; it is not visible
+to targets over the network. Changing it is a coordinated change across the
+four drivers, the Azure play, the ownership validation and the live harness
 inventories and is listed under Open items below.
+
+### Azure
+
+| Where | Trace |
+|---|---|
+| Provider | resource group `c2itall-<id>`; VNet, NSG, static IP, NIC and VM named `c2itall-<id>-<kind>`; tags `c2itall-deployment` and `c2itall-owner`; managed boot diagnostics |
+| Host | hostname `c2itall-<id>-vm` (the ARM `computerName`); Ubuntu 24.04, 22.04 or the Kali marketplace image |
+
+### AWS
+
+| Where | Trace |
+|---|---|
+| Provider | one VPC, internet gateway, subnet and security group per deployment, each tagged `Name=c2itall-<id>`, `c2itall-deployment` and `c2itall-owner`; the security group is also named `c2itall-<id>`; no EC2 key pair is created |
+| Host | the instance keeps the image's default hostname (`ip-10-0-1-N`); the deployment key arrives through cloud-init user-data, which stays readable from the instance metadata service for the life of the instance |
+| Account | CloudTrail records every API call the driver makes under the access key you give it |
+
+### Linode
+
+| Where | Trace |
+|---|---|
+| Provider | one Linode and one Cloud Firewall labelled `c2itall-<id>`, tagged `c2itall-deployment-<id>` and `c2itall-owner-<marker>` (the marker is per deployment); the tags also appear in the account's tag list until the last resource carrying them is gone |
+| Host | images with cloud-init apply the label as the hostname; root with the deployment key only, the API-mandated root password is random and discarded, password login is turned off as soon as the key works |
+| Account | the account event log records the create and delete calls |
+
+### FlokiNET
+
+| Where | Trace |
+|---|---|
+| Host | the deployment key line in `/root/.ssh/authorized_keys` (removed on teardown); `ufw` is reset and rebuilt from the workload's rules, so any rules you had are gone; password login is turned off; everything the service installed stays |
+| Provider | nothing is created; the server you ordered stays until you cancel it in the panel |
 
 ## Email tracker
 
@@ -60,13 +93,27 @@ inventories and is listed under Open items below.
 
 | Where | Trace |
 |---|---|
-| Network | beacons talk to `<label>-<hash>.z01.azurefd.net`; the origin's 80 and 443 admit only the `AzureFrontDoor.Backend` service tag, and nginx returns nothing (444) unless the request carries this deployment's `X-Azure-FDID`; the shell-handler port stays public as for any redirector |
-| Edge | the Front Door profile `c2itall-<id>-edge` and endpoint label are visible in the subscription; the public hostname is derived from the label you choose, so pick one that fits the pretext |
+| Network | beacons talk to the edge hostname; the origin's 80 and 443 admit only the edge network, and nginx returns nothing (444) unless the request carries this deployment's edge identifier; the shell-handler port stays public as for any redirector |
 | Edge to origin | `https` requires a CA-issued certificate on the redirector (DNS must point at it when the deploy runs); `http` carries beacon traffic in clear between the edge and the origin inside the provider's network, so use it only for labs or when the C2 protocol is itself encrypted |
 | Client address | the origin trusts `X-Forwarded-For` only in fronted mode, where the edge is the only possible sender, so the security-IP maps judge the real client and not the edge |
+
+Azure Front Door:
+
+| Where | Trace |
+|---|---|
+| Edge | hostname `<label>-<hash>.z01.azurefd.net`; the origin admits the `AzureFrontDoor.Backend` service tag and checks `X-Azure-FDID`; the profile `c2itall-<id>-edge` and the endpoint label are visible in the subscription, and the public hostname is derived from the label you choose, so pick one that fits the pretext |
 | Teardown | the resource group deletion removes the edge; a Front Door profile takes several minutes longer to delete than a VM and the cleanup deadline is extended accordingly |
 | Cost | Front Door Standard carries a base monthly fee plus egress; it is billed hourly while it exists |
 | Subscription | Azure refuses Front Door on Free Trial and Student subscriptions; the fronted route needs a pay-as-you-go or enterprise subscription and the `Microsoft.Cdn` provider registered |
+
+AWS CloudFront:
+
+| Where | Trace |
+|---|---|
+| Edge | hostname `<random>.cloudfront.net`, not chosen by you; the origin is the instance's public DNS name, so the distribution config in the account names the origin; the origin admits the `cloudfront.origin-facing` managed prefix list and checks a per-deployment `X-Origin-Verify` secret the distribution stamps on every forwarded request |
+| Caching | disabled; every viewer header except `Host` is forwarded, HTTP and HTTPS are both accepted at the edge, all HTTP methods pass |
+| Teardown | the distribution is disabled, waited on and deleted before the VPC goes; that takes ten to fifteen minutes and the cleanup deadline is extended accordingly |
+| Cost | CloudFront bills per request and per GB; a distribution serving nothing costs nothing, but the instance behind it bills as usual |
 
 What the fronted redirector is not: true domain fronting (a TLS SNI for one
 domain and a Host header for another) no longer works on the major CDNs. This
@@ -75,13 +122,17 @@ operationally viable.
 
 ## Open items
 
-- The `c2itall-` prefix in Azure resource names, tags and the VM hostname is
-  the only tool name that reaches hosts and provider metadata from the driver
-  path. A configurable, neutral prefix would remove it; it touches the Azure
-  driver, its play, the ownership validation and the live harness, so it is a
-  deliberate change rather than a rename.
-- Linode and FlokiNET transition plays tag instances `c2itall`
-  (`providers/Linode/*.yml`, `providers/FlokiNET/flokinet_phishing.yml`).
+- The `c2itall-` prefix in resource names, tags and labels on every provider,
+  and in the Azure hostname, is the only tool name that reaches hosts and
+  provider metadata from the driver path. A configurable, neutral prefix
+  would remove it; it touches the four drivers, the Azure play, the ownership
+  validation and the live harness, so it is a deliberate change rather than a
+  rename.
+- Accounts used with the retired per-provider plays may still hold their
+  leftovers: EC2 key pairs named `c2deploy_*` and Linode profile SSH keys.
+  The drivers never create either, and the live harness only polices
+  resources carrying the current deployment tags, so review and delete them
+  by hand.
 - The TAK chat server names its CA `c2itall-<id>` and its organization
   `c2itall` (`modules/chat-server/deploy_chat.py`); the names ship inside
   the client package.
