@@ -440,16 +440,19 @@ class LinodeDriverTests(DriverCase):
         config = self.config('linode', linode_region='us-east', linode_instance_type='g6-nanode-1')
         rules = [{'name': 'https', 'protocol': 'Tcp', 'port': 443, 'source': '*'},
                  {'name': 'beats', 'protocol': 'Tcp', 'port': 5044, 'source': '9.9.9.9'}]
-        request = ProvisionRequest('lt-linode-unit', 'logging_server', rules, 'kali', 64,
+        # A component ID pushes the prefixed label past Linode's 32-character firewall limit.
+        request = ProvisionRequest('lt-linode-unit-phishing-mta', 'logging_server', rules, 'kali', 64,
                                    str(self.public), str(self.private), False)
         plan = self.driver.plan(config, request)
         self.driver.prepare_state(plan)
         self.assertTrue(self.driver.deploy(plan))
-        state = self.driver.store.load('lt-linode-unit', self.state_dir)
+        state = self.driver.store.load('lt-linode-unit-phishing-mta', self.state_dir)
         self.assertEqual(state['status'], 'ready')
         self.assertEqual(self.api.calls[:4], [('GET', '/linode/instances'), ('GET', '/networking/firewalls'),
                                               ('POST', '/networking/firewalls'), ('GET', '/linode/types')])
         firewall = self.api.firewalls[state['resources']['firewall']]
+        self.assertEqual(firewall['label'], 'lt-linode-unit-phishing-mta')
+        self.assertLessEqual(len(firewall['label']), 32)
         self.assertEqual(firewall['rules']['inbound_policy'], 'DROP')
         self.assertEqual([(rule['protocol'], rule['ports'], rule['addresses']) for rule in firewall['rules']['inbound']], [
             ('TCP', '22', {'ipv4': [OPERATOR + '/32']}),
@@ -463,15 +466,15 @@ class LinodeDriverTests(DriverCase):
         self.assertEqual(linode['authorized_keys'], [self.public.read_text().strip()])
         self.assertEqual(set(linode['tags']), set(firewall['tags']))
         self.assertTrue(all(len(tag) <= 50 for tag in linode['tags']))
-        self.assertEqual(self.driver.public_address('lt-linode-unit', config), '8.8.8.30')
+        self.assertEqual(self.driver.public_address('lt-linode-unit-phishing-mta', config), '8.8.8.30')
         # The image enables password login; the driver turns it off once the key works.
         self.assertEqual(self.commands[0][-2], 'root@8.8.8.30')
         self.assertIn('PasswordAuthentication no', self.commands[0][-1])
         self.assertTrue(self.driver.deploy(plan))
         self.assertEqual((len(self.api.linodes), len(self.api.firewalls)), (1, 1))
-        self.assertTrue(self.driver.health({'deployment_id': 'lt-linode-unit',
+        self.assertTrue(self.driver.health({'deployment_id': 'lt-linode-unit-phishing-mta',
                                             'linode_state_dir': str(self.state_dir)})['healthy'])
-        self.assertTrue(self.driver.cleanup({'deployment_id': 'lt-linode-unit',
+        self.assertTrue(self.driver.cleanup({'deployment_id': 'lt-linode-unit-phishing-mta',
                                              'linode_state_dir': str(self.state_dir)}))
         self.assertEqual((self.api.linodes, self.api.firewalls), ({}, {}))
         self.assertFalse((self.state_dir / 'lt-linode-unit.json').exists())

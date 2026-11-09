@@ -31,6 +31,12 @@ def ownership_labels(state):
             'c2itall-owner-' + state['ownership_marker'].replace('-', '')]
 
 
+def firewall_label(deployment_id):
+    # Firewall labels stop at 32 characters; the bare ID always fits.
+    label = 'c2itall-' + deployment_id
+    return label if len(label) <= 32 else deployment_id
+
+
 class LinodeDriver(StatefulDriver):
     provider = 'linode'
     ssh_user = 'root'
@@ -58,6 +64,8 @@ class LinodeDriver(StatefulDriver):
         }
 
     def validate_provider(self, result):
+        if len(str(result.get('deployment_id', ''))) > 31:
+            raise ValueError('Linode tags limit the deployment ID to 31 characters')
         if not REGION.fullmatch(str(result.get('linode_region', ''))):
             raise ValueError('Invalid linode_region')
         result.setdefault('linode_instance_type', 'g6-standard-2')
@@ -90,8 +98,8 @@ class LinodeDriver(StatefulDriver):
         return result
 
     def planned_ids(self, state):
-        name = 'c2itall-' + state['deployment_id']
-        return {'linode': name, 'firewall': name}
+        return {'linode': 'c2itall-' + state['deployment_id'],
+                'firewall': firewall_label(state['deployment_id'])}
 
     def lock_target(self, state):
         return state['linode_region'] + '/c2itall-' + state['deployment_id']
@@ -187,7 +195,7 @@ class LinodeDriver(StatefulDriver):
         name = 'c2itall-' + state['deployment_id']
         if 'firewall' not in resources:
             resources['firewall'] = self.request('POST', '/networking/firewalls', {
-                'label': name, 'rules': self._firewall_rules(state),
+                'label': firewall_label(state['deployment_id']), 'rules': self._firewall_rules(state),
                 'tags': ownership_labels(state)})['id']
             self.save(state)
         if 'linode' not in resources:
