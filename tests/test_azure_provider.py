@@ -3023,6 +3023,9 @@ class SmokeTests(unittest.TestCase):
                 self.assertIn('preflight(runner, config)', content)
                 self.assertNotIn('preflight(runner)', content)
 
+        shared = (ROOT / 'scripts/test_azure_phantom_live.py').read_text()
+        self.assertIn('config.get("server_type") == "email"', shared)
+
     def test_attack_box_live_harness_dry_run_has_no_cloud_calls(self):
         harness_spec = importlib.util.spec_from_file_location(
             'azure_attack_box_live',

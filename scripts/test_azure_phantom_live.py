@@ -105,7 +105,7 @@ def preflight(runner, config):
             limit = nonnegative_count(quota.get("limit"), f"{name} limit")
             require(used + cores <= limit, f"Insufficient Azure quota: {name}")
     require(found == names, "Could not verify Azure regional and family quota")
-    image = EMAIL_IMAGE if config["server_type"] == "email" else IMAGE
+    image = EMAIL_IMAGE if config.get("server_type") == "email" else IMAGE
     runner.az("vm", "image", "show", "--location", LOCATION, "--urn", image)
 
 
