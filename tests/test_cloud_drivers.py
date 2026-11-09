@@ -409,6 +409,7 @@ class AwsDriverTests(DriverCase):
         self.assertIn(resources['instance'], self.ec2.instances)
         instance['Tags'] = original
 
+        self.cloudfront.calls.clear()
         self.assertTrue(self.driver.cleanup({'deployment_id': 'lt-aws-unit', 'aws_state_dir': str(self.state_dir)}))
         self.assertEqual([call[:2] for call in self.cloudfront.calls],
                          [('update', 'E1'), ('wait', 'distribution_deployed'), ('delete', 'E1')])
