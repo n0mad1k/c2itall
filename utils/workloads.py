@@ -45,6 +45,10 @@ class WorkloadProfile:
         """Return the provider-neutral image role for this configuration."""
         return self.image_role
 
+    def service_timeout(self, config):
+        """Maximum seconds for the workload's service playbook."""
+        return 1800
+
     def prepare(self, config):
         """Settle module inputs every component must share before provisioning."""
 

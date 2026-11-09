@@ -104,7 +104,8 @@ class SingleVmAdapter(WorkloadAdapter):
                 '-o GlobalKnownHostsFile=/dev/null '
                 '-o UserKnownHostsFile=' + str(known_hosts)),
         )
-        deadline = config.get('service_deadline', time.monotonic() + 1800)
+        timeout = self.profile.service_timeout(config)
+        deadline = config.get('service_deadline', time.monotonic() + timeout)
         with secure_directory(log_dir, create=True):
             pass
         with tempfile.TemporaryDirectory(prefix='c2itall-service-') as temporary:
@@ -123,7 +124,7 @@ class SingleVmAdapter(WorkloadAdapter):
                 '-i', inventory, '-u', self.driver.ssh_user,
                 '--private-key', str(private_key),
                 '--extra-vars', '@' + str(variables),
-            ], timeout=1800, deadline=deadline, check=False)
+            ], timeout=timeout, deadline=deadline, check=False)
         log_path = log_dir / (config['deployment_id'] + '-' + self.profile.log_suffix + '.log')
         with secure_directory(log_dir) as directory:
             flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND

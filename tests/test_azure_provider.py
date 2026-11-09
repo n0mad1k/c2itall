@@ -1698,12 +1698,15 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertEqual(infrastructure['provider_workload'], 'attack_box')
         self.assertEqual(infrastructure['azure_inbound_rules'], [])
         self.assertEqual(infrastructure['azure_image']['publisher'], 'kali-linux')
+        self.assertEqual(adapter.profile.service_timeout(config), 1800)
         normalized = azure.validate_config(infrastructure, require_key=False)
         self.assertEqual(normalized['provider_workload'], 'attack_box')
         kali = adapter._infrastructure_config({
             **config, 'attack_box_type': 'kali',
             'deployment_type': 'kali_attack_box'})
         self.assertEqual(kali['azure_image']['publisher'], 'kali-linux')
+        self.assertEqual(adapter.profile.service_timeout({
+            **config, 'attack_box_type': 'kali'}), 3600)
         ubuntu = adapter._infrastructure_config({
             **config, 'attack_box_type': 'ubuntu',
             'deployment_type': 'ubuntu_attack_box'})
