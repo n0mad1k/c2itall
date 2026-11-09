@@ -8,6 +8,10 @@ from .cloud_driver import CloudDriver
 
 KALI_IMAGE = {'publisher': 'kali-linux', 'offer': 'kali', 'sku': 'kali-2026-2',
               'version': 'latest', 'plan': True}
+UBUNTU_2204_IMAGE = {
+    'publisher': 'Canonical', 'offer': '0001-com-ubuntu-server-jammy',
+    'sku': '22_04-lts-gen2', 'version': 'latest', 'plan': False,
+}
 
 
 class AzureDriver(CloudDriver):
@@ -24,7 +28,11 @@ class AzureDriver(CloudDriver):
         return azure_utils.validate_config(config, require_key=require_key)
 
     def image(self, role):
-        return KALI_IMAGE if role == 'kali' else None
+        if role == 'kali':
+            return KALI_IMAGE
+        if role == 'ubuntu2204':
+            return UBUNTU_2204_IMAGE
+        return None
 
     def region(self, config):
         return config.get('azure_location', 'eastus')

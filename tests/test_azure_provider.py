@@ -1634,6 +1634,17 @@ class RoutingAndTemplateTests(AzureFixture):
             [('Tcp', '22'), ('Udp', '51820'), ('*', '*')])
         self.assertEqual(rules[0]['properties']['sourceAddressPrefix'], '8.8.8.8/32')
 
+        email_infrastructure = adapter._infrastructure_config({
+            **config, 'server_type': 'email', 'domain': 'mail.test',
+            'email_first_user': 'admin@mail.test'})
+        self.assertEqual(email_infrastructure['azure_image'], {
+            'publisher': 'Canonical',
+            'offer': '0001-com-ubuntu-server-jammy',
+            'sku': '22_04-lts-gen2',
+            'version': 'latest',
+            'plan': False,
+        })
+
         state = dict(normalized, outputs={
             'public_ip': {'value': '1.1.1.1'}}, status='ready')
         with mock.patch.object(azure, 'prepare_state'), mock.patch.object(

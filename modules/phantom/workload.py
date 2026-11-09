@@ -91,6 +91,10 @@ class PhantomProfile(WorkloadProfile):
     kind = 'handoff'
     workload = 'phantom'
 
+    def image_role_for(self, config):
+        # Mail-in-a-Box officially requires a fresh Ubuntu 22.04 host.
+        return 'ubuntu2204' if config.get('server_type') == 'email' else self.image_role
+
     def disk_gb(self, config):
         return 64 if config.get('server_type') == 'tak' else 32
 

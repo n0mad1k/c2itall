@@ -25,6 +25,7 @@ from deploy_azure_smoke import (IMAGE, LOCATION, SIZE, SUBSCRIPTION, Runner,
 ROOT = Path(__file__).resolve().parents[1]
 PHANTOM_ROOT = ROOT / "ghost_protocol" / "phantom"
 STATE_DIR = ROOT / "deployments" / "azure"
+EMAIL_IMAGE = "Canonical:0001-com-ubuntu-server-jammy:22_04-lts-gen2:latest"
 SERVICES = ("vpn", "matrix", "tak", "dns", "cloud", "vault", "media", "email",
             "all_in_one")
 
@@ -74,7 +75,7 @@ def verify_committed_source(runner):
     }
 
 
-def preflight(runner):
+def preflight(runner, config):
     account = runner.az("account", "show")
     require(account.get("id", "").lower() == SUBSCRIPTION, "Wrong Azure subscription")
     require(account.get("state") == "Enabled", "Azure subscription is not enabled")
@@ -102,7 +103,8 @@ def preflight(runner):
             limit = nonnegative_count(quota.get("limit"), f"{name} limit")
             require(used + cores <= limit, f"Insufficient Azure quota: {name}")
     require(found == names, "Could not verify Azure regional and family quota")
-    runner.az("vm", "image", "show", "--location", LOCATION, "--urn", IMAGE)
+    image = EMAIL_IMAGE if config["server_type"] == "email" else IMAGE
+    runner.az("vm", "image", "show", "--location", LOCATION, "--urn", image)
 
 
 def expected_allow_rules(config):
@@ -154,8 +156,15 @@ def resource_snapshot(runner, config):
     image = vm["storageProfile"]["imageReference"]
     disk = vm["storageProfile"]["osDisk"]
     require(vm["hardwareProfile"]["vmSize"] == SIZE, "Unexpected Phantom VM size")
-    require(image["publisher"].lower() == "canonical"
-            and image["offer"] == "ubuntu-24_04-lts" and image["sku"] == "server",
+    expected_image = ({
+        "publisher": "canonical", "offer": "0001-com-ubuntu-server-jammy",
+        "sku": "22_04-lts-gen2",
+    } if config["server_type"] == "email" else {
+        "publisher": "canonical", "offer": "ubuntu-24_04-lts", "sku": "server",
+    })
+    require(image["publisher"].lower() == expected_image["publisher"]
+            and image["offer"] == expected_image["offer"]
+            and image["sku"] == expected_image["sku"],
             "Unexpected Phantom VM image")
     disk_sizes = [disk[key] for key in ("diskSizeGB", "diskSizeGb") if key in disk]
     expected_disk_gb = int(config.get("azure_os_disk_gb", 32))
@@ -681,7 +690,7 @@ def activate(service="vpn", operator_ip=None):
             "https://api.ipify.org",
         ]))
         config["operator_ip"] = operator_ip
-        preflight(runner)
+        preflight(runner, config)
 
         os.environ["C2ITALL_INTEGRATED"] = "1"
         sys.path.insert(0, str(PHANTOM_ROOT))
