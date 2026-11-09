@@ -1774,6 +1774,8 @@ class RoutingAndTemplateTests(AzureFixture):
         archive.assert_called_once_with('test-azure')
 
     def test_azure_redirector_adapter_fronts_backend_with_public_web_rules(self):
+        redirector_tasks = (ROOT / 'modules/redirectors/tasks/configure_redirector.yml').read_text()
+        self.assertNotIn('ansible_date_time', redirector_tasks)
         adapter = vm_workloads.adapter('azure', 'redirector')
         self.assertIsInstance(adapter, vm_workloads.SingleVmAdapter)
         self.assertEqual(adapter.profile.workload, 'redirector')

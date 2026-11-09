@@ -238,7 +238,7 @@
     dest: /tmp/c2ingred_packages_ready
     content: |
       C2ingRed Package Installation Complete
-      Timestamp: {{ ansible_date_time.iso8601 }}
+      Timestamp: {{ ansible_facts['date_time']['iso8601'] }}
       Status: {{ 'READY' if core_packages is success else 'PARTIAL' }}
     mode: '0644'
 
