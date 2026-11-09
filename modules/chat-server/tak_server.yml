@@ -274,8 +274,11 @@
           insecure
           output = "/dev/null"
           write-out = "%{http_code}"
-          cert-type = "P12"
-          cert = "/opt/tak/certs/files/{{ tak_admin_name }}.p12:{{ tak_cert_password }}"
+          cert-type = "PEM"
+          key-type = "PEM"
+          cert = "/opt/tak/certs/files/{{ tak_admin_name }}.pem"
+          key = "/opt/tak/certs/files/{{ tak_admin_name }}.key"
+          pass = "{{ tak_cert_password }}"
           url = "https://127.0.0.1:8443/Marti/api/version"
       register: tak_admin_api_probe
       changed_when: false
