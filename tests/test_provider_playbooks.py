@@ -75,6 +75,9 @@ class ProviderPlaybookSyntaxTests(unittest.TestCase):
         attack_box = (ROOT / "providers/AWS/attack_box.yml").read_text()
         webrunner = (ROOT / "providers/webrunner.yml").read_text()
         self.assertIn('deployment_id: "{{ deployment_id }}"', attack_box)
+        self.assertIn("aws_volume_size | default(64)", attack_box)
+        self.assertIn("volume_type: gp3", attack_box)
+        self.assertIn("delete_on_termination: true", attack_box)
         self.assertIn('deployment_id: "{{ deployment_id }}"', webrunner)
 
     def test_webrunner_teardown_verifies_nodes_and_auxiliaries(self):

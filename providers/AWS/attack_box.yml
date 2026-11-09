@@ -148,6 +148,13 @@
           assign_public_ip: true
         wait: true
         state: running
+        volumes:
+          - device_name: "/dev/xvda"
+            ebs:
+              # Full attack-box installs exceed the Ubuntu AMI's small root disk.
+              volume_size: "{{ [aws_volume_size | default(64) | int, 64] | max }}"
+              volume_type: gp3
+              delete_on_termination: true
         tags: "{{ resource_tags | combine({'Name': attack_box_name, 'Environment': attack_box_type}) }}"
         user_data: |
           #!/bin/bash
