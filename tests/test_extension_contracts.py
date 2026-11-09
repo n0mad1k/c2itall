@@ -238,12 +238,18 @@ class FakeProviderTests(unittest.TestCase):
 
     def test_handoff_adapter_gives_the_module_a_configured_host(self):
         adapter = vm_workloads.HandoffAdapter(self.driver, load_profile('phantom'))
-        config = {
-            'provider': 'fakecloud', 'provider_workload': 'phantom', 'deployment_id': 'vpn1',
-            'server_type': 'vpn', 'operator_ip': '8.8.4.4', 'fakecloud_project': 'lab',
-        }
-        with mock.patch.object(self.driver, 'prepare_ssh_key'):
-            self.assertTrue(adapter.deploy(config))
+        with tempfile.TemporaryDirectory() as temp:
+            config = {
+                'provider': 'fakecloud', 'provider_workload': 'phantom',
+                'deployment_id': 'vpn1', 'server_type': 'vpn',
+                'operator_ip': '8.8.4.4', 'fakecloud_project': 'lab',
+                'fakecloud_state_dir': temp,
+            }
+            with mock.patch.object(self.driver, 'prepare_ssh_key'):
+                self.assertTrue(adapter.deploy(config))
+            self.assertEqual(
+                config['ssh_known_hosts_path'],
+                str(Path(temp) / 'logs' / 'vpn1-known-hosts'))
         self.assertEqual(config['target_host'], '8.8.8.10')
         self.assertEqual(config['ssh_user'], 'operator')
         self.assertEqual(config['provider_workload'], 'phantom')

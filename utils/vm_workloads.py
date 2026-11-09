@@ -80,6 +80,14 @@ class SingleVmAdapter(WorkloadAdapter):
                 self.driver.provider, self._label()))
         return address
 
+    def _export_ssh_known_hosts(self, config):
+        log_dir = self.driver.log_dir(config)
+        with secure_directory(log_dir, create=True):
+            pass
+        known_hosts = log_dir / (config['deployment_id'] + '-known-hosts')
+        config['ssh_known_hosts_path'] = str(known_hosts)
+        return known_hosts
+
     def _service_variables(self, config):
         allowed = {'provider', 'provider_workload', 'deployment_id',
                    'deployment_type'} | set(self.profile.config_keys)
@@ -94,8 +102,7 @@ class SingleVmAdapter(WorkloadAdapter):
             raise ValueError('{0} {1} private key is unavailable'.format(
                 self.driver.provider, self._label()))
         log_dir = self.driver.log_dir(config)
-        known_hosts = log_dir / (config['deployment_id'] + '-known-hosts')
-        config['ssh_known_hosts_path'] = str(known_hosts)
+        known_hosts = self._export_ssh_known_hosts(config)
         service_vars = self._service_variables(config)
         service_vars.update(
             ansible_python_interpreter='/usr/bin/python3',
@@ -107,8 +114,6 @@ class SingleVmAdapter(WorkloadAdapter):
         )
         timeout = self.profile.service_timeout(config)
         deadline = config.get('service_deadline', time.monotonic() + timeout)
-        with secure_directory(log_dir, create=True):
-            pass
         with tempfile.TemporaryDirectory(prefix='c2itall-service-') as temporary:
             variables = Path(temporary) / 'variables.json'
             variables.write_text(json.dumps(service_vars))
@@ -353,6 +358,7 @@ class HandoffAdapter(SingleVmAdapter):
         config.update(target_host=str(parsed), ssh_user=self.driver.ssh_user,
                       ssh_key=infrastructure['ssh_private_key_path'],
                       provider_workload=self.profile.workload)
+        self._export_ssh_known_hosts(config)
         return True
 
     def cleanup(self, config):

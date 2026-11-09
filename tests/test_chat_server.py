@@ -331,6 +331,8 @@ class MatrixRotationTests(unittest.TestCase):
         self.assertIn('matrix_registration_requires_token"] = False', matrix_module)
         self.assertIn("matrix_registration_token_required", playbook)
         self.assertIn("registration_requires_token:", template)
+        phantom = (ROOT / "ghost_protocol/phantom/phantom.py").read_text()
+        self.assertIn('config.get("ssh_known_hosts_path") or', phantom)
 
 
 class TakBuilderTests(unittest.TestCase):

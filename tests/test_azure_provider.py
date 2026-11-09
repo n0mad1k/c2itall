@@ -1711,6 +1711,9 @@ class RoutingAndTemplateTests(AzureFixture):
                                 'public_ip': {'value': '1.1.1.1'}}, status='ready')):
             self.assertTrue(adapter.deploy(chat_config))
         self.assertEqual(chat_config['provider_workload'], 'chat')
+        self.assertEqual(
+            chat_config['ssh_known_hosts_path'],
+            str(self.state_dir / 'logs' / 'test-chat-known-hosts'))
 
         adapter = vm_workloads.adapter('azure', 'phantom')
         with mock.patch.object(azure, 'cleanup_azure', return_value=True) as cleanup:
