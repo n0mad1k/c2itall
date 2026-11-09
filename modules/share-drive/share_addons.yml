@@ -78,10 +78,18 @@
       changed_when: false
       failed_when: false
 
+    - name: Parse the tailnet state
+      set_fact:
+        share_tailnet_self: "{{ (share_tailnet.stdout | from_json).Self | default({}, true) if share_tailnet.rc == 0 else {} }}"
+
     - name: Derive the tailnet identity
       set_fact:
-        share_tailnet_ip: "{{ ((share_tailnet.stdout | from_json).Self.TailscaleIPs | default([]) | select('match', '^[0-9.]+$') | first | default('')) if share_tailnet.rc == 0 else '' }}"
-        share_tailnet_name: "{{ ((share_tailnet.stdout | from_json).Self.DNSName | default('') | regex_replace('\\.$', '')) if share_tailnet.rc == 0 else '' }}"
+        share_tailnet_ips: "{{ share_tailnet_self.TailscaleIPs | default([], true) | select('match', '^[0-9.]+$') | list }}"
+        share_tailnet_name: "{{ share_tailnet_self.DNSName | default('', true) | regex_replace('\\.$', '') }}"
+
+    - name: Pick the tailnet address
+      set_fact:
+        share_tailnet_ip: "{{ share_tailnet_ips[0] if share_tailnet_ips else '' }}"
 
     - name: Trust the tailnet address in Nextcloud
       command: "php /var/www/nextcloud/occ config:system:set trusted_domains 1 --value={{ share_tailnet_ip }}"

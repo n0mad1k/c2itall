@@ -60,14 +60,18 @@
     chdir: /opt/redelk
     creates: /opt/redelk/elkserver.tgz
 
+- name: Create the ELK server directory
+  ansible.builtin.file:
+    path: /opt/redelk-elk
+    state: directory
+    mode: '0700'
+
 - name: Unpack the ELK server package
   ansible.builtin.unarchive:
     src: /opt/redelk/elkserver.tgz
     dest: /opt/redelk-elk
     remote_src: yes
     creates: /opt/redelk-elk/elkserver/install-elkserver.sh
-  vars:
-    ansible_unarchive_create_dest: true
 
 - name: Install the ELK server (limited profile)
   ansible.builtin.command:
