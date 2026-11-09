@@ -87,6 +87,173 @@ class ChatServerTests(unittest.TestCase):
         self.assertNotIn("protocol: udp\n        port: \"8087\"", playbook)
 
 
+class MatrixRotationTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.base = Path(self.temporary.name)
+        self.rotation = load_module(
+            "test_matrix_rotation", ROOT / "modules/chat-server/rotate_matrix.py")
+        self.state_path = self.base / "rotation.json"
+        self.active = {
+            "provider": "azure",
+            "provider_workload": "chat",
+            "deployment_id": "matrix-active",
+            "deployment_type": "chat_matrix",
+            "server_type": "matrix",
+            "domain": "matrix-1.example.test",
+            "matrix_server_name": "matrix-1.example.test",
+            "matrix_admin_user": "admin",
+            "matrix_admin_password": "old-secret",
+            "target_host": "192.0.2.10",
+            "matrix_signing_key": "a" * 64,
+            "matrix_form_secret": "b" * 64,
+            "matrix_macaroon_secret": "c" * 64,
+        }
+
+    def state(self, phase="active", now=100):
+        return {
+            "version": self.rotation.STATE_VERSION,
+            "name": "team-chat",
+            "phase": phase,
+            "generation": 1,
+            "active": dict(self.active),
+            "replacement": None,
+            "room_id": "!room:matrix-1.example.test",
+            "domain_template": "matrix-{generation}.example.test",
+            "interval_seconds": 86400,
+            "grace_seconds": 3600,
+            "uses_allowed": 25,
+            "next_rotation_at": now,
+            "teardown_at": None,
+            "last_announcement": None,
+        }
+
+    def write_state(self, state):
+        self.rotation._write_state(self.state_path, state)
+        return self.rotation._load_state(self.state_path)
+
+    def test_state_is_owner_only_and_status_redacts_credentials(self):
+        state = self.write_state(self.state())
+        self.assertEqual(os.stat(self.state_path).st_mode & 0o777, 0o600)
+        rendered = json.dumps(self.rotation._status(state))
+        self.assertNotIn("old-secret", rendered)
+        self.assertNotIn("matrix_signing_key", rendered)
+
+    def test_state_loader_rejects_symlinks_and_permissive_modes(self):
+        self.write_state(self.state())
+        link = self.base / "linked.json"
+        link.symlink_to(self.state_path)
+        with self.assertRaisesRegex(self.rotation.RotationError, "unsafe"):
+            self.rotation._load_state(link)
+        self.state_path.chmod(0o644)
+        with self.assertRaisesRegex(self.rotation.RotationError, "owner-only"):
+            self.rotation._load_state(self.state_path)
+
+    def test_timer_install_rejects_symlinked_state(self):
+        self.write_state(self.state())
+        link = self.base / "linked.json"
+        link.symlink_to(self.state_path)
+        with self.assertRaisesRegex(self.rotation.RotationError, "unsafe"):
+            self.rotation.install_timer("team-chat", link)
+
+    def test_rotation_announces_limited_token_then_retires_old_server(self):
+        self.write_state(self.state())
+        deployed = []
+        retired = []
+        calls = []
+
+        def deploy(config):
+            config["target_host"] = "192.0.2.20"
+            deployed.append(config["deployment_id"])
+            return True
+
+        api = {
+            "login": lambda config: "access-" + config["deployment_id"],
+            "create_token": lambda config, access, uses, expiry: (
+                calls.append(("token", uses, expiry)) or "join-secret"),
+            "announce": lambda config, access, room, replacement, token, deadline: (
+                calls.append(("announce", room, replacement["domain"], token, deadline))
+                or "message containing join-secret"),
+        }
+        result = self.rotation.run_once(
+            self.state_path, now=100, deploy=deploy, retire=retired.append, api=api)
+        self.assertEqual(result, "replacement announced")
+        state = self.rotation._load_state(self.state_path)
+        self.assertEqual(state["phase"], "grace")
+        self.assertEqual(state["replacement"]["domain"], "matrix-2.example.test")
+        self.assertTrue(state["replacement"]["matrix_registration_requires_token"])
+        self.assertEqual(calls[0], ("token", 25, 3700))
+        self.assertEqual(calls[1][3], "join-secret")
+        self.assertNotIn("join-secret", json.dumps(state))
+        self.assertEqual(
+            self.rotation.run_once(
+                self.state_path, now=3699, deploy=deploy,
+                retire=retired.append, api=api),
+            "grace window active")
+        self.assertEqual(
+            self.rotation.run_once(
+                self.state_path, now=3700, deploy=deploy,
+                retire=retired.append, api=api),
+            "old deployment retired")
+        state = self.rotation._load_state(self.state_path)
+        self.assertEqual(state["phase"], "active")
+        self.assertEqual(state["active"]["domain"], "matrix-2.example.test")
+        self.assertEqual(retired, [self.active])
+        self.assertEqual(len(deployed), 1)
+
+    def test_failed_replacement_is_removed_and_active_server_is_kept(self):
+        self.write_state(self.state())
+        retired = []
+        with self.assertRaisesRegex(self.rotation.RotationError, "deployment failed"):
+            self.rotation.run_once(
+                self.state_path, now=100, deploy=lambda config: False,
+                retire=retired.append)
+        state = self.rotation._load_state(self.state_path)
+        self.assertEqual(state["phase"], "active")
+        self.assertIsNone(state["replacement"])
+        self.assertEqual(state["active"], self.active)
+        self.assertEqual(retired, [])
+
+    def test_cleanup_failure_preserves_recovery_state(self):
+        self.write_state(self.state())
+
+        def failed_cleanup(config):
+            raise RuntimeError("provider unavailable")
+
+        with self.assertRaisesRegex(self.rotation.RotationError, "state was preserved"):
+            self.rotation.run_once(
+                self.state_path, now=100, deploy=lambda config: True,
+                retire=failed_cleanup,
+                api={"login": mock.Mock(side_effect=RuntimeError("API unavailable"))})
+        state = self.rotation._load_state(self.state_path)
+        self.assertEqual(state["phase"], "provisioning")
+        self.assertIsNotNone(state["replacement"])
+
+    def test_interrupted_provisioning_is_recovered_before_new_work(self):
+        state = self.state(phase="provisioning")
+        state["replacement"] = dict(self.active, deployment_id="matrix-replacement")
+        self.write_state(state)
+        retired = []
+        result = self.rotation.run_once(
+            self.state_path, now=100, deploy=mock.Mock(), retire=retired.append)
+        self.assertEqual(result, "recovered incomplete replacement")
+        self.assertEqual(retired[0]["deployment_id"], "matrix-replacement")
+        self.assertEqual(self.rotation._load_state(self.state_path)["phase"], "active")
+
+    def test_synapse_template_requires_tokens_for_rotation_only(self):
+        matrix_module = (
+            ROOT / "ghost_protocol/phantom/modules/matrix.py").read_text()
+        playbook = (
+            ROOT / "ghost_protocol/phantom/playbooks/matrix/main.yml").read_text()
+        template = (
+            ROOT / "ghost_protocol/phantom/playbooks/matrix/templates/homeserver.yaml.j2"
+        ).read_text()
+        self.assertIn('matrix_registration_requires_token"] = False', matrix_module)
+        self.assertIn("matrix_registration_token_required", playbook)
+        self.assertIn("registration_requires_token:", template)
+
+
 class TakBuilderTests(unittest.TestCase):
     def test_official_source_layout_uses_nested_gradle_wrapper(self):
         source = (ROOT / "scripts/build_tak_server.py").read_text()

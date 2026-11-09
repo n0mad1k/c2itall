@@ -46,6 +46,11 @@ def _load_matrix_config():
                       PHANTOM_ROOT / "modules" / "matrix.py")
 
 
+def _load_matrix_rotation():
+    return _load_path("c2itall_matrix_rotation",
+                      Path(__file__).resolve().with_name("rotate_matrix.py"))
+
+
 def _sha256(path):
     digest = hashlib.sha256()
     with open(path, "rb") as source:
@@ -167,15 +172,18 @@ def chat_menu():
     print("1) Deploy Team Chat Server (Matrix + Element + Tailscale)")
     print("2) Deploy Team Chat + Bot Support")
     print("3) Deploy TAK Server + Tailscale")
+    print("4) Configure rolling Matrix replacement")
     print("99) Return")
     choice = input("Select an option: ").strip()
     if choice == "99":
         return False
-    if choice not in ("1", "2", "3"):
+    if choice not in ("1", "2", "3", "4"):
         print("Invalid option.")
         wait_for_input()
         return False
     try:
+        if choice == "4":
+            return _load_matrix_rotation().interactive_setup()
         config = gather_chat_parameters("tak" if choice == "3" else "matrix")
         if config is not None:
             if choice == "2":
