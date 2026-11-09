@@ -83,6 +83,18 @@ class ChatServerTests(unittest.TestCase):
             "tak-connection-{{ deployment_id }}.zip", "no_log: true",
         ):
             self.assertIn(expected, playbook)
+        registration = playbook.split(
+            "- name: Register TAK administrator certificate", 1)[1].split(
+                "\n    - name:", 1)[0]
+        self.assertNotIn("--offline", registration)
+        self.assertIn("chdir: /opt/tak", registration)
+        self.assertIn("until: tak_admin_registration.rc == 0", registration)
+        api_check = playbook.split(
+            "- name: Verify TAK administration API with client certificate", 1)[1].split(
+                "\n    - name:", 1)[0]
+        self.assertIn("- --config", api_check)
+        self.assertIn("stdin: |", api_check)
+        self.assertNotIn("- --cert", api_check)
         self.assertNotIn("atakatak", playbook)
         self.assertNotIn("protocol: udp\n        port: \"8087\"", playbook)
 

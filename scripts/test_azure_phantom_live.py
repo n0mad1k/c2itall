@@ -481,9 +481,11 @@ def verify_tak(runner, config):
         "sudo -n test -s /opt/tak/certs/files/" + admin + ".p12; "
         "for port in 8089 8443 8446; do ss -ltn | grep -q \":${port} \"; done; "
         "sudo -n sh -c '. /opt/tak/certs/cert-metadata.sh; "
-        "curl --fail --silent --show-error --insecure --cert-type P12 "
-        "--cert \"/opt/tak/certs/files/" + admin + ".p12:${PASS}\" "
-        "https://127.0.0.1:8443/Marti/api/version'; "
+        "printf \"%s\\n\" fail silent show-error insecure "
+        "\"cert-type = \\\"P12\\\"\" "
+        "\"cert = \\\"/opt/tak/certs/files/" + admin + ".p12:${PASS}\\\"\" "
+        "\"url = \\\"https://127.0.0.1:8443/Marti/api/version\\\"\" "
+        "| curl --config -'; "
         "sudo -n /usr/sbin/sshd -T | grep -q '^passwordauthentication no$'"
     )
     version = run_ssh(runner, config, command, timeout=180)
