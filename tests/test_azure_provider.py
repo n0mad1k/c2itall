@@ -2040,6 +2040,14 @@ class RoutingAndTemplateTests(AzureFixture):
         self.assertNotIn('ansible_default_ipv4', source)
         self.assertIn("ansible_facts['date_time']['epoch']", source)
 
+    def test_full_attack_box_skips_absent_optional_theme_assets(self):
+        source = (ROOT / 'modules/attack-box/tasks/configure_attack_box.yml').read_text()
+        for task in (
+                'Create themes directory', 'Upload terminal theme installer script',
+                'Upload DC27 dconf theme file', 'Add terminal theme alias to bashrc'):
+            block = source.split('- name: ' + task, 1)[1].split('\n- name:', 1)[0]
+            self.assertIn('when: install_terminal_themes | default(false)', block)
+
     def test_azure_phantom_adapter_maps_every_supported_service_allowlist(self):
         _service_rules = load_profile('phantom').inbound_rules
         expected = {

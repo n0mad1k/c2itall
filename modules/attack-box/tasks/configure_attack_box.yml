@@ -622,6 +622,7 @@
     owner: "{{ target_user }}"
     group: "{{ target_user }}"
     mode: '0755'
+  when: install_terminal_themes | default(false)
 
 - name: Upload terminal theme installer script
   ansible.builtin.copy:
@@ -630,6 +631,7 @@
     mode: '0755'
     owner: "{{ target_user }}"
     group: "{{ target_user }}"
+  when: install_terminal_themes | default(false)
 
 - name: Upload DC27 dconf theme file
   ansible.builtin.copy:
@@ -638,12 +640,14 @@
     mode: '0644'
     owner: "{{ target_user }}"
     group: "{{ target_user }}"
+  when: install_terminal_themes | default(false)
 
 - name: Add terminal theme alias to bashrc
   lineinfile:
     path: "{{ user_home }}/.bashrc"
     line: "alias install-themes='WORK_DIR={{ work_dir }} {{ work_dir }}/tools/scripts/install_terminal_themes.sh'"
     create: yes
+  when: install_terminal_themes | default(false)
 
 - name: Execute terminal theme installer during deployment
   ansible.builtin.shell: WORK_DIR="{{ work_dir }}" {{ work_dir }}/tools/scripts/install_terminal_themes.sh

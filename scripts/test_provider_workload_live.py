@@ -233,7 +233,7 @@ class AttackBox:
                 ('workspace_targets', 'sudo -n test -s /root/' + deployment_id + '/targets/targets.txt'),
                 ('opsec_script', 'sudo -n test -x /root/' + deployment_id + '/tools/scripts/opsec-check.sh'),
                 ('pipx', 'command -v pipx >/dev/null'),
-                ('workspace_alias', "sudo -n grep -Fq \"alias workspace=\" /root/.bashrc"),
+                ('workspace_alias', "sudo -n grep -Fq \"alias ops=\" /root/.bashrc"),
             ]
         report = checks(context, common + specific, timeout=180)
         if provider_driver(context.provider) is not None:
