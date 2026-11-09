@@ -15,15 +15,21 @@ class ProvisionRequest:
     """Everything a driver needs to plan one VM for a workload."""
 
     def __init__(self, deployment_id, workload, inbound_rules, image_role,
-                 disk_gb, ssh_public, ssh_private, ssh_generated):
+                 disk_gb, ssh_public, ssh_private, ssh_generated, edge=None):
         self.deployment_id = deployment_id
         self.workload = workload
+        # A rule whose source is 'edge' admits only the provider's own edge
+        # (CDN) network; drivers translate it to their service tag or ranges.
         self.inbound_rules = list(inbound_rules)
         self.image_role = image_role
         self.disk_gb = disk_gb
         self.ssh_public = ssh_public
         self.ssh_private = ssh_private
         self.ssh_generated = ssh_generated
+        # Optional edge in front of the VM: {'host_header', 'forwarding', 'name'}.
+        # forwarding is HttpsOnly, HttpOnly or MatchRequest; name is the
+        # public endpoint label the provider derives a hostname from.
+        self.edge = dict(edge) if edge else None
 
 
 class CloudDriver:
@@ -38,6 +44,8 @@ class CloudDriver:
     option_keys = ()
     # Safe number of pool nodes per region before a default quota bites.
     node_quota = 10
+    # True when plan() honours ProvisionRequest.edge and the 'edge' rule source.
+    supports_edge = False
 
     def check(self):
         for name in ('provider', 'ssh_user', 'prefix'):
@@ -76,6 +84,15 @@ class CloudDriver:
         raise NotImplementedError
 
     def public_address(self, deployment_id, config):
+        raise NotImplementedError
+
+    def edge_endpoint(self, deployment_id, config):
+        """Return {'edge_id', 'edge_hostname', 'edge_header'} for a fronted VM.
+
+        edge_id is the value the edge stamps into the edge_header request
+        header on every forwarded request, so the origin can drop traffic
+        that did not come through this edge.
+        """
         raise NotImplementedError
 
     def cleanup(self, request):

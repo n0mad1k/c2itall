@@ -21,6 +21,7 @@ class FakeDriver(CloudDriver):
     identity_keys = ('fakecloud_project',)
     option_keys = ('fakecloud_state_dir',)
     node_quota = 3
+    supports_edge = True
 
     def __init__(self):
         self.states = {}
@@ -54,7 +55,9 @@ class FakeDriver(CloudDriver):
             'fakecloud_region': self.region(config),
             'fakecloud_image': self.image(request.image_role),
             'fakecloud_disk_gb': request.disk_gb,
-            'fakecloud_rules': list(request.inbound_rules),
+            'fakecloud_rules': [dict(rule, source='fakecloud-edge') if rule['source'] == 'edge'
+                                else dict(rule) for rule in request.inbound_rules],
+            'fakecloud_edge': request.edge,
             'fakecloud_state_dir': config.get('fakecloud_state_dir'),
             'operator_ip': config.get('operator_ip'),
             'ssh_key_path': request.ssh_public,
@@ -83,6 +86,11 @@ class FakeDriver(CloudDriver):
 
     def public_address(self, deployment_id, config):
         return self.addresses[deployment_id]
+
+    def edge_endpoint(self, deployment_id, config):
+        return {'edge_id': 'fake-edge-' + deployment_id,
+                'edge_hostname': self.states[deployment_id]['fakecloud_edge']['name'] + '.edge.fakecloud.test',
+                'edge_header': 'X-Fake-Edge-Id'}
 
     def cleanup(self, request):
         self.calls.append(('cleanup', request['deployment_id'], tuple(sorted(request))))

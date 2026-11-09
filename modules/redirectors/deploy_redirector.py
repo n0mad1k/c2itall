@@ -4,6 +4,7 @@ Redirector infrastructure deployment module
 """
 
 import os
+import secrets
 import sys
 import logging
 
@@ -104,6 +105,7 @@ def redirector_menu():
         print(f"2) HTTPS Redirector {COLORS['GRAY']}(Web traffic redirection){COLORS['RESET']}")
         print(f"3) Payload Redirector {COLORS['GRAY']}(Payload delivery redirection){COLORS['RESET']}")
         print(f"4) Phishing Redirector {COLORS['GRAY']}(Phishing traffic redirection){COLORS['RESET']}")
+        print(f"5) CDN-Fronted C2 Redirector {COLORS['GRAY']}(provider edge in front, origin hidden){COLORS['RESET']}")
         print(f"99) Return to Main Menu")
         
         choice = input(f"\nSelect an option: ")
@@ -116,6 +118,8 @@ def redirector_menu():
             deploy_payload_redirector()
         elif choice == "4":
             deploy_phishing_redirector()
+        elif choice == "5":
+            deploy_fronted_redirector()
         elif choice == "99":
             return
         else:
@@ -170,6 +174,36 @@ def deploy_c2_redirector():
     print(f"\n{COLORS['GREEN']}Deploying C2 redirector...{COLORS['RESET']}")
     execute_redirector_deployment(config)
 
+def deploy_fronted_redirector():
+    """Deploy a C2 redirector reachable only through the provider's edge (CDN)."""
+    config = gather_redirector_parameters()
+    if not config:
+        return
+    from utils.provider_registry import provider_driver
+    driver = provider_driver(config['provider'])
+    if driver is None or not driver.supports_edge:
+        print(f"{COLORS['RED']}{config['provider']} cannot place an edge in front of a redirector{COLORS['RESET']}")
+        wait_for_input()
+        return
+    print(f"\n{COLORS['BLUE']}Edge Configuration{COLORS['RESET']}")
+    print("Traffic enters at the edge hostname; the origin accepts the edge network only")
+    print("and drops requests that lack this edge's identifier.")
+    default_name = 'cdn-' + secrets.token_hex(3)
+    config['fronting_endpoint_name'] = input(
+        f"Edge endpoint label (becomes part of the public hostname) [{default_name}]: ").strip() or default_name
+    print("Origin protocol: https needs a CA-issued certificate on the redirector (DNS for")
+    print(f"{config['redirector_subdomain']}.{config['domain']} must reach it when the deploy runs); http needs none.")
+    protocol = input("Edge-to-origin protocol (https/http) [https]: ").strip().lower() or 'https'
+    if protocol not in ('https', 'http'):
+        print(f"{COLORS['RED']}Choose https or http{COLORS['RESET']}")
+        wait_for_input()
+        return
+    config.update(backend_type='c2', deployment_type='fronted_c2_redirector', fronting=True,
+                  fronting_origin_protocol=protocol)
+    print(f"\n{COLORS['GREEN']}Deploying CDN-fronted C2 redirector...{COLORS['RESET']}")
+    execute_redirector_deployment(config)
+
+
 def execute_redirector_deployment(config):
     """Execute redirector infrastructure deployment"""
     clear_screen()
@@ -184,6 +218,8 @@ def execute_redirector_deployment(config):
     print(f"Domain: {config['domain']}")
     print(f"Redirector Type: {config['redirector_type']}")
     print(f"Backend Type: {config.get('backend_type', 'N/A')}")
+    if config.get('fronting'):
+        print(f"Edge: {config['fronting_endpoint_name']} ({config['fronting_origin_protocol']} to origin)")
     
     # Confirm deployment
     if not confirm_action(f"\n{COLORS['YELLOW']}Proceed with redirector deployment?{COLORS['RESET']}", default=False):
@@ -200,6 +236,8 @@ def execute_redirector_deployment(config):
     
     if success:
         print(f"\n{COLORS['GREEN']}Redirector infrastructure deployed successfully!{COLORS['RESET']}")
+        if config.get('edge_hostname'):
+            print(f"{COLORS['GREEN']}Public entry point: https://{config['edge_hostname']}/{COLORS['RESET']}")
         
         if config.get('ssh_after_deploy'):
             from utils.ssh_utils import ssh_to_instance

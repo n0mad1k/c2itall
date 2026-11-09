@@ -338,6 +338,59 @@ class Redirector:
         return report
 
 
+class FrontedRedirector(Redirector):
+    """A redirector whose web ports admit only the provider's edge."""
+    name = 'fronted_redirector'
+    repeat = {}
+
+    def config(self, provider, deployment_id, operator_ip):
+        config = super().config(provider, deployment_id, operator_ip)
+        # The lab domain has no certificate, so the edge reaches the origin over HTTP.
+        config.update(deployment_type='fronted_c2_redirector', fronting=True,
+                      fronting_endpoint_name='cdn-' + uuid.uuid4().hex[:6],
+                      fronting_origin_protocol='http')
+        return config
+
+    def verify(self, context, config):
+        host = config['redirector_subdomain'] + '.' + config['domain']
+        edge_id = config['edge_id']
+        header = config['edge_header']
+        local = 'curl -s -o /dev/null -w \'%{http_code}\' --max-time 10 -H \'Host: ' + host + '\' '
+        report = checks(context, [
+            ('nginx_active', 'test "$(systemctl is-active nginx)" = active'),
+            ('shell_handler_enabled', 'test "$(systemctl is-enabled shell-handler)" = enabled'),
+            ('edge_guard_configured', "sudo -n grep -qs -- '\"" + edge_id + "\" 1;' /etc/nginx/sites-available/default"),
+            ('unfronted_http_dropped', 'test "$(' + local + 'http://127.0.0.1/)" = 000'),
+            ('unfronted_https_dropped', 'test "$(' + local + '-k https://127.0.0.1/)" = 000'),
+            ('fronted_http_served', 'test "$(' + local + '-H \'' + header + ': ' + edge_id + '\' http://127.0.0.1/)" = 200'),
+            ('fronted_https_served', 'test "$(' + local + '-k -H \'' + header + ': ' + edge_id + '\' https://127.0.0.1/)" = 200'),
+            ('sshd_no_password', "sudo -n /usr/sbin/sshd -T | grep -iq '^passwordauthentication no$'"),
+        ])
+        direct = subprocess.run(
+            ['curl', '-ks', '-o', '/dev/null', '--max-time', '15', '-H', 'Host: ' + host,
+             'https://' + context.address + '/'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        require(direct.returncode != 0, 'The origin answered the operator directly despite the edge lockdown')
+        report['origin_closed_to_internet'] = True
+        rules = context.cloud.inbound_rules(config['deployment_id'])
+        web = {source for proto, port, source in rules if port in ('80', '443')}
+        require(len(web) == 1 and '*' not in web and config['operator_ip'] not in str(web),
+                'Fronted redirector web ports are not limited to the edge network: ' + str(rules))
+        report['security_group_rules'] = rules
+        # The edge takes minutes to propagate; the first 200 proves the whole chain.
+        base = ['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '20']
+        url = 'https://' + config['edge_hostname'] + '/'
+        deadline = time.monotonic() + 900
+        while True:
+            status = context.run(base + [url], check=False)
+            if status == '200':
+                break
+            require(time.monotonic() < deadline, 'Edge endpoint never served the origin page: ' + status)
+            time.sleep(20)
+        report['edge_hostname'] = config['edge_hostname']
+        report['served_through_edge'] = True
+        return report
+
+
 class C2:
     name = 'c2'
     repeat = {'aws': False, 'linode': False}
@@ -601,7 +654,7 @@ class Phishing:
         return report
 
 
-WORKLOADS = {cls.name: cls for cls in (AttackBox, Redirector, C2, PayloadServer, Phishing)}
+WORKLOADS = {cls.name: cls for cls in (AttackBox, Redirector, FrontedRedirector, C2, PayloadServer, Phishing)}
 
 
 class Webrunner:

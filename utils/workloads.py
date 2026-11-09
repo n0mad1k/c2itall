@@ -71,8 +71,16 @@ class WorkloadProfile:
         """Raise ValueError when the module inputs cannot be served."""
 
     def inbound_rules(self, config):
-        """Return [{'name', 'protocol', 'port', 'source'}] the provider must open."""
+        """Return [{'name', 'protocol', 'port', 'source'}] the provider must open.
+
+        source is '*', one global IPv4 /32, or 'edge' for the provider's own
+        edge (CDN) network when the profile also asks for an edge.
+        """
         return []
+
+    def edge(self, config):
+        """Return the edge request {'host_header', 'forwarding', 'name'} or None."""
+        return None
 
     def service_variables(self, config, variables):
         """Add the defaults the service playbook expects; return variables."""

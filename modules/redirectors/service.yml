@@ -30,3 +30,4 @@
           - "Redirector Deployment Complete!"
           - "Redirector IP: {{ inventory_hostname }}"
           - "Redirector Domain: {{ redirector_subdomain | default('cdn') }}.{{ domain }} (Update DNS A record)"
+          - "{{ ('Public entry point: https://' ~ edge_hostname ~ '/ (origin answers the edge only)') if edge_hostname | default('') else 'Origin answers the public internet directly' }}"

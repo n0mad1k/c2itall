@@ -20,6 +20,7 @@ class AzureDriver(CloudDriver):
     prefix = 'azure_'
     identity_keys = ('azure_subscription_id', 'azure_resource_group')
     option_keys = ('azure_state_dir', 'azure_cleanup_deadline')
+    supports_edge = True
 
     def gather_config(self):
         return azure_utils.gather_azure_config()
@@ -52,7 +53,9 @@ class AzureDriver(CloudDriver):
             'azure_vm_size': config.get('azure_vm_size', 'Standard_D2as_v4'),
             'azure_os_disk_gb': config.get('azure_os_disk_gb', request.disk_gb),
             'azure_resource_group': group,
-            'azure_inbound_rules': request.inbound_rules,
+            'azure_inbound_rules': [
+                dict(rule, source=azure_utils.EDGE_SOURCE) if rule['source'] == 'edge'
+                else dict(rule) for rule in request.inbound_rules],
             'operator_ip': config['operator_ip'],
             'ssh_private_key_path': request.ssh_private,
             'ssh_key_path': request.ssh_public,
@@ -64,6 +67,8 @@ class AzureDriver(CloudDriver):
         image = config.get('azure_image') or self.image(request.image_role)
         if image:
             result['azure_image'] = image
+        if request.edge:
+            result['azure_edge'] = dict(request.edge)
         return result
 
     def prepare_state(self, infrastructure):
@@ -78,6 +83,12 @@ class AzureDriver(CloudDriver):
     def public_address(self, deployment_id, config):
         state = azure_utils.load_state(deployment_id, config.get('azure_state_dir'))
         return state.get('outputs', {}).get('public_ip', {}).get('value', '')
+
+    def edge_endpoint(self, deployment_id, config):
+        outputs = azure_utils.load_state(deployment_id, config.get('azure_state_dir')).get('outputs', {})
+        return {'edge_id': outputs['edge_id']['value'],
+                'edge_hostname': outputs['edge_hostname']['value'],
+                'edge_header': azure_utils.EDGE_HEADER}
 
     def cleanup(self, request):
         return azure_utils.cleanup_azure(request)

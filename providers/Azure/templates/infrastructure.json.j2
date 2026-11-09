@@ -48,10 +48,54 @@
         "networkProfile": {"networkInterfaces": [{"id": "[resourceId('Microsoft.Network/networkInterfaces', '{{ names.nic }}')]", "properties": {"primary": true, "deleteOption": "Delete"}}]},
         "diagnosticsProfile": {"bootDiagnostics": {"enabled": true}}
       }
-    }
+    }{% if azure_edge %},
+    {
+      "type": "Microsoft.Cdn/profiles", "apiVersion": "2024-02-01",
+      "name": {{ names.edge | tojson }}, "location": "Global", "tags": {{ tags | tojson }},
+      "sku": {"name": "Standard_AzureFrontDoor"},
+      "properties": {"originResponseTimeoutSeconds": 60}
+    },
+    {
+      "type": "Microsoft.Cdn/profiles/afdEndpoints", "apiVersion": "2024-02-01",
+      "name": {{ (names.edge ~ '/' ~ azure_edge.name) | tojson }}, "location": "Global",
+      "dependsOn": ["[resourceId('Microsoft.Cdn/profiles', '{{ names.edge }}')]"],
+      "properties": {"enabledState": "Enabled"}
+    },
+    {
+      "type": "Microsoft.Cdn/profiles/originGroups", "apiVersion": "2024-02-01",
+      "name": {{ (names.edge ~ '/origin') | tojson }},
+      "dependsOn": ["[resourceId('Microsoft.Cdn/profiles', '{{ names.edge }}')]"],
+      "properties": {
+        "loadBalancingSettings": {"sampleSize": 4, "successfulSamplesRequired": 3, "additionalLatencyInMilliseconds": 50},
+        "sessionAffinityState": "Disabled"
+      }
+    },
+    {
+      "type": "Microsoft.Cdn/profiles/originGroups/origins", "apiVersion": "2024-02-01",
+      "name": {{ (names.edge ~ '/origin/vm') | tojson }},
+      "dependsOn": ["[resourceId('Microsoft.Cdn/profiles/originGroups', '{{ names.edge }}', 'origin')]", "[resourceId('Microsoft.Network/publicIPAddresses', '{{ names.public_ip }}')]"],
+      "properties": {
+        "hostName": "[reference(resourceId('Microsoft.Network/publicIPAddresses', '{{ names.public_ip }}'), '2024-05-01').ipAddress]",
+        "httpPort": 80, "httpsPort": 443, "originHostHeader": {{ azure_edge.host_header | tojson }},
+        "priority": 1, "weight": 1000, "enabledState": "Enabled", "enforceCertificateNameCheck": true
+      }
+    },
+    {
+      "type": "Microsoft.Cdn/profiles/afdEndpoints/routes", "apiVersion": "2024-02-01",
+      "name": {{ (names.edge ~ '/' ~ azure_edge.name ~ '/default') | tojson }},
+      "dependsOn": ["[resourceId('Microsoft.Cdn/profiles/afdEndpoints', '{{ names.edge }}', '{{ azure_edge.name }}')]", "[resourceId('Microsoft.Cdn/profiles/originGroups/origins', '{{ names.edge }}', 'origin', 'vm')]"],
+      "properties": {
+        "originGroup": {"id": "[resourceId('Microsoft.Cdn/profiles/originGroups', '{{ names.edge }}', 'origin')]"},
+        "supportedProtocols": ["Http", "Https"], "patternsToMatch": ["/*"],
+        "forwardingProtocol": {{ azure_edge.forwarding | tojson }},
+        "linkToDefaultDomain": "Enabled", "httpsRedirect": "Disabled", "enabledState": "Enabled"
+      }
+    }{% endif %}
   ],
   "outputs": {
     "public_ip": {"type": "string", "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', '{{ names.public_ip }}'), '2024-05-01').ipAddress]"},
-    "vm_id": {"type": "string", "value": "[resourceId('Microsoft.Compute/virtualMachines', '{{ names.vm }}')]"}
+    "vm_id": {"type": "string", "value": "[resourceId('Microsoft.Compute/virtualMachines', '{{ names.vm }}')]"}{% if azure_edge %},
+    "edge_id": {"type": "string", "value": "[reference(resourceId('Microsoft.Cdn/profiles', '{{ names.edge }}'), '2024-02-01').frontDoorId]"},
+    "edge_hostname": {"type": "string", "value": "[reference(resourceId('Microsoft.Cdn/profiles/afdEndpoints', '{{ names.edge }}', '{{ azure_edge.name }}'), '2024-02-01').hostName]"}{% endif %}
   }
 }

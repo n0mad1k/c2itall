@@ -24,8 +24,13 @@ CONFIG_KEYS = frozenset({
     'azure_subscription_id', 'azure_location', 'azure_vm_size',
     'azure_resource_group', 'azure_os_disk_gb', 'operator_ip', 'ssh_key_path',
     'ssh_private_key_path', 'ssh_key_generated', 'azure_inbound_rules',
-    'azure_image',
+    'azure_image', 'azure_edge',
 })
+# Front Door reaches origins from this service tag and stamps this header.
+EDGE_SOURCE = 'AzureFrontDoor.Backend'
+EDGE_HEADER = 'X-Azure-FDID'
+EDGE_FORWARDING = ('HttpsOnly', 'HttpOnly', 'MatchRequest')
+_HOSTNAME = r'[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*'
 DEFAULT_IMAGE = {'publisher': 'Canonical', 'offer': 'ubuntu-24_04-lts',
                  'sku': 'server', 'version': 'latest', 'plan': False}
 UNSUPPORTED_FLAGS = frozenset({'c2_only', 'deploy_c2', 'c2_framework', 'attack_box_deployment',
@@ -271,7 +276,7 @@ def validate_config(config, require_key=True):
         except (TypeError, ValueError):
             raise ValueError('Invalid Azure inbound rule port')
         source = rule['source']
-        if source != '*':
+        if source not in ('*', EDGE_SOURCE):
             try:
                 network = ipaddress.ip_network(
                     source if '/' in str(source) else str(source) + '/32', strict=True)
@@ -292,6 +297,14 @@ def validate_config(config, require_key=True):
         normalized_rules.append({'name': name, 'protocol': protocol,
                                  'port': str(port), 'source': source})
     result['azure_inbound_rules'] = normalized_rules
+    edge = result.get('azure_edge')
+    if edge is not None:
+        if (not isinstance(edge, dict) or set(edge) != {'host_header', 'forwarding', 'name'}
+                or not re.fullmatch(_HOSTNAME, str(edge['host_header']))
+                or edge['forwarding'] not in EDGE_FORWARDING
+                or not re.fullmatch(r'[a-z][a-z0-9-]{0,45}', str(edge['name']))):
+            raise ValueError('Invalid Azure edge request')
+        result['azure_edge'] = {key: str(edge[key]) for key in ('host_header', 'forwarding', 'name')}
     image = result.get('azure_image')
     if image is not None:
         fields = ('publisher', 'offer', 'sku', 'version')
@@ -331,13 +344,16 @@ def resource_ids(config):
     prefix = (f"/subscriptions/{config['azure_subscription_id']}/resourceGroups/"
               f"{config['azure_resource_group']}/providers/")
     name = f"c2itall-{config['deployment_id']}"
-    return {key: prefix + kind + '/' + name + '-' + suffix for key, kind, suffix in [
+    kinds = [
         ('vnet', 'Microsoft.Network/virtualNetworks', 'vnet'),
         ('nsg', 'Microsoft.Network/networkSecurityGroups', 'nsg'),
         ('public_ip', 'Microsoft.Network/publicIPAddresses', 'ip'),
         ('nic', 'Microsoft.Network/networkInterfaces', 'nic'),
         ('vm', 'Microsoft.Compute/virtualMachines', 'vm'),
-        ('os_disk', 'Microsoft.Compute/disks', 'osdisk')]}
+        ('os_disk', 'Microsoft.Compute/disks', 'osdisk')]
+    if config.get('azure_edge'):
+        kinds.append(('edge', 'Microsoft.Cdn/profiles', 'edge'))
+    return {key: prefix + kind + '/' + name + '-' + suffix for key, kind, suffix in kinds}
 
 
 _STORE = StateStore(validate=lambda state: validate_config(state, require_key=False),
@@ -393,8 +409,12 @@ def validate_ownership(state, group, resources):
     if not group or group.get('id', '').lower() != expected_group.lower() or any((group.get('tags') or {}).get(k) != v for k, v in tags.items()):
         raise ValueError('Refusing foreign resource group or subscription')
     expected = {v.lower() for v in state['planned_resource_ids'].values()}
+    edge = (state['planned_resource_ids'].get('edge') or '').lower()
     for resource in resources:
         rid = resource.get('id', '').lower()
+        if edge and rid.startswith(edge + '/'):
+            # Endpoints, origin groups and routes live under the owned profile.
+            continue
         if rid not in expected:
             raise ValueError(f'Refusing unexpected resource: {rid}')
         # The managed disk created implicitly by Compute may not inherit VM tags.
@@ -416,7 +436,8 @@ def render_template(config):
     from jinja2 import Environment, FileSystemLoader, StrictUndefined
     normalized = validate_config(config)
     image = normalized.get('azure_image') or DEFAULT_IMAGE
-    context = dict(normalized, names={k: v.rsplit('/', 1)[1] for k, v in resource_ids(normalized).items()},
+    context = dict(normalized, azure_edge=normalized.get('azure_edge'),
+                   names={k: v.rsplit('/', 1)[1] for k, v in resource_ids(normalized).items()},
                    ssh_public_key=Path(normalized['ssh_key_path']).read_text().strip(),
                    image_reference={k: image[k] for k in ('publisher', 'offer', 'sku', 'version')},
                    image_plan=({'name': image['sku'], 'product': image['offer'],
@@ -608,11 +629,14 @@ def _cleanup_azure_locked(config):
     """Recover from durable intent; fail closed before any cloud deletion."""
     from utils.deployment_engine import execute_playbook
     directory = config.get('azure_state_dir')
-    deadline = config.get('azure_cleanup_deadline', time.monotonic() + 600)
+    deadline = config.get('azure_cleanup_deadline')
     state = None
     try:
         with interruption_handlers():
             state = load_state(config['deployment_id'], directory)
+            if deadline is None:
+                # A Front Door profile takes minutes longer to delete than a VM.
+                deadline = time.monotonic() + (1800 if state.get('azure_edge') else 600)
             for key in ('azure_subscription_id', 'azure_resource_group', 'ownership_marker'):
                 if key in config and config[key] != state[key]:
                     raise ValueError(f'Cleanup {key} does not match saved state')

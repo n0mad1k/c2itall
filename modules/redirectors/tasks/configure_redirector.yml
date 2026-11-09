@@ -382,6 +382,14 @@
     redirector_cert: "{{ letsencrypt_cert.stat.exists | ternary('/etc/letsencrypt/live/' ~ redirector_subdomain ~ '.' ~ domain ~ '/fullchain.pem', '/etc/nginx/conf.d/selfsigned.crt') }}"
     redirector_key: "{{ letsencrypt_cert.stat.exists | ternary('/etc/letsencrypt/live/' ~ redirector_subdomain ~ '.' ~ domain ~ '/privkey.pem', '/etc/nginx/conf.d/selfsigned.key') }}"
 
+- name: Install the shared redirector site behaviour
+  template:
+    src: "../templates/redirector-site-common.conf.j2"
+    dest: /etc/nginx/snippets/redirector-site.conf
+    mode: '0644'
+    owner: root
+    group: root
+
 # Configure nginx for dual HTTP/HTTPS with complete encryption
 - name: Configure NGINX for secure C2 redirection
   template:

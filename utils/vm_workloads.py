@@ -65,10 +65,14 @@ class SingleVmAdapter(WorkloadAdapter):
             # The module key is shared by every VM of this deployment.
             key = Path(str(Path(config['ssh_key_path']).expanduser()).removesuffix('.pub'))
             generated = False
+        edge = self.profile.edge(config)
+        if edge and not self.driver.supports_edge:
+            raise ValueError('{0} cannot front {1} with an edge'.format(
+                self.driver.provider, self._label()))
         return ProvisionRequest(
             deployment_id, self.profile.workload, self.profile.inbound_rules(config),
             self.profile.image_role_for(config), self.profile.disk_gb(config),
-            str(key) + '.pub', str(key), generated)
+            str(key) + '.pub', str(key), generated, edge=edge)
 
     def _infrastructure_config(self, config):
         return self.driver.plan(config, self._request(config))
@@ -164,6 +168,8 @@ class SingleVmAdapter(WorkloadAdapter):
             config.update({self.profile.address_key: str(parsed),
                            'ssh_user': self.driver.ssh_user,
                            'ssh_key': infrastructure['ssh_private_key_path']})
+            if self.profile.edge(config):
+                config.update(self.driver.edge_endpoint(infrastructure['deployment_id'], config))
             if not self._run_service_playbook(config):
                 return self._recover(config, infrastructure)
             from .deployment_engine import save_deployment_info

