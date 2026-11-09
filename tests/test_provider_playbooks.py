@@ -42,5 +42,19 @@ class ProviderPlaybookSyntaxTests(unittest.TestCase):
                     result.stdout + result.stderr,
                 )
 
+    def test_attack_box_handles_packages_missing_from_current_cloud_images(self):
+        content = (ROOT / "modules/attack-box/tasks/configure_attack_box.yml").read_text()
+        base = content[content.index("Select required packages for the attack-box image"):
+                       content.index("register: apt_install_result")]
+        self.assertNotIn("libdnet-dev", content)
+        self.assertIn("libdumbnet-dev", content)
+        self.assertNotIn("- outguess", base)
+        self.assertNotIn("- bless", base)
+        self.assertIn("Check availability of optional attack-box packages", content)
+        self.assertIn("Install available optional attack-box packages", content)
+        self.assertIn("attack_box_kali_only_packages:\n      - recon-ng", content)
+        self.assertIn("Install base packages in one transaction", content)
+        self.assertNotIn('name: "{{ item }}"', base)
+
 if __name__ == "__main__":
     unittest.main()
