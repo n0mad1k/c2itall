@@ -117,8 +117,7 @@ FIXES_*.md
 FIXES.md
 GATE_*.md
 .codex-state/
-deployments/azure/
-deployments/chat/
+deployments/
 artifacts/takserver/
 
 # Payloads pulled from deployed C2 servers
