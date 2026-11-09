@@ -94,7 +94,10 @@ class ChatServerTests(unittest.TestCase):
                 "\n    - name:", 1)[0]
         self.assertIn("- --config", api_check)
         self.assertIn("stdin: |", api_check)
+        self.assertIn('write-out = "%{http_code}"', api_check)
+        self.assertIn("failed_when: false", api_check)
         self.assertNotIn("- --cert", api_check)
+        self.assertIn("Require authenticated TAK administration API access", playbook)
         self.assertNotIn("atakatak", playbook)
         self.assertNotIn("protocol: udp\n        port: \"8087\"", playbook)
 

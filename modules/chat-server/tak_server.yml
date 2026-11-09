@@ -269,15 +269,28 @@
           - --config
           - "-"
         stdin: |
-          fail
           silent
           show-error
           insecure
+          output = "/dev/null"
+          write-out = "%{http_code}"
           cert-type = "P12"
           cert = "/opt/tak/certs/files/{{ tak_admin_name }}.p12:{{ tak_cert_password }}"
           url = "https://127.0.0.1:8443/Marti/api/version"
+      register: tak_admin_api_probe
       changed_when: false
+      failed_when: false
       no_log: true
+
+    - name: Require authenticated TAK administration API access
+      assert:
+        that:
+          - tak_admin_api_probe.rc == 0
+          - tak_admin_api_probe.stdout == "200"
+        fail_msg: >-
+          TAK administration API probe failed
+          (curl_rc={{ tak_admin_api_probe.rc | default('unknown') }},
+          http_status={{ tak_admin_api_probe.stdout | default('none') | trim }})
 
     - name: Create TAK connection-package directories
       file:
