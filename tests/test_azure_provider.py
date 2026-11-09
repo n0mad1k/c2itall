@@ -2085,6 +2085,10 @@ class RoutingAndTemplateTests(AzureFixture):
 
     def test_full_attack_box_skips_absent_optional_theme_assets(self):
         source = (ROOT / 'modules/attack-box/tasks/configure_attack_box.yml').read_text()
+        self.assertNotIn('ansible_date_time', source)
+        self.assertIn('name: plocate', source)
+        updatedb = source.split('- name: Update locate database', 1)[1].split('\n- name:', 1)[0]
+        self.assertNotIn('ignore_errors', updatedb)
         for task in (
                 'Create themes directory', 'Upload terminal theme installer script',
                 'Upload DC27 dconf theme file', 'Add terminal theme alias to bashrc'):
