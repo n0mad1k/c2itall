@@ -1,0 +1,212 @@
+---
+# Run against the lab's recorded LUDUS host (utils.lab.run_member_playbook).
+# `ludus_action`: deploy | roles | rm | snapshot | revert | status | logs.
+# `ludus_limit` / `ludus_only_roles` are optional extras for the 'roles' action.
+# rangeState parsing goes through a tiny inline python3 helper because
+# `ludus range status --json` without 'all' was not independently confirmed
+# to return a bare object vs. a one-item array; this works either way.
+- name: Manage the LUDUS range on this host
+  hosts: ludushosts
+  become: true
+  gather_facts: false
+  vars:
+    ludus_url: https://127.0.0.1:8080
+    range_state_py: |
+      import json, subprocess
+      out = subprocess.run(['ludus', 'range', 'status', '--json', '--url', '{{ ludus_url }}'],
+                            capture_output=True, text=True, check=True).stdout
+      data = json.loads(out)
+      row = data[0] if isinstance(data, list) else data
+      print(row.get('rangeState', 'UNKNOWN'))
+  tasks:
+    - name: Read the lab environment file
+      ansible.builtin.slurp:
+        src: /root/.ludus-lab.env
+      register: ludus_env_raw
+      no_log: true
+
+    - name: Extract the lab API key
+      ansible.builtin.set_fact:
+        ludus_lab_api_key: "{{ (ludus_env_raw.content | b64decode) | regex_search('LUDUS_API_KEY=(.*)', '\\1') | first }}"
+      no_log: true
+
+    - name: Write the rendered range config
+      ansible.builtin.copy:
+        content: "{{ range_config_content }}"
+        dest: /root/lab-range-config.yml
+        mode: '0600'
+      no_log: true
+
+    - name: Wait for the needed templates to be built
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import json, subprocess, sys
+            names = {'win2022-server-x64-template', 'win11-22h2-x64-enterprise-template'}
+            out = subprocess.run(['ludus', 'templates', 'list', '--json', '--url', '{{ ludus_url }}'],
+                                  capture_output=True, text=True, check=True).stdout
+            pending = [row for row in json.loads(out) if row.get('name') in names
+                       and 'not built' in str(row.get('status', '')).lower()]
+            sys.exit(1 if pending else 0)
+      environment:
+        LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
+      register: ludus_templates_ready
+      until: ludus_templates_ready.rc == 0
+      retries: 360
+      delay: 30
+      changed_when: false
+      no_log: true
+      when: ludus_action == 'deploy'
+
+    - name: Apply the range config
+      ansible.builtin.command:
+        argv: [ludus, range, config, set, -f, /root/lab-range-config.yml, --url, "{{ ludus_url }}"]
+      environment:
+        LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
+      changed_when: true
+      no_log: true
+
+    - name: Check the range's state before this action
+      ansible.builtin.command:
+        argv: [python3, -c, "{{ range_state_py }}"]
+      environment:
+        LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
+      register: ludus_state_before
+      changed_when: false
+      no_log: true
+      when: ludus_action == 'deploy'
+
+    - name: Deploy the range
+      ansible.builtin.command:
+        argv: [ludus, range, deploy, --url, "{{ ludus_url }}"]
+      environment:
+        LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
+      when: >-
+        ludus_action == 'deploy' and
+        (ludus_force | default(false) or ludus_state_before.stdout | trim != 'SUCCESS')
+      changed_when: true
+      no_log: true
+
+    - name: Run the requested user-defined roles
+      ansible.builtin.command:
+        argv: >-
+          {{ ['ludus', 'range', 'deploy', '-t', 'user-defined-roles', '--url', ludus_url]
+             + (['--limit', ludus_limit] if ludus_limit is defined else [])
+             + (['--only-roles', ludus_only_roles] if ludus_only_roles is defined else []) }}
+      environment:
+        LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
+      when: ludus_action == 'roles'
+      changed_when: true
+      no_log: true
+
+    - name: Destroy the range's VMs (the range itself stays)
+      ansible.builtin.command:
+        argv: [ludus, range, rm, --no-prompt, --url, "{{ ludus_url }}"]
+      environment:
+        LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
+      when: ludus_action == 'rm'
+      changed_when: true
+      no_log: true
+
+    - name: Snapshot the range as 'baseline'
+      ansible.builtin.command:
+        argv: [ludus, snapshots, create, -d, baseline, --url, "{{ ludus_url }}"]
+      environment:
+        LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
+      when: ludus_action == 'snapshot'
+      changed_when: true
+      no_log: true
+
+    - name: Revert the range to its baseline snapshot
+      ansible.builtin.command:
+        argv: [ludus, snapshots, revert, --url, "{{ ludus_url }}"]
+      environment:
+        LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
+      when: ludus_action == 'revert'
+      changed_when: true
+      no_log: true
+
+    - name: Report the range status
+      ansible.builtin.command:
+        argv: [ludus, range, status, --url, "{{ ludus_url }}"]
+      environment:
+        LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
+      register: ludus_status_report
+      changed_when: false
+      no_log: true
+      when: ludus_action == 'status'
+
+    - name: Print the range status
+      ansible.builtin.debug:
+        msg: "{{ ludus_status_report.stdout_lines }}"
+      when: ludus_action == 'status'
+
+    - name: Tail the range logs
+      ansible.builtin.command:
+        argv: [ludus, range, logs, -t, '200', --url, "{{ ludus_url }}"]
+      environment:
+        LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
+      register: ludus_logs_report
+      changed_when: false
+      no_log: true
+      when: ludus_action == 'logs'
+
+    - name: Print the tailed logs
+      ansible.builtin.debug:
+        msg: "{{ ludus_logs_report.stdout_lines }}"
+      when: ludus_action == 'logs'
+
+    - name: Poll a deploy or role run to a terminal state
+      when: ludus_action in ['deploy', 'roles']
+      block:
+        - name: Poll until the range reaches SUCCESS or ERROR
+          ansible.builtin.command:
+            argv: [python3, -c, "{{ range_state_py }}"]
+          environment:
+            LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
+          register: ludus_state_after
+          until: ludus_state_after.stdout | trim in ['SUCCESS', 'ERROR']
+          retries: 240
+          delay: 30
+          changed_when: false
+          no_log: true
+
+        - name: Tail the range logs on failure
+          ansible.builtin.command:
+            argv: [ludus, range, logs, -t, '200', --url, "{{ ludus_url }}"]
+          environment:
+            LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
+          register: ludus_failure_logs
+          changed_when: false
+          no_log: true
+          when: ludus_state_after.stdout | trim == 'ERROR'
+
+        - name: Fail loudly with the tailed logs
+          ansible.builtin.fail:
+            msg: "LUDUS range action failed; last logs:\n{{ ludus_failure_logs.stdout }}"
+          when: ludus_state_after.stdout | trim == 'ERROR'
+
+        - name: Take the baseline snapshot and save the inventory on first success
+          when: ludus_action == 'deploy' and ludus_state_before.stdout | trim != 'SUCCESS'
+          block:
+            - name: Snapshot 'baseline'
+              ansible.builtin.command:
+                argv: [ludus, snapshots, create, -d, baseline, --url, "{{ ludus_url }}"]
+              environment:
+                LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
+              changed_when: true
+              no_log: true
+
+            - name: Save the range inventory
+              ansible.builtin.shell: "ludus range inventory --url {{ ludus_url }} > /root/lab-inventory.ini"
+              environment:
+                LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
+              changed_when: true
+              no_log: true
+
+            - name: Keep the inventory private
+              ansible.builtin.file:
+                path: /root/lab-inventory.ini
+                mode: '0600'
