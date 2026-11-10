@@ -269,6 +269,15 @@ class FakeProviderTests(unittest.TestCase):
         self.assertEqual(self.driver.states, {})
 
 
+class RunCommandTests(unittest.TestCase):
+    def test_timeout_keeps_the_output_printed_so_far(self):
+        import subprocess
+        from utils.controller_io import run_command
+        with self.assertRaises(subprocess.TimeoutExpired) as caught:
+            run_command(['sh', '-c', 'echo partial; sleep 30'], timeout=1)
+        self.assertIn('partial', caught.exception.output)
+
+
 class ProfileContractTests(unittest.TestCase):
     def test_every_profiled_workload_is_complete_with_an_existing_play(self):
         self.assertEqual(profiled_workloads(), [

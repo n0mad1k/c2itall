@@ -73,16 +73,20 @@ def run_command(argv, timeout=60, deadline=None, check=True, env=None, label='Co
                                    text=True, start_new_session=True)
         try:
             stdout, stderr = process.communicate(timeout=timeout)
-        except BaseException:
+        except BaseException as exc:
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
             try:
-                process.communicate(timeout=5)
+                stdout, stderr = process.communicate(timeout=5)
             except subprocess.TimeoutExpired:
                 process.stdout.close()
                 process.stderr.close()
+            else:
+                if isinstance(exc, subprocess.TimeoutExpired):
+                    # Keep what the command printed before it was cut off.
+                    exc.output, exc.stderr = stdout, stderr
             raise
     result = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
     if result.returncode and check:

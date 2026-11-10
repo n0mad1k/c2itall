@@ -11,6 +11,7 @@ import logging
 import os
 from pathlib import Path
 import shlex
+import subprocess
 import tempfile
 import time
 
@@ -182,22 +183,30 @@ class SingleVmAdapter(WorkloadAdapter):
                 inventory_path = Path(temporary) / 'inventory.ini'
                 inventory_path.write_text(inventory)
                 inventory = str(inventory_path)
-            result = self.driver.run_command([
-                'ansible-playbook', playbook,
-                '-i', inventory, '-u', self.driver.ssh_user,
-                '--private-key', str(private_key),
-                '--extra-vars', '@' + str(variables_path),
-            ], timeout=timeout, deadline=deadline, check=False)
-        log_path = log_dir / (config['deployment_id'] + '-' + log_suffix + '.log')
-        with secure_directory(log_dir) as directory:
-            flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
-            if hasattr(os, 'O_NOFOLLOW'):
-                flags |= os.O_NOFOLLOW
-            fd = os.open(log_path.name, flags, 0o600, dir_fd=directory)
-            with os.fdopen(fd, 'a') as stream:
-                regular_file(stream.fileno())
-                stream.write(result.stdout)
-                stream.write(result.stderr)
+            log_path = log_dir / (config['deployment_id'] + '-' + log_suffix + '.log')
+
+            def append_log(*chunks):
+                with secure_directory(log_dir) as directory:
+                    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+                    if hasattr(os, 'O_NOFOLLOW'):
+                        flags |= os.O_NOFOLLOW
+                    fd = os.open(log_path.name, flags, 0o600, dir_fd=directory)
+                    with os.fdopen(fd, 'a') as stream:
+                        regular_file(stream.fileno())
+                        for chunk in chunks:
+                            stream.write(chunk or '')
+
+            try:
+                result = self.driver.run_command([
+                    'ansible-playbook', playbook,
+                    '-i', inventory, '-u', self.driver.ssh_user,
+                    '--private-key', str(private_key),
+                    '--extra-vars', '@' + str(variables_path),
+                ], timeout=timeout, deadline=deadline, check=False)
+            except subprocess.TimeoutExpired as exc:
+                append_log(exc.output, exc.stderr, '\n[play cut off after ' + str(int(exc.timeout)) + ' s]\n')
+                raise
+        append_log(result.stdout, result.stderr)
         if result.returncode:
             logging.error('%s %s service playbook failed (%s); see %s',
                           self.driver.provider, self._label(), result.returncode, log_path)
