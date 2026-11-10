@@ -56,6 +56,16 @@ def _wait_for_port(host, port, timeout=2.0):
     return False
 
 
+class SftpSourceTests(unittest.TestCase):
+    def test_pam_logins_count_as_the_sftp_source(self):
+        receiver = _load_module(RECEIVER_PATH, 'exfil_receiver_sftp')
+        journal = subprocess.CompletedProcess([], 0, stdout=(
+            'Accepted keyboard-interactive/pam for drop from 198.18.0.1 port 49834 ssh2\n'
+            'pam_unix(sshd:session): session opened for user drop(uid=1000) by drop(uid=0)\n'), stderr='')
+        with mock.patch.object(receiver.subprocess, 'run', return_value=journal):
+            self.assertEqual(receiver._sftp_source(), '198.18.0.1')
+
+
 class ExfilReceiverServeTests(unittest.TestCase):
     """serve(): basic auth, name validation, length, upload, and the audit gate."""
 

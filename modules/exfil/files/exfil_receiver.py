@@ -219,7 +219,8 @@ def _sftp_source():
     result = subprocess.run(
         ['journalctl', '-u', 'sshd-exfil', '-o', 'cat', '--since', '-1h'],
         capture_output=True, text=True, check=False)
-    matches = re.findall(r'Accepted password for drop from (\S+)', result.stdout)
+    # sshd logs 'password' or, with PAM, 'keyboard-interactive/pam'.
+    matches = re.findall(r'Accepted \S+ for drop from (\S+)', result.stdout)
     return matches[-1] if matches else None
 
 
