@@ -292,9 +292,28 @@ class Live:
     def verify_ludus_host(self, deployment_id):
         result = self.member_ssh(deployment_id, "sudo -n ludus-install-status 2>&1 | tail -1; sudo -n stat -c %a /root/.ludus-lab.env; "
                                  "systemctl is-active lab-datasets lab-routing; sudo -n iptables -S LAB_API | grep -c 8080; "
-                                 "ls /srv/lab-datasets | grep -c manifest", timeout=300)
+                                 "ls /srv/lab-datasets | grep -c manifest; sudo -n pveversion", timeout=300)
         self.step('ludus_host.installed', result.returncode == 0 and '600' in result.stdout.split()
-                  and 'active' in result.stdout, result.stdout + result.stderr)
+                  and 'active' in result.stdout and 'pve-manager' in result.stdout, result.stdout + result.stderr)
+        lab = lab_mod.load(self.name)
+        number = (lab_mod.read_secret(lab, 'ludus.json') or {}).get('range_number')
+        cidr = '10.{0}.0.0/16'.format(number)
+        hub = self.gateway_ssh('sudo -n wg show wg0 allowed-ips')
+        self.step('ludus_host.range_routed_through_hub', cidr in lab['range_cidrs'] and cidr in hub.stdout,
+                  str(number) + ' ' + hub.stdout[-300:])
+        self.step('ludus_host.repeat_deploy_is_a_no_op', deploy_infrastructure(self.member_configs['ludus_host']))
+        if not self.args.range_deploy:
+            return
+        ludus = load_module('modules/ludus/deploy_ludus.py')
+        self.step('ludus_range.deployed', ludus.run_range_action(self.name, 'deploy'))
+        self.step('ludus_range.verified', ludus.run_range_action(
+            self.name, 'roles', extra_variables={'ludus_only_roles': 'lab_verify'}))
+        dc = '10.{0}.10.10'.format(number)
+        probe = self.gateway_ssh("for p in 445 389; do timeout 5 bash -c 'cat < /dev/null > /dev/tcp/" + dc + "/'$p && echo open-$p; done")
+        self.step('ludus_range.dc01_reachable_from_hub', 'open-445' in probe.stdout and 'open-389' in probe.stdout,
+                  probe.stdout + probe.stderr)
+        self.step('ludus_range.baseline_snapshot', 'baseline' in self.member_ssh(
+            deployment_id, "sudo -n sh -c '. /root/.ludus-lab.env; ludus snapshots list --url $LUDUS_URL' 2>&1").stdout)
 
     # --- flow ----------------------------------------------------------------
     def standin(self):
@@ -408,6 +427,8 @@ def main(argv=None):
     parser.add_argument('--member-hosts', default='', help='local/flokinet: hosts to adopt, one per member')
     parser.add_argument('--bootstrap-key', type=Path, default=Path.home() / '.ssh' / 'c2deploy_local')
     parser.add_argument('--ludus-range', default='mini')
+    parser.add_argument('--range-deploy', action='store_true',
+                        help='after the LUDUS host: deploy the range, run lab_verify, probe DC01 (hours)')
     parser.add_argument('--operator-ip')
     parser.add_argument('--keep', action='store_true', help='leave the lab running (the run then does not pass)')
     parser.add_argument('--activate', action='store_true')

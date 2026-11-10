@@ -54,7 +54,8 @@
         LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
       register: ludus_templates_ready
       until: ludus_templates_ready.rc == 0
-      retries: 360
+      # Nested VirtualBox builds the two Windows templates in up to six hours.
+      retries: 720
       delay: 30
       changed_when: false
       no_log: true

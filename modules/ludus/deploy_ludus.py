@@ -109,16 +109,28 @@ def execute_ludus_deployment(config):
         return False
     from utils.deployment_engine import deploy_infrastructure
     success = deploy_infrastructure(config)
-    if success:
-        lab = lab_mod.load(config['lab'])
-        lab_mod.write_secret(lab, 'ludus.json', {
-            'lab_range': config['lab_range'], 'weaknesses': config['ludus_weaknesses'],
-            'falcon_cid': config['falcon_cid'], 'falcon_installer_path': config['falcon_installer_path'],
-        })
-        print(f"\n{COLORS['GREEN']}LUDUS host deployed at {config['ludus_host_ip']} inside lab {config['lab']}.{COLORS['RESET']}")
-    else:
+    if not success:
         print(f"\n{COLORS['RED']}LUDUS host deployment failed.{COLORS['RESET']}")
-    return success
+        return False
+    lab = lab_mod.load(config['lab'])
+    lab_mod.write_secret(lab, 'ludus.json', {
+        'lab_range': config['lab_range'], 'weaknesses': config['ludus_weaknesses'],
+        'falcon_cid': config['falcon_cid'], 'falcon_installer_path': config['falcon_installer_path'],
+        'range_number': route_range(config['lab'], config['deployment_id']),
+    })
+    print(f"\n{COLORS['GREEN']}LUDUS host deployed at {config['ludus_host_ip']} inside lab {config['lab']}.{COLORS['RESET']}")
+    return True
+
+
+def route_range(lab_name, deployment_id):
+    """Read the range number LUDUS assigned and push 10.<N>.0.0/16 to the hub and every member."""
+    result = lab_mod.member_command(lab_name, deployment_id, [
+        'sudo', '-n', 'sh', '-c', '. /root/.ludus-lab.env && echo "$LAB_RANGE_NUMBER"'])
+    number = int(result.stdout.strip())
+    lab_mod.set_range(lab_mod.load(lab_name), deployment_id, '10.{0}.0.0/16'.format(number))
+    if not lab_mod.refresh(lab_name):
+        print(f"{COLORS['YELLOW']}Range route not pushed to every member yet; rerun the lab refresh{COLORS['RESET']}")
+    return number
 
 
 def _render_for(lab_name, implant=None):

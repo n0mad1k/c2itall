@@ -264,3 +264,20 @@ class SecretPersistenceTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class RangeRoutingTests(SecretPersistenceTests):
+    def test_host_deployment_routes_the_assigned_range_through_the_hub(self):
+        lab = lab_mod.create('unit')
+        lab['members']['ludus-1'] = {'lab_ip': '198.18.0.12', 'workload': 'ludus_host', 'status': 'ready',
+                                     'provider': 'fakecloud'}
+        lab_mod.save(lab)
+        answer = subprocess.CompletedProcess([], 0, '7\n', '')
+        with mock.patch.object(lab_mod, 'member_command', return_value=answer) as command, \
+                mock.patch.object(lab_mod, 'refresh', return_value=True) as refresh:
+            self.assertEqual(self.deploy_ludus.route_range('unit', 'ludus-1'), 7)
+        self.assertIn('LAB_RANGE_NUMBER', command.call_args.args[2][-1])
+        refresh.assert_called_once_with('unit')
+        lab = lab_mod.load('unit')
+        self.assertEqual(lab['range_cidrs'], ['10.7.0.0/16'])
+        self.assertEqual(lab['members']['ludus-1']['hub_routes'], ['10.7.0.0/16'])
