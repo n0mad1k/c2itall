@@ -10,18 +10,18 @@
 # sha256 come from ludus_2.3.10_checksums.txt in the package registry.
 - name: Check whether this host already serves the lab
   ansible.builtin.stat:
-    path: /root/.ludus-lab.env
-  register: ludus_lab_env
+    path: /opt/ludus-lab/.lab-user-ready
+  register: ludus_lab_ready
 
 - name: Check whether LUDUS is already installed
   ansible.builtin.stat:
     path: /opt/ludus/install/root-api-key
   register: ludus_installed
 
-# A host that finished the install but never got its lab user (an interrupted
-# run) picks up at the user step; a host that has both is left alone.
+# A host that finished the install but never completed the lab user, roles and
+# collections (an interrupted run) picks them up again; a ready host is left alone.
 - name: Install LUDUS and create the lab user
-  when: not ludus_lab_env.stat.exists
+  when: not ludus_lab_ready.stat.exists
   vars:
     ludus_server_url: https://gitlab.com/api/v4/projects/54052321/packages/generic/ludus/2.3.10/ludus-server-2.3.10
     ludus_server_sha256: 544c3227fbe4c0772821bac68636997a0b18964efe11ab71b3218f6c4b78c7d9
@@ -162,6 +162,19 @@
       register: ludus_root_key_raw
       no_log: true
 
+    - name: List the LUDUS users
+      ansible.builtin.command:
+        argv: [ludus, users, list, --json, --url, 'https://127.0.0.1:8081']
+      environment:
+        LUDUS_API_KEY: "{{ (ludus_root_key_raw.content | b64decode).strip() }}"
+      register: ludus_users
+      changed_when: false
+      no_log: true
+
+    - name: Note whether the lab user already exists
+      ansible.builtin.set_fact:
+        ludus_user_exists: "{{ 'c2lab' in (ludus_users.stdout | from_json | map(attribute='userID') | list) }}"
+
     - name: Generate the lab user's LUDUS password
       ansible.builtin.command: openssl rand -base64 24
       register: ludus_lab_user_password
@@ -193,11 +206,25 @@
       changed_when: true
       # The client prints the server's error on stderr and exits 0 under --json.
       failed_when: "'apiKey' not in ludus_user_add.stdout"
+      when: not ludus_user_exists
+      no_log: true
+
+    - name: Issue a fresh API key to the existing lab user
+      ansible.builtin.command:
+        argv: [ludus, user, apikey, --user, c2lab, --no-prompt, --json, --url, 'https://127.0.0.1:8081']
+      environment:
+        LUDUS_API_KEY: "{{ (ludus_root_key_raw.content | b64decode).strip() }}"
+      register: ludus_user_key
+      changed_when: true
+      failed_when: "'apiKey' not in ludus_user_key.stdout"
+      when: ludus_user_exists
       no_log: true
 
     - name: Record the lab user's API key
       ansible.builtin.set_fact:
-        ludus_lab_api_key: "{{ (ludus_user_add.stdout | from_json).apiKey }}"
+        ludus_lab_api_key: >-
+          {{ (ludus_user_key.stdout | from_json).result.apiKey if ludus_user_exists
+             else (ludus_user_add.stdout | from_json).apiKey }}
       no_log: true
 
     - name: List the lab user's default range
@@ -229,7 +256,10 @@
       environment:
         LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
       loop: [microsoft.ad, community.windows]
-      changed_when: true
+      register: ludus_collection
+      changed_when: ludus_collection.rc == 0
+      # LUDUS ships both globally; the client then reports a failure.
+      failed_when: ludus_collection.rc != 0 and 'already installed' not in ludus_collection.stderr
       no_log: true
 
     - name: Copy this lab's roles to the host
@@ -249,9 +279,15 @@
     # `ludus ansible role add -d ... -f` on the host until this gets an update path.
     - name: Register each role with LUDUS
       ansible.builtin.command:
-        argv: [ludus, ansible, role, add, -d, "/opt/ludus-lab/roles/{{ item }}", --url, 'https://127.0.0.1:8080']
+        argv: [ludus, ansible, role, add, -f, -d, "/opt/ludus-lab/roles/{{ item }}", --url, 'https://127.0.0.1:8080']
       environment:
         LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
       loop: [lab_ad_seed, lab_host, lab_falcon, lab_implant, lab_verify]
       changed_when: true
       no_log: true
+
+    - name: Mark the lab user, collections and roles as ready
+      ansible.builtin.file:
+        path: /opt/ludus-lab/.lab-user-ready
+        state: touch
+        mode: '0600'
