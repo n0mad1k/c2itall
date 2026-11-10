@@ -37,7 +37,7 @@ class SpokeRenderTests(unittest.TestCase):
         context = dict(spoke={'lab_ip': '198.18.0.10', 'egress_via_hub': True, 'hub_routes': []},
                        spoke_keys={'stdout_lines': ['PUB', 'PRIV']}, hub_public={'stdout': 'HUB'},
                        lab={'hub': {'public_ip': '203.0.113.5', 'port': 51820}}, allowed_ips=['198.18.0.0/16', '0.0.0.0/0'],
-                       provider_route={'stdout_lines': ['default via 203.0.113.1 dev eth0 proto dhcp metric 100']})
+                       hub_route={'stdout': 'via 203.0.113.1 dev eth0'})
         conf = render('modules/lab/templates/spoke.conf.j2', **context)
         self.assertIn('PostUp = ip route replace 203.0.113.5/32 via 203.0.113.1 dev eth0\n', conf)
         self.assertIn('Endpoint = 203.0.113.5:51820', conf)

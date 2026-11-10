@@ -1,5 +1,6 @@
 ---
-# Join one lab member to the gateway's WireGuard hub. The adapter runs this
+# Join one lab member to the gateway's WireGuard hub as interface lab0 (wg0 is
+# LUDUS's own interface on a LUDUS host). The adapter runs this
 # before the member's own service play with two hosts: the member (reached
 # through the gateway when it has no public address) and the gateway.
 - name: Join the lab overlay
@@ -54,35 +55,58 @@
       delegate_to: "{{ gateway }}"
       changed_when: false
 
-    # The main table keeps the provider's default even once wg-quick owns the
-    # default route (its 0.0.0.0/0 lives in table 51820), so a re-join sees the same answer.
-    - name: Read the provider's default route
-      ansible.builtin.command: ip -4 route show default table main
-      register: provider_route
+    # The main table keeps the provider's routes even once wg-quick owns the
+    # default route (its 0.0.0.0/0 lives in table 51820), so a re-join sees the
+    # same answer; the longest match also covers a hub that is on-link (local labs).
+    - name: Work out how this host reaches the hub outside the tunnel
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import ipaddress, subprocess, sys
+            hub = ipaddress.ip_address(sys.argv[1])
+            best = None
+            for line in subprocess.run(['ip', '-4', 'route', 'show', 'table', 'main'],
+                                       capture_output=True, text=True, check=True).stdout.splitlines():
+                words = line.split()
+                try:
+                    network = ipaddress.ip_network('0.0.0.0/0' if words[0] == 'default' else words[0], strict=False)
+                except ValueError:
+                    continue
+                if hub in network and (best is None or network.prefixlen > best[0].prefixlen):
+                    best = (network, words)
+            out = []
+            for key in ('via', 'dev'):
+                if key in best[1]:
+                    out += [key, best[1][best[1].index(key) + 1]]
+            print(' '.join(out))
+          - "{{ lab.hub.public_ip }}"
+      register: hub_route
       changed_when: false
 
     - name: Write the spoke configuration
       ansible.builtin.template:
         src: templates/spoke.conf.j2
-        dest: /etc/wireguard/wg0.conf
+        dest: /etc/wireguard/lab0.conf
         mode: '0600'
       register: spoke_conf
       no_log: true
 
     - name: Bring the tunnel up
       ansible.builtin.systemd:
-        name: wg-quick@wg0
+        name: wg-quick@lab0
         enabled: true
         state: "{{ 'restarted' if spoke_conf.changed else 'started' }}"
 
     - name: Admit lab traffic arriving through the tunnel
-      ansible.builtin.command: ufw allow in on wg0 from {{ item }}
+      ansible.builtin.command: ufw allow in on lab0 from {{ item }}
       loop: "{{ lab.cidrs + lab.range_cidrs }}"
       changed_when: false
       failed_when: false
 
     - name: Wait for the hub handshake
-      ansible.builtin.shell: wg show wg0 latest-handshakes | awk '{print $2}' | grep -vqx 0
+      ansible.builtin.shell: wg show lab0 latest-handshakes | awk '{print $2}' | grep -vqx 0
       register: handshake
       until: handshake.rc == 0
       retries: 12

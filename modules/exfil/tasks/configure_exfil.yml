@@ -66,7 +66,14 @@
   loop:
     - /var/lib/exfil
     - /var/lib/exfil/manifests
-    - /etc/exfil
+
+- name: Let the exfil service user into its config directory
+  ansible.builtin.file:
+    path: /etc/exfil
+    state: directory
+    owner: root
+    group: exfil
+    mode: '0750'
 
 # dl.min.io stopped serving community binaries (410 Gone); RELEASE.2025-09-07
 # is the last MinIO server release GitHub still has binary assets for.

@@ -160,8 +160,8 @@ class Live:
         native = network is not None
         prefix = workload + '.'
         self.step(prefix + 'registered', member['status'] == 'ready', member)
-        result = self.member_ssh(deployment_id, "sudo -n wg show wg0 latest-handshakes | awk '{print $2}' | grep -vqx 0 && "
-                                 "ip -4 addr show wg0 | grep -q ' " + member['lab_ip'] + "/32' && echo overlay")
+        result = self.member_ssh(deployment_id, "sudo -n wg show lab0 latest-handshakes | awk '{print $2}' | grep -vqx 0 && "
+                                 "ip -4 addr show lab0 | grep -q ' " + member['lab_ip'] + "/32' && echo overlay")
         self.step(prefix + 'overlay_joined', 'overlay' in result.stdout, result.stdout + result.stderr)
         hub = self.gateway_ssh('sudo -n wg show wg0 allowed-ips')
         self.step(prefix + 'hub_routes_member', member['lab_ip'] + '/32' in hub.stdout, hub.stdout)
@@ -212,7 +212,7 @@ class Live:
         member = lab['members'][deployment_id]
         creds = lab_mod.read_secret(lab, 'exfil.json') or {}
         ip = member['lab_ip']
-        listening = self.member_ssh(deployment_id, "ss -ltn | grep -c -E ':(9000|8443|2222) '")
+        listening = self.member_ssh(deployment_id, "ss -ltn | grep -o -E ':(9000|8443|2222) ' | sort -u | wc -l")
         self.step('exfil.listening', listening.stdout.strip() == '3', listening.stdout + listening.stderr)
         env = ' '.join('{0}={1}'.format(key, json.dumps(str(value))) for key, value in creds.items())
         upload = self.gateway_ssh(
@@ -250,8 +250,8 @@ class Live:
         self.step('exfil.repeat_deploy', deploy_infrastructure(self.member_configs['exfil_receiver']))
         after = self.member_ssh(deployment_id, 'sudo -n sha256sum /etc/exfil/minio.env').stdout
         self.step('exfil.credentials_stable_on_repeat', before and before == after, before + after)
-        clean = self.member_ssh(deployment_id, 'sudo -n exfil-receiver clean && ls -A /srv/exfil/http /srv/exfil/sftp/upload | grep -c . || true')
-        self.step('exfil.clean_empties_channels', clean.returncode == 0 and clean.stdout.strip().splitlines()[-1:] in ([], ['0']),
+        clean = self.member_ssh(deployment_id, 'sudo -n exfil-receiver clean >/dev/null && sudo -n find /srv/exfil/http /srv/exfil/sftp/upload -type f | wc -l')
+        self.step('exfil.clean_empties_channels', clean.returncode == 0 and clean.stdout.strip() == '0',
                   clean.stdout[-400:] + clean.stderr[-200:])
 
     def verify_c2(self, deployment_id):

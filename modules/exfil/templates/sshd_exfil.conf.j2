@@ -10,6 +10,7 @@ AllowUsers drop
 AllowTcpForwarding no
 X11Forwarding no
 AllowAgentForwarding no
+Subsystem sftp internal-sftp
 
 Match User drop
     ChrootDirectory /srv/exfil/sftp

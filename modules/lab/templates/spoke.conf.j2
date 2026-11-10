@@ -2,9 +2,8 @@
 Address = {{ spoke.lab_ip }}/32
 PrivateKey = {{ spoke_keys.stdout_lines[1] }}
 {% if spoke.egress_via_hub %}
-{% set route = provider_route.stdout_lines[0].split() %}
 # Everything else leaves through the hub; the hub itself stays on the provider route.
-PostUp = ip route replace {{ lab.hub.public_ip }}/32 via {{ route[route.index('via') + 1] }} dev {{ route[route.index('dev') + 1] }}
+PostUp = ip route replace {{ lab.hub.public_ip }}/32 {{ hub_route.stdout }}
 PostDown = ip route del {{ lab.hub.public_ip }}/32 || true
 {% endif %}
 
