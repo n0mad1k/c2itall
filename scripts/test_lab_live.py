@@ -182,6 +182,31 @@ class Live:
                       flows.stdout.strip())
         getattr(self, 'verify_' + workload, lambda d: None)(deployment_id)
 
+    def flow_log_objects(self, provider, network):
+        if provider == 'aws':
+            import boto3
+            bucket = boto3.client('s3', region_name=network['region'])
+            return bucket.list_objects_v2(Bucket=network['bucket'], MaxKeys=5).get('KeyCount', 0)
+        if provider == 'azure':
+            # Management plane only: the container appears with the first delivered flow log.
+            containers = self.cloud.smoke.az('rest', '--method', 'get', '--url', 'https://management.azure.com'
+                                             + network['storage_account_id'] + '/blobServices/default/containers?api-version=2023-05-01')
+            return sum(1 for item in (containers or {}).get('value', []) if 'flowlog' in item['name'].lower())
+        return 0
+
+    def check_flow_logs(self):
+        """Managed flow logs land minutes after the first member traffic; wait, bounded."""
+        lab = lab_mod.load(self.name)
+        for provider, network in lab['networks'].items():
+            deadline = time.monotonic() + 900
+            count = 0
+            while time.monotonic() < deadline:
+                count = self.flow_log_objects(provider, network)
+                if count:
+                    break
+                time.sleep(30)
+            self.step(provider + '.flow_log_delivered', count > 0, count)
+
     def verify_exfil_receiver(self, deployment_id):
         lab = lab_mod.load(self.name)
         member = lab['members'][deployment_id]
@@ -333,6 +358,8 @@ class Live:
                 if not self.step(workload + '.deployed', ok and deployment_id, deployment_id):
                     continue
                 self.check_member(workload, deployment_id)
+            if args.members and lab_mod.load(self.name)['networks']:
+                self.check_flow_logs()
             self.record('lab-record.json', lab_mod.load(self.name))
             return not self.failed
         finally:
