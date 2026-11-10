@@ -163,11 +163,12 @@ class SingleVmAdapter(WorkloadAdapter):
                 self.driver.provider, self._label()))
         log_dir = self.driver.log_dir(config)
         known_hosts = self._export_ssh_known_hosts(config)
-        variables.update(
-            ansible_python_interpreter='/usr/bin/python3',
-            ansible_ssh_common_args=shlex.join(
-                ssh_options(known_hosts, None, config.get('ssh_proxy'))),
-        )
+        variables['ansible_python_interpreter'] = '/usr/bin/python3'
+        if not isinstance(inventory, dict):
+            # A dict inventory carries per-host SSH arguments (the spoke play's
+            # gateway hop must not inherit the member's proxy); extra-vars would win.
+            variables['ansible_ssh_common_args'] = shlex.join(
+                ssh_options(known_hosts, None, config.get('ssh_proxy')))
         deadline = config.get('service_deadline', time.monotonic() + timeout)
         with tempfile.TemporaryDirectory(prefix='c2itall-service-') as temporary:
             variables_path = Path(temporary) / 'variables.json'

@@ -153,10 +153,13 @@
       After=network.target
 
       [Service]
-      Type=forking
-      ExecStart=/usr/sbin/sshd -f /etc/ssh/sshd_exfil_config
-      PIDFile=/run/sshd-exfil.pid
+      Type=simple
+      RuntimeDirectory=sshd
+      RuntimeDirectoryPreserve=yes
+      ExecStartPre=/usr/sbin/sshd -t -f /etc/ssh/sshd_exfil_config
+      ExecStart=/usr/sbin/sshd -D -e -f /etc/ssh/sshd_exfil_config
       ExecReload=/bin/kill -HUP $MAINPID
+      Restart=on-failure
 
       [Install]
       WantedBy=multi-user.target
@@ -165,8 +168,13 @@
   ansible.builtin.systemd:
     name: sshd-exfil
     enabled: true
-    state: started
+    state: restarted
     daemon_reload: true
+
+- name: Wait for the SFTP port
+  ansible.builtin.wait_for:
+    port: 2222
+    timeout: 60
 
 - name: Install the exfil receiver script
   ansible.builtin.copy:
