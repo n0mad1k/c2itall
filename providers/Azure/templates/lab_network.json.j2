@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "resources": [
+    {
+      "type": "Microsoft.Network/publicIPAddresses", "apiVersion": "2024-05-01",
+      "name": "{{ name }}-nat-ip", "location": {{ location | tojson }}, "tags": {{ tags | tojson }},
+      "sku": {"name": "Standard"}, "properties": {"publicIPAllocationMethod": "Static", "publicIPAddressVersion": "IPv4"}
+    },
+    {
+      "type": "Microsoft.Network/natGateways", "apiVersion": "2024-05-01",
+      "name": "{{ name }}-nat", "location": {{ location | tojson }}, "tags": {{ tags | tojson }},
+      "sku": {"name": "Standard"},
+      "dependsOn": ["[resourceId('Microsoft.Network/publicIPAddresses', '{{ name }}-nat-ip')]"],
+      "properties": {"idleTimeoutInMinutes": 10, "publicIpAddresses": [{"id": "[resourceId('Microsoft.Network/publicIPAddresses', '{{ name }}-nat-ip')]"}]}
+    },
+    {
+      "type": "Microsoft.Network/virtualNetworks", "apiVersion": "2024-05-01",
+      "name": "{{ name }}-vnet", "location": {{ location | tojson }}, "tags": {{ tags | tojson }},
+      "dependsOn": ["[resourceId('Microsoft.Network/natGateways', '{{ name }}-nat')]"],
+      "properties": {
+        "addressSpace": {"addressPrefixes": [{{ cidr | tojson }}]},
+        "subnets": [{"name": "lab", "properties": {"addressPrefix": {{ subnet_cidr | tojson }}, "defaultOutboundAccess": false, "natGateway": {"id": "[resourceId('Microsoft.Network/natGateways', '{{ name }}-nat')]"}}}]
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts", "apiVersion": "2023-05-01",
+      "name": {{ storage_account | tojson }}, "location": {{ location | tojson }}, "tags": {{ tags | tojson }},
+      "sku": {"name": "Standard_LRS"}, "kind": "StorageV2",
+      "properties": {"allowBlobPublicAccess": false, "minimumTlsVersion": "TLS1_2", "supportsHttpsTrafficOnly": true, "accessTier": "Hot"}
+    }
+  ],
+  "outputs": {
+    "vnet_id": {"type": "string", "value": "[resourceId('Microsoft.Network/virtualNetworks', '{{ name }}-vnet')]"},
+    "subnet_id": {"type": "string", "value": "[resourceId('Microsoft.Network/virtualNetworks/subnets', '{{ name }}-vnet', 'lab')]"},
+    "nat_ip": {"type": "string", "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', '{{ name }}-nat-ip'), '2024-05-01').ipAddress]"},
+    "storage_account_id": {"type": "string", "value": "[resourceId('Microsoft.Storage/storageAccounts', '{{ storage_account }}')]"}
+  }
+}

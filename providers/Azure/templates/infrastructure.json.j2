@@ -7,27 +7,28 @@
       "name": {{ names.nsg | tojson }}, "location": {{ azure_location | tojson }}, "tags": {{ tags | tojson }},
       "properties": {"securityRules": [
         {"name": "operator-ssh", "properties": {"priority": 100, "direction": "Inbound", "access": "Allow", "protocol": "Tcp", "sourcePortRange": "*", "destinationPortRange": "22", "sourceAddressPrefix": {{ operator_ip | tojson }}, "destinationAddressPrefix": "*"}}{% for rule in azure_inbound_rules %},
-        {"name": {{ rule.name | tojson }}, "properties": {"priority": {{ 109 + loop.index }}, "direction": "Inbound", "access": "Allow", "protocol": {{ rule.protocol | tojson }}, "sourcePortRange": "*", "destinationPortRange": {{ rule.port | tojson }}, "sourceAddressPrefix": {{ rule.source | tojson }}, "destinationAddressPrefix": "*"}}{% endfor %},
+        {"name": {{ rule.name | tojson }}, "properties": {"priority": {{ 109 + loop.index }}, "direction": "Inbound", "access": "Allow", "protocol": {{ rule.protocol | tojson }}, "sourcePortRange": "*", "destinationPortRange": {{ rule.port | tojson }}, "sourceAddressPrefix": {{ rule.source | tojson }}, "destinationAddressPrefix": "*"}}{% endfor %}{% if azure_lab %}{% for cidr in azure_lab.cidrs %},
+        {"name": "allow-lab-{{ loop.index }}", "properties": {"priority": {{ 199 + loop.index }}, "direction": "Inbound", "access": "Allow", "protocol": "*", "sourcePortRange": "*", "destinationPortRange": "*", "sourceAddressPrefix": {{ cidr | tojson }}, "destinationAddressPrefix": "*"}}{% endfor %}{% endif %},
         {"name": "deny-other-inbound", "properties": {"priority": 400, "direction": "Inbound", "access": "Deny", "protocol": "*", "sourcePortRange": "*", "destinationPortRange": "*", "sourceAddressPrefix": "*", "destinationAddressPrefix": "*"}}
       ]}
-    },
+    }{% if not azure_lab %},
     {
       "type": "Microsoft.Network/virtualNetworks", "apiVersion": "2024-05-01",
       "name": {{ names.vnet | tojson }}, "location": {{ azure_location | tojson }}, "tags": {{ tags | tojson }},
       "properties": {"addressSpace": {"addressPrefixes": ["10.42.0.0/16"]}, "subnets": [{"name": "default", "properties": {"addressPrefix": "10.42.0.0/24"}}]}
-    },
+    }{% endif %}{% if azure_public_ip %},
     {
       "type": "Microsoft.Network/publicIPAddresses", "apiVersion": "2024-05-01",
       "name": {{ names.public_ip | tojson }}, "location": {{ azure_location | tojson }}, "tags": {{ tags | tojson }},
       "sku": {"name": "Standard"}, "properties": {"publicIPAllocationMethod": "Static", "publicIPAddressVersion": "IPv4"}
-    },
+    }{% endif %},
     {
       "type": "Microsoft.Network/networkInterfaces", "apiVersion": "2024-05-01",
       "name": {{ names.nic | tojson }}, "location": {{ azure_location | tojson }}, "tags": {{ tags | tojson }},
-      "dependsOn": ["[resourceId('Microsoft.Network/virtualNetworks', '{{ names.vnet }}')]", "[resourceId('Microsoft.Network/networkSecurityGroups', '{{ names.nsg }}')]", "[resourceId('Microsoft.Network/publicIPAddresses', '{{ names.public_ip }}')]"],
+      "dependsOn": ["[resourceId('Microsoft.Network/networkSecurityGroups', '{{ names.nsg }}')]"{% if not azure_lab %}, "[resourceId('Microsoft.Network/virtualNetworks', '{{ names.vnet }}')]"{% endif %}{% if azure_public_ip %}, "[resourceId('Microsoft.Network/publicIPAddresses', '{{ names.public_ip }}')]"{% endif %}],
       "properties": {
         "networkSecurityGroup": {"id": "[resourceId('Microsoft.Network/networkSecurityGroups', '{{ names.nsg }}')]"},
-        "ipConfigurations": [{"name": "primary", "properties": {"privateIPAllocationMethod": "Dynamic", "subnet": {"id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', '{{ names.vnet }}', 'default')]"}, "publicIPAddress": {"id": "[resourceId('Microsoft.Network/publicIPAddresses', '{{ names.public_ip }}')]"}}}]
+        "ipConfigurations": [{"name": "primary", "properties": {"privateIPAllocationMethod": "Dynamic", "subnet": {"id": {% if azure_lab %}{{ azure_lab.network.subnet_id | tojson }}{% else %}"[resourceId('Microsoft.Network/virtualNetworks/subnets', '{{ names.vnet }}', 'default')]"{% endif %}}{% if azure_public_ip %}, "publicIPAddress": {"id": "[resourceId('Microsoft.Network/publicIPAddresses', '{{ names.public_ip }}')]"}{% endif %}}}]
       }
     },
     {
@@ -93,7 +94,8 @@
     }{% endif %}
   ],
   "outputs": {
-    "public_ip": {"type": "string", "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', '{{ names.public_ip }}'), '2024-05-01').ipAddress]"},
+    {% if azure_public_ip %}"public_ip": {"type": "string", "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', '{{ names.public_ip }}'), '2024-05-01').ipAddress]"},
+    {% endif %}"private_ip": {"type": "string", "value": "[reference(resourceId('Microsoft.Network/networkInterfaces', '{{ names.nic }}'), '2024-05-01').ipConfigurations[0].properties.privateIPAddress]"},
     "vm_id": {"type": "string", "value": "[resourceId('Microsoft.Compute/virtualMachines', '{{ names.vm }}')]"}{% if azure_edge %},
     "edge_id": {"type": "string", "value": "[reference(resourceId('Microsoft.Cdn/profiles', '{{ names.edge }}'), '2024-02-01').frontDoorId]"},
     "edge_hostname": {"type": "string", "value": "[reference(resourceId('Microsoft.Cdn/profiles/afdEndpoints', '{{ names.edge }}', '{{ azure_edge.name }}'), '2024-02-01').hostName]"}{% endif %}

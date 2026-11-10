@@ -1,6 +1,7 @@
 """Infrastructure-only Azure lifecycle, using CLI session auth and Ansible."""
 
 import contextlib
+import hashlib
 import ipaddress
 import json
 import logging
@@ -16,6 +17,7 @@ import uuid
 from . import controller_io
 from .controller_io import ROOT, interruption_handlers, secure_directory
 from .controller_io import regular_file as _regular_file
+from .ssh_utils import ipv4, ssh_options
 from .state_store import StateStore
 STATE_DIR = ROOT / 'deployments' / 'azure'
 CONFIG_KEYS = frozenset({
@@ -24,8 +26,10 @@ CONFIG_KEYS = frozenset({
     'azure_subscription_id', 'azure_location', 'azure_vm_size',
     'azure_resource_group', 'azure_os_disk_gb', 'operator_ip', 'ssh_key_path',
     'ssh_private_key_path', 'ssh_key_generated', 'azure_inbound_rules',
-    'azure_image', 'azure_edge',
+    'azure_image', 'azure_edge', 'azure_lab', 'ssh_proxy',
 })
+_SUBNET_ID = (r'/subscriptions/[0-9a-f-]{36}/resourceGroups/[A-Za-z0-9_-]{1,90}/providers/'
+              r'Microsoft\.Network/virtualNetworks/[A-Za-z0-9_-]{1,80}/subnets/[A-Za-z0-9_-]{1,80}')
 # Front Door reaches origins from this service tag and stamps this header.
 EDGE_SOURCE = 'AzureFrontDoor.Backend'
 EDGE_HEADER = 'X-Azure-FDID'
@@ -191,16 +195,16 @@ def run_command(argv, timeout=60, deadline=None, check=True):
                                      env=azure_environment(), label='Azure')
 
 
-def run_az(args, subscription_id, deadline=None):
+def run_az(args, subscription_id, deadline=None, timeout=60):
     command = ['az', *args, '--subscription', subscription_id,
                '--only-show-errors', '--output', 'json']
     try:
-        result = run_command(command, deadline=deadline)
+        result = run_command(command, timeout=timeout, deadline=deadline)
     except RuntimeError as exc:
         if not authentication_error(exc):
             raise
         ensure_azure_auth(subscription_id, force=True)
-        result = run_command(command, deadline=deadline)
+        result = run_command(command, timeout=timeout, deadline=deadline)
     return json.loads(result.stdout) if result.stdout.strip() else None
 
 
@@ -305,6 +309,20 @@ def validate_config(config, require_key=True):
                 or not re.fullmatch(r'[a-z][a-z0-9-]{0,45}', str(edge['name']))):
             raise ValueError('Invalid Azure edge request')
         result['azure_edge'] = {key: str(edge[key]) for key in ('host_header', 'forwarding', 'name')}
+    lab = result.get('azure_lab')
+    if lab is not None:
+        if (edge is not None or not isinstance(lab, dict)
+                or not {'name', 'role', 'lab_ip', 'public_ip', 'cidrs', 'network'} <= set(lab)
+                or type(lab['public_ip']) is not bool or lab['role'] not in ('gateway', 'member')
+                or not re.fullmatch(_SUBNET_ID, str((lab['network'] or {}).get('subnet_id', '')))):
+            raise ValueError('Invalid Azure lab placement')
+        ipv4(lab['lab_ip'], private_ok=True)
+        for cidr in lab['cidrs']:
+            ipaddress.ip_network(cidr)
+    proxy = result.get('ssh_proxy')
+    if proxy is not None and (not isinstance(proxy, dict)
+                              or set(proxy) != {'user', 'host', 'key', 'known_hosts'}):
+        raise ValueError('Invalid ssh_proxy')
     image = result.get('azure_image')
     if image is not None:
         fields = ('publisher', 'offer', 'sku', 'version')
@@ -353,6 +371,11 @@ def resource_ids(config):
         ('os_disk', 'Microsoft.Compute/disks', 'osdisk')]
     if config.get('azure_edge'):
         kinds.append(('edge', 'Microsoft.Cdn/profiles', 'edge'))
+    lab = config.get('azure_lab')
+    if lab:
+        # The VNet is the lab's; a private member has no public address.
+        kinds = [item for item in kinds
+                 if item[0] != 'vnet' and (item[0] != 'public_ip' or lab['public_ip'])]
     return {key: prefix + kind + '/' + name + '-' + suffix for key, kind, suffix in kinds}
 
 
@@ -436,7 +459,9 @@ def render_template(config):
     from jinja2 import Environment, FileSystemLoader, StrictUndefined
     normalized = validate_config(config)
     image = normalized.get('azure_image') or DEFAULT_IMAGE
-    context = dict(normalized, azure_edge=normalized.get('azure_edge'),
+    lab = normalized.get('azure_lab')
+    context = dict(normalized, azure_edge=normalized.get('azure_edge'), azure_lab=lab,
+                   azure_public_ip=not lab or lab['public_ip'],
                    names={k: v.rsplit('/', 1)[1] for k, v in resource_ids(normalized).items()},
                    ssh_public_key=Path(normalized['ssh_key_path']).read_text().strip(),
                    image_reference={k: image[k] for k in ('publisher', 'offer', 'sku', 'version')},
@@ -498,28 +523,18 @@ def _wait_deployment(state, deadline, cancel=False):
 
 def _wait_for_ssh(state, deadline):
     """Return only after the provisioned VM accepts the deployment key."""
-    outputs = state.get('outputs') or {}
-    address_value = (outputs.get('public_ip') or {}).get('value', '')
     try:
-        address = ipaddress.ip_address(address_value)
+        address = ipv4(vm_address(state), private_ok=bool(state.get('azure_lab')))
     except ValueError as exc:
-        raise RuntimeError('ARM deployment returned an invalid public IP') from exc
-    if address.version != 4 or not address.is_global:
-        raise RuntimeError('ARM deployment returned an invalid public IP')
+        raise RuntimeError('ARM deployment returned an invalid address') from exc
     private_key = Path(state['ssh_private_key_path'])
     if (not private_key.is_file() or private_key.is_symlink()
             or private_key.stat().st_uid != os.getuid()):
         raise RuntimeError('Azure SSH private key is unavailable')
     with tempfile.TemporaryDirectory(prefix='c2itall-azure-ssh-') as temporary:
         known_hosts = Path(temporary) / 'known_hosts'
-        command = [
-            'ssh', '-F', '/dev/null', '-i', str(private_key),
-            '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes',
-            '-o', 'StrictHostKeyChecking=accept-new',
-            '-o', 'GlobalKnownHostsFile=/dev/null',
-            '-o', 'UserKnownHostsFile=' + str(known_hosts),
-            '-o', 'ConnectTimeout=10', 'azureuser@' + str(address), 'true',
-        ]
+        command = ['ssh', *ssh_options(known_hosts, private_key, state.get('ssh_proxy')),
+                   'azureuser@' + str(address), 'true']
         while True:
             if time.monotonic() >= deadline:
                 raise TimeoutError('Azure SSH readiness deadline exceeded')
@@ -531,6 +546,91 @@ def _wait_for_ssh(state, deadline):
             if result is not None and result.returncode == 0:
                 return
             time.sleep(min(5, max(0, deadline - time.monotonic())))
+
+
+def vm_address(state):
+    """Where the controller reaches the VM: its public address, or the private one inside a lab."""
+    outputs = state.get('outputs') or {}
+    return (outputs.get('public_ip') or outputs.get('private_ip') or {}).get('value', '')
+
+
+def _lab_identity(lab, subscription_id, group):
+    return {'azure_subscription_id': subscription_id, 'azure_resource_group': group,
+            'deployment_id': 'lab-' + lab['name'], 'ownership_marker': lab['ownership_marker']}
+
+
+def create_lab_network(lab, config):
+    """The lab's shared VNet with NAT egress and flow logs; re-runnable until it exists."""
+    from jinja2 import Environment, FileSystemLoader, StrictUndefined
+    sub = str(uuid.UUID(config['azure_subscription_id']))
+    location = config.get('azure_location', 'eastus')
+    identity = _lab_identity(lab, sub, 'c2itall-lab-' + lab['name'])
+    group = identity['azure_resource_group']
+    deadline = time.monotonic() + 1200
+    with lifecycle_lock(dict(identity, azure_state_dir=config.get('azure_state_dir'))):
+        tags = ownership_tags(identity)
+        existing = _group(identity, deadline)
+        if existing:
+            if any((existing.get('tags') or {}).get(k) != v for k, v in tags.items()):
+                raise ValueError('Refusing foreign resource group ' + group)
+        else:
+            run_az(['group', 'create', '--name', group, '--location', location, '--tags',
+                    *(k + '=' + v for k, v in tags.items())], sub, deadline)
+        block = ipaddress.ip_network(lab['blocks']['azure'])
+        storage = ('c2lab' + re.sub(r'[^a-z0-9]', '', lab['name'])
+                   + hashlib.sha256((sub + lab['name']).encode()).hexdigest()[:8])[:24]
+        env = Environment(loader=FileSystemLoader(ROOT / 'providers/Azure/templates'),
+                          undefined=StrictUndefined)
+        template = env.get_template('lab_network.json.j2').render(
+            name=identity['deployment_id'], location=location, tags=tags, cidr=str(block),
+            subnet_cidr=str(next(block.subnets(new_prefix=24))), storage_account=storage)
+        with tempfile.TemporaryDirectory(prefix='c2itall-azure-lab-') as temporary:
+            path = Path(temporary) / 'lab_network.json'
+            path.write_text(json.dumps(json.loads(template)))
+            path.chmod(0o600)
+            run_az(['deployment', 'group', 'create', '--resource-group', group,
+                    '--name', identity['deployment_id'], '--template-file', str(path),
+                    '--mode', 'Incremental', '--no-wait'], sub, deadline)
+            outputs = _wait_deployment(identity, deadline)['properties']['outputs']
+        network = {key: outputs[key]['value']
+                   for key in ('vnet_id', 'subnet_id', 'nat_ip', 'storage_account_id')}
+        flow = identity['deployment_id'] + '-flow'
+        run_az(['network', 'watcher', 'configure', '--locations', location, '--enabled', 'true',
+                '--resource-group', 'NetworkWatcherRG'], sub, deadline, timeout=120)
+        run_az(['network', 'watcher', 'flow-log', 'create', '--location', location,
+                '--resource-group', group, '--name', flow, '--vnet', network['vnet_id'],
+                '--storage-account', network['storage_account_id'], '--enabled', 'true',
+                '--retention', '7'], sub, deadline, timeout=300)
+        return dict(network, subscription_id=sub, resource_group=group, location=location,
+                    flow_log=flow, storage_account=storage)
+
+
+def delete_lab_network(lab, network):
+    """Remove the flow log and the lab's resource group once no NIC uses the subnet."""
+    sub = str(uuid.UUID(network['subscription_id']))
+    identity = _lab_identity(lab, sub, network['resource_group'])
+    deadline = time.monotonic() + 900
+    with lifecycle_lock(identity):
+        group = _group(identity, deadline)
+        if group is None:
+            return True
+        tags = ownership_tags(identity)
+        if any((group.get('tags') or {}).get(k) != v for k, v in tags.items()):
+            raise ValueError('Refusing foreign resource group ' + network['resource_group'])
+        if run_az(['network', 'vnet', 'subnet', 'show', '--ids', network['subnet_id'],
+                   '--query', 'ipConfigurations'], sub, deadline):
+            raise RuntimeError('Lab subnet still has network interfaces; tear down the members first')
+        if run_az(['network', 'watcher', 'flow-log', 'list', '--location', network['location'],
+                   '--query', "[?name=='" + network['flow_log'] + "'].name"], sub, deadline):
+            run_az(['network', 'watcher', 'flow-log', 'delete', '--location', network['location'],
+                    '--name', network['flow_log']], sub, deadline, timeout=300)
+        run_az(['group', 'delete', '--name', network['resource_group'], '--yes', '--no-wait'],
+               sub, deadline)
+        while _group(identity, deadline) is not None:
+            if time.monotonic() >= deadline:
+                raise TimeoutError('Lab resource group deletion deadline exceeded')
+            time.sleep(min(5, max(0, deadline - time.monotonic())))
+        return True
 
 
 def health_azure(config):

@@ -106,7 +106,7 @@ class EdgeContractTests(unittest.TestCase):
             'Microsoft.Cdn/profiles', 'Microsoft.Cdn/profiles/afdEndpoints',
             'Microsoft.Cdn/profiles/originGroups', 'Microsoft.Cdn/profiles/originGroups/origins',
             'Microsoft.Cdn/profiles/afdEndpoints/routes'])
-        self.assertEqual(sorted(template['outputs']), ['edge_hostname', 'edge_id', 'public_ip', 'vm_id'])
+        self.assertEqual(sorted(template['outputs']), ['edge_hostname', 'edge_id', 'private_ip', 'public_ip', 'vm_id'])
         route = template['resources'][-1]['properties']
         self.assertEqual((route['forwardingProtocol'], route['patternsToMatch']), ('HttpOnly', ['/*']))
         origin = template['resources'][-2]['properties']
@@ -117,7 +117,7 @@ class EdgeContractTests(unittest.TestCase):
                    for rule in template['resources'][0]['properties']['securityRules']}
         self.assertEqual(sources['80'], 'AzureFrontDoor.Backend')
         self.assertEqual(sources['22'], '8.8.4.4/32')
-        self.assertEqual(sorted(plain['outputs']), ['public_ip', 'vm_id'])
+        self.assertEqual(sorted(plain['outputs']), ['private_ip', 'public_ip', 'vm_id'])
         self.assertEqual(len(plain['resources']), 5)
 
         with self.assertRaisesRegex(ValueError, 'Invalid Azure edge request'):

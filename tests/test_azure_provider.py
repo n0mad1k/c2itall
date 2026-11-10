@@ -3142,3 +3142,153 @@ class SmokeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LabNetworkTests(AzureFixture):
+    SUBNET = (f'/subscriptions/{smoke.SUBSCRIPTION}/resourceGroups/c2itall-lab-blue/providers/'
+              'Microsoft.Network/virtualNetworks/lab-blue-vnet/subnets/lab')
+
+    def placement(self, role, public_ip):
+        return {'name': 'blue', 'role': role, 'lab_ip': '198.18.0.11', 'public_ip': public_ip,
+                'cidrs': ['198.18.0.0/16'], 'range_cidrs': [], 'egress_via_hub': False,
+                'network': {'subnet_id': self.SUBNET, 'cidr': '198.18.16.0/20', 'status': 'ready'},
+                'ssh_source': '8.8.4.4/32', 'ssh_proxy': None}
+
+    def test_private_member_renders_in_the_shared_subnet_without_a_public_ip(self):
+        config = dict(self.config, azure_lab=self.placement('member', False),
+                      ssh_proxy={'user': 'azureuser', 'host': '8.8.4.4', 'key': str(self.key),
+                                 'known_hosts': str(self.home / 'gw-known-hosts')})
+        template = azure.render_template(config)
+        types = [resource['type'] for resource in template['resources']]
+        self.assertEqual(types, ['Microsoft.Network/networkSecurityGroups',
+                                 'Microsoft.Network/networkInterfaces',
+                                 'Microsoft.Compute/virtualMachines'])
+        nic = template['resources'][1]
+        self.assertEqual(nic['dependsOn'], [
+            "[resourceId('Microsoft.Network/networkSecurityGroups', 'c2itall-test-azure-nsg')]"])
+        configuration = nic['properties']['ipConfigurations'][0]['properties']
+        self.assertEqual(configuration['subnet']['id'], self.SUBNET)
+        self.assertNotIn('publicIPAddress', configuration)
+        rules = {rule['name']: rule['properties'] for rule in
+                 template['resources'][0]['properties']['securityRules']}
+        self.assertEqual((rules['allow-lab-1']['sourceAddressPrefix'], rules['allow-lab-1']['protocol'],
+                          rules['allow-lab-1']['priority']), ('198.18.0.0/16', '*', 200))
+        self.assertEqual(sorted(template['outputs']), ['private_ip', 'vm_id'])
+        self.assertEqual(sorted(azure.resource_ids(config)), ['nic', 'nsg', 'os_disk', 'vm'])
+        self.assertEqual(azure.validate_config(config)['ssh_proxy']['host'], '8.8.4.4')
+
+    def test_gateway_keeps_its_public_ip_inside_the_lab_subnet(self):
+        config = dict(self.config, azure_lab=self.placement('gateway', True))
+        template = azure.render_template(config)
+        types = [resource['type'] for resource in template['resources']]
+        self.assertEqual(types, ['Microsoft.Network/networkSecurityGroups',
+                                 'Microsoft.Network/publicIPAddresses',
+                                 'Microsoft.Network/networkInterfaces',
+                                 'Microsoft.Compute/virtualMachines'])
+        configuration = template['resources'][2]['properties']['ipConfigurations'][0]['properties']
+        self.assertEqual(configuration['subnet']['id'], self.SUBNET)
+        self.assertIn('publicIPAddress', configuration)
+        self.assertEqual(sorted(template['outputs']), ['private_ip', 'public_ip', 'vm_id'])
+        self.assertEqual(sorted(azure.resource_ids(config)), ['nic', 'nsg', 'os_disk', 'public_ip', 'vm'])
+
+    def test_lab_placement_is_validated(self):
+        for broken in (dict(self.placement('member', False), network={'subnet_id': 'lab'}),
+                       dict(self.placement('member', False), public_ip='no'),
+                       dict(self.placement('member', False), role='router')):
+            with self.assertRaises(ValueError):
+                azure.validate_config(dict(self.config, azure_lab=broken))
+        with self.assertRaises(ValueError):
+            azure.validate_config(dict(self.config, azure_lab=self.placement('gateway', True),
+                                       azure_edge={'host_header': 'a.b', 'forwarding': 'HttpOnly', 'name': 'e'}))
+        with self.assertRaises(ValueError):
+            azure.validate_config(dict(self.config, ssh_proxy={'host': '8.8.4.4'}))
+
+    def test_ssh_readiness_reaches_a_private_member_through_the_gateway(self):
+        state = {**self.config, 'azure_lab': self.placement('member', False),
+                 'ssh_proxy': {'user': 'azureuser', 'host': '8.8.4.4', 'key': str(self.key),
+                               'known_hosts': str(self.home / 'gw-known-hosts')},
+                 'outputs': {'private_ip': {'value': '198.18.16.5'}}}
+        with mock.patch.object(azure, 'run_command',
+                               return_value=subprocess.CompletedProcess([], 0, '', '')) as run:
+            azure._wait_for_ssh(state, time.monotonic() + 60)
+        command = run.call_args.args[0]
+        self.assertEqual(command[-2:], ['azureuser@198.18.16.5', 'true'])
+        proxy = next(value for value in command if value.startswith('ProxyCommand='))
+        self.assertIn('azureuser@8.8.4.4', proxy)
+        self.assertEqual(azure.vm_address(state), '198.18.16.5')
+        with self.assertRaises(RuntimeError):
+            azure._wait_for_ssh({**self.config, 'outputs': {'private_ip': {'value': '198.18.16.5'}}},
+                                time.monotonic() + 60)
+
+    def test_lab_network_is_created_then_deleted_in_order(self):
+        lab = {'name': 'blue', 'ownership_marker': '3b7d0e1a-9c2e-4f6b-8f1d-7c0a4b5e6d2f',
+               'blocks': {'azure': '198.18.16.0/20'}}
+        calls = []
+
+        def run_az(args, subscription_id, deadline=None, timeout=60):
+            calls.append(args)
+            if args[:2] == ['network', 'vnet']:
+                return []
+            if args[:4] == ['network', 'watcher', 'flow-log', 'list']:
+                return ['lab-blue-flow']
+            return {}
+
+        outputs = {key: {'value': value} for key, value in {
+            'vnet_id': self.SUBNET.rsplit('/subnets', 1)[0], 'subnet_id': self.SUBNET,
+            'nat_ip': '20.0.0.9', 'storage_account_id': '/subscriptions/x/sa'}.items()}
+        with mock.patch.object(azure, 'run_az', side_effect=run_az), \
+                mock.patch.object(azure, '_group', return_value=None), \
+                mock.patch.object(azure, '_wait_deployment',
+                                  return_value={'properties': {'outputs': outputs}}):
+            network = azure.create_lab_network(lab, self.config)
+        self.assertEqual([call[:2] for call in calls], [
+            ['group', 'create'], ['deployment', 'group'], ['network', 'watcher'], ['network', 'watcher']])
+        self.assertIn('c2itall-deployment=lab-blue', calls[0])
+        template = json.loads(Path(calls[1][calls[1].index('--template-file') + 1]).read_text()) \
+            if Path(calls[1][calls[1].index('--template-file') + 1]).exists() else None
+        self.assertIsNone(template)  # rendered into a temporary directory that is gone again
+        self.assertEqual(calls[3][2:4], ['flow-log', 'create'])
+        self.assertEqual(network['subnet_id'], self.SUBNET)
+        self.assertEqual(network['nat_ip'], '20.0.0.9')
+        self.assertEqual(network['resource_group'], 'c2itall-lab-blue')
+        self.assertEqual(network['flow_log'], 'lab-blue-flow')
+        self.assertTrue(network['storage_account'].startswith('c2labblue'))
+        self.assertLessEqual(len(network['storage_account']), 24)
+
+        group = {'id': 'x', 'tags': {'c2itall-deployment': 'lab-blue', 'c2itall-owner': lab['ownership_marker']}}
+        calls.clear()
+        with mock.patch.object(azure, 'run_az', side_effect=run_az), \
+                mock.patch.object(azure, '_group', side_effect=[group, group, None]), \
+                mock.patch.object(azure.time, 'sleep'):
+            self.assertTrue(azure.delete_lab_network(lab, network))
+        self.assertEqual([call[:2] for call in calls], [
+            ['network', 'vnet'], ['network', 'watcher'], ['network', 'watcher'], ['group', 'delete']])
+        self.assertEqual(calls[2][2:4], ['flow-log', 'delete'])
+
+        def busy(args, subscription_id, deadline=None, timeout=60):
+            return [{'id': 'nic'}] if args[:2] == ['network', 'vnet'] else {}
+        with mock.patch.object(azure, 'run_az', side_effect=busy), \
+                mock.patch.object(azure, '_group', return_value=group):
+            with self.assertRaises(RuntimeError):
+                azure.delete_lab_network(lab, network)
+        foreign = dict(group, tags={'c2itall-deployment': 'other', 'c2itall-owner': 'x'})
+        with mock.patch.object(azure, 'run_az', side_effect=run_az), \
+                mock.patch.object(azure, '_group', return_value=foreign):
+            with self.assertRaises(ValueError):
+                azure.create_lab_network(lab, self.config)
+
+    def test_lab_template_renders_nat_vnet_and_storage(self):
+        from jinja2 import Environment, FileSystemLoader, StrictUndefined
+        env = Environment(loader=FileSystemLoader(azure.ROOT / 'providers/Azure/templates'),
+                          undefined=StrictUndefined)
+        template = json.loads(env.get_template('lab_network.json.j2').render(
+            name='lab-blue', location='eastus', tags={'c2itall-deployment': 'lab-blue'},
+            cidr='198.18.16.0/20', subnet_cidr='198.18.16.0/24', storage_account='c2labblue0123'))
+        types = [resource['type'] for resource in template['resources']]
+        self.assertEqual(types, ['Microsoft.Network/publicIPAddresses', 'Microsoft.Network/natGateways',
+                                 'Microsoft.Network/virtualNetworks', 'Microsoft.Storage/storageAccounts'])
+        subnet = template['resources'][2]['properties']['subnets'][0]['properties']
+        self.assertEqual((subnet['addressPrefix'], subnet['defaultOutboundAccess']), ('198.18.16.0/24', False))
+        self.assertIn('natGateway', subnet)
+        self.assertFalse(template['resources'][3]['properties']['allowBlobPublicAccess'])
+        self.assertEqual(sorted(template['outputs']), ['nat_ip', 'storage_account_id', 'subnet_id', 'vnet_id'])

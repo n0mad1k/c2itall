@@ -12,6 +12,8 @@ UBUNTU_2204_IMAGE = {
     'publisher': 'Canonical', 'offer': '0001-com-ubuntu-server-jammy',
     'sku': '22_04-lts-gen2', 'version': 'latest', 'plan': False,
 }
+DEBIAN_12_IMAGE = {'publisher': 'Debian', 'offer': 'debian-12', 'sku': '12-gen2',
+                   'version': 'latest', 'plan': False}
 
 
 class AzureDriver(CloudDriver):
@@ -34,7 +36,14 @@ class AzureDriver(CloudDriver):
             return KALI_IMAGE
         if role == 'ubuntu2204':
             return UBUNTU_2204_IMAGE
+        if role == 'debian12':
+            return DEBIAN_12_IMAGE
         return None
+
+    def apply_profile(self, config, workload, profile, value):
+        if (workload, profile, value) == ('ludus_host', 'instance_size', 'nested'):
+            config['azure_vm_size'] = 'Standard_D8s_v5'
+        return config
 
     region_key = 'azure_location'
 
@@ -72,6 +81,12 @@ class AzureDriver(CloudDriver):
             result['azure_image'] = image
         if request.edge:
             result['azure_edge'] = dict(request.edge)
+        if request.lab:
+            result['azure_lab'] = dict(request.lab)
+            if request.lab['role'] == 'member':
+                result['operator_ip'] = request.lab['ssh_source']
+            if request.lab.get('ssh_proxy'):
+                result['ssh_proxy'] = dict(request.lab['ssh_proxy'])
         return result
 
     def prepare_state(self, infrastructure):
@@ -84,8 +99,13 @@ class AzureDriver(CloudDriver):
         return azure_utils.deploy_azure(infrastructure)
 
     def public_address(self, deployment_id, config):
-        state = azure_utils.load_state(deployment_id, config.get('azure_state_dir'))
-        return state.get('outputs', {}).get('public_ip', {}).get('value', '')
+        return azure_utils.vm_address(azure_utils.load_state(deployment_id, config.get('azure_state_dir')))
+
+    def lab_network(self, lab, config):
+        return azure_utils.create_lab_network(lab, config)
+
+    def delete_lab_network(self, lab, network):
+        return azure_utils.delete_lab_network(lab, network)
 
     def edge_endpoint(self, deployment_id, config):
         outputs = azure_utils.load_state(deployment_id, config.get('azure_state_dir')).get('outputs', {})
