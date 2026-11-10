@@ -197,7 +197,8 @@ Type=simple
 User=root
 Group=root
 WorkingDirectory=$HAVOC_DIR/teamserver
-ExecStart=$HAVOC_DIR/havoc server -d
+# -d would load <cwd>/data/havoc.yaotl, which does not exist under teamserver/.
+ExecStart=$HAVOC_DIR/havoc server --profile $HAVOC_DIR/data/havoc.yaotl
 Restart=always
 RestartSec=10
 

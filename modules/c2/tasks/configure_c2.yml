@@ -218,6 +218,20 @@
     owner: root
     group: root
   no_log: true
+  register: havoc_profile
+
+- name: Restart the teamserver on a new profile
+  systemd:
+    name: havoc
+    state: restarted
+    daemon_reload: true
+  when: havoc_profile.changed
+
+- name: Wait for the teamserver to accept operators
+  wait_for:
+    host: 127.0.0.1
+    port: 40056
+    timeout: 180
 
 - name: Create Linux loader script template
   template:

@@ -45,6 +45,13 @@ class SpokeRenderTests(unittest.TestCase):
         self.assertNotIn('PostUp', render('modules/lab/templates/spoke.conf.j2', **context))
 
 
+class HavocUnitTests(unittest.TestCase):
+    def test_installer_unit_loads_the_rendered_profile(self):
+        unit = (ROOT / 'modules/c2/files/havoc_installer.sh').read_text()
+        self.assertIn('ExecStart=$HAVOC_DIR/havoc server --profile $HAVOC_DIR/data/havoc.yaotl', unit)
+        self.assertNotIn('havoc server -d', unit)
+
+
 class C2LabRenderTests(unittest.TestCase):
     LAB = {'member': {'lab_ip': '198.18.0.11'}, 'cidrs': ['198.18.0.0/16'], 'range_cidrs': []}
 
