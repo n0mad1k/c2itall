@@ -124,7 +124,9 @@ class ExfilReceiverServeTests(unittest.TestCase):
         conn.request('PUT', '/upload/report.txt', body=body,
                       headers={'Authorization': self._auth_header()})
         self.assertEqual(conn.getresponse().status, 201)
-        ledger_line = (self.root / 'var' / 'log' / 'exfil' / 'ledger.jsonl').read_text().splitlines()[-1]
+        ledger = self.root / 'var' / 'log' / 'exfil' / 'ledger.jsonl'
+        self.assertEqual(ledger.stat().st_mode & 0o777, 0o660, 'root and the service user both append')
+        ledger_line = ledger.read_text().splitlines()[-1]
         entry = json.loads(ledger_line)
         self.assertEqual(entry['sha256'], hashlib.sha256(body).hexdigest())
         self.assertEqual((entry['channel'], entry['name'], entry['size']), ('http', 'report.txt', len(body)))

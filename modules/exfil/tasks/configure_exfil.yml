@@ -54,7 +54,9 @@
     - { path: /srv/exfil/minio, owner: exfil, mode: '0750' }
     - { path: /srv/exfil/http, owner: exfil, mode: '0750' }
     - { path: /srv/exfil/sftp/upload, owner: drop, mode: '0750' }
-    - { path: /var/log/exfil, owner: exfil, mode: '0750' }
+    - { path: /var/log/exfil, owner: exfil, mode: '2750' }
+    # The audit webhook (exfil user) and the root scan share this state directory.
+    - { path: /var/lib/exfil, owner: exfil, mode: '0750' }
 
 - name: Create the root-only state and secret directories
   ansible.builtin.file:
@@ -64,7 +66,6 @@
     group: root
     mode: '0700'
   loop:
-    - /var/lib/exfil
     - /var/lib/exfil/manifests
 
 - name: Let the exfil service user into its config directory

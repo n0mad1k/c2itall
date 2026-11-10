@@ -76,7 +76,14 @@ def _save_json(path, data):
 def _append_ledger(channel, src, name, size, digest):
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     entry = {'ts': _now(), 'channel': channel, 'src': src, 'name': name, 'size': size, 'sha256': digest}
-    with open(LEDGER, 'a') as stream:
+    # Root's scan and the exfil service user both append: whoever creates the
+    # file leaves it group-writable (the log directory is setgid exfil).
+    mask = os.umask(0o007)
+    try:
+        fd = os.open(LEDGER, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o660)
+    finally:
+        os.umask(mask)
+    with os.fdopen(fd, 'a') as stream:
         stream.write(json.dumps(entry) + '\n')
 
 
