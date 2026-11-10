@@ -95,7 +95,17 @@ A subclass supplies `create`, `delete` and `inspect` against its own API.
 | `utils/azure_cloud.py` | one resource group holding VNet, NSG, static IP, NIC and VM from an ARM template through the Azure CLI (`utils/azure_utils.py`) | Front Door Standard in the same ARM deployment; origin admits `AzureFrontDoor.Backend`, redirector checks `X-Azure-FDID` |
 | `utils/aws_cloud.py` | one VPC, IGW, subnet, route and security group, one EC2 instance keyed by cloud-init, through boto3 | CloudFront distribution on the instance's public DNS; origin admits the `cloudfront.origin-facing` prefix list, redirector checks `X-Origin-Verify` |
 | `utils/linode_cloud.py` | one Cloud Firewall and one Linode through the v4 REST API | none |
-| `utils/flokinet_cloud.py` | a host the operator ordered by hand, adopted over SSH: deployment key installed, `ufw` enforces the rules | none |
+| `utils/flokinet_cloud.py` | a host the operator ordered by hand, adopted over SSH (`utils/ssh_host_cloud.py`): deployment key installed, `ufw` enforces the rules | none |
+| `utils/local_cloud.py` | the same adoption for hosts the operator built (bare metal, local VMs); private addresses allowed | none |
+
+Two optional driver traits serve the lab: `capabilities` (a frozenset such
+as `{'lab_network', 'nested_virtualization'}`) and, for `lab_network`,
+`lab_network(lab, config)` / `delete_lab_network(lab, network)` that create
+and remove one shared private network per lab (Azure: VNet with a NAT
+gateway, storage account and VNet flow log in `c2itall-lab-<name>`; AWS:
+VPC with public and private subnets, NAT gateway, S3 bucket and VPC flow
+logs). A driver without the capability still hosts lab members: they keep
+their provider address and ride the WireGuard overlay.
 
 None of them names a workload. `tests/fake_cloud.py` is a complete in-memory
 driver used by the contract tests and the reference for writing a new one;
@@ -115,6 +125,23 @@ One adapter per profile kind binds any driver to any profile:
 
 `DriverInfrastructureAdapter` serves the plain infrastructure-only VM.
 
+### The lab layer: `utils/lab.py`
+
+A lab record (`deployments/lab/<name>.json`, a `StateStore` state like any
+driver's) ties deployments together: the gateway, the members with their
+overlay addresses, the per-provider shared networks, the range networks
+and the blocked networks. `placement()` turns a driver and a profile into
+the `ProvisionRequest.lab` dict (`driver_base.base_plan` copies it to
+`<prefix>lab`): a gateway gets a public address and the operator's /32, a
+member gets no cloud rules, admits SSH only from the gateway and is reached
+through an SSH `ProxyCommand`. The adapters call `ensure_network` before
+planning and `_join_lab` after the VM is up: the member is registered and
+`modules/lab/spoke.yml` makes it a WireGuard peer of the hub before its own
+service play runs. `service_variables()` is the `lab` variable every lab
+play receives; `run_member_playbook` and `member_command` reach a ready
+member later (range actions, exfil verification); `teardown` unwinds
+members, gateway and networks in order.
+
 ### The registry: `utils/provider_registry.py`
 
 `WORKLOAD_SPECS` lists every canonical workload with its controller
@@ -123,8 +150,11 @@ entrypoint, whether legacy fallback is allowed, its declared variants and
 
 - Every built-in provider sets `driver='utils.<name>_cloud:<factory>'` and
   lists no per-workload routes. Its capabilities are derived:
-  `infrastructure` plus every workload that has a profile. Explicit or staged
-  routes that would shadow a driver workload are rejected by validation.
+  `infrastructure` plus every workload that has a profile and whose
+  `requires` the driver's `capabilities` cover; a pair the driver cannot
+  serve is routed as `gated` (today only Linode for the LUDUS host).
+  Explicit or staged routes that would shadow a driver workload are
+  rejected by validation.
 - A provider registered with `legacy_menu=True` and `legacy_capabilities`
   instead routes those workloads to the module's preserved legacy executor.
   No built-in provider does; the path survives for the engine tests.

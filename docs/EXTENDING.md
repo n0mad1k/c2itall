@@ -164,6 +164,17 @@ validation rejects them with "Explicit routes shadow the provider driver".
 
 ### 3. Optional pieces
 
+- `capabilities = frozenset({...})` on the driver when it offers
+  `nested_virtualization` (the LUDUS host) or `lab_network`. With
+  `lab_network`, implement `lab_network(lab, config)` returning the shared
+  network record (it must contain `nat_ip`) and `delete_lab_network(lab,
+  network)` that refuses while a NIC still uses the subnet and proves
+  absence; the lab branch of `create` then launches members on the private
+  subnet with `state['<prefix>lab']['public_ip']` deciding whether a public
+  address is attached. Without the capability, lab members work unchanged
+  over the WireGuard overlay. Set `private_addresses = True` only for a
+  provider whose hosts legitimately carry private addresses (`local`).
+
 - `providers/Name/` with an infrastructure play and templates when the driver
   provisions through Ansible; return its path from `infrastructure_playbook`.
 - `providers/Name/vars.example.yaml` documenting the non-secret inputs; the
@@ -381,6 +392,16 @@ a legacy play for it; no built-in provider is legacy-routed, so it is
 documentation of intent. The profile is found at `modules/example/workload.py`
 automatically; pass `profile='path'` only when it lives elsewhere. Every
 provider serves the new workload immediately.
+
+A lab workload adds two things to the profile: `requires = frozenset({...})`
+when it needs a driver capability, and `validate` insisting on
+`config['lab']`. Its controller takes the lab name, shares the lab's key
+(`config['ssh_key_path'] = lab['ssh_key_path']`) and stores secrets with
+`utils.lab.write_secret`; its play reads the `lab` variable (`lab.member.lab_ip`,
+`lab.cidrs`, `lab.range_cidrs`, `lab.hub`) and admits services from those
+networks only. `modules/gateway/` is the smallest complete example;
+`modules/lab/red.py` shows how an existing workload gets a lab mode without
+touching its provider path.
 
 ### 5. Verify
 

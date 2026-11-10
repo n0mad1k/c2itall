@@ -156,6 +156,12 @@ hostnames must be routed to each replacement by the operator's DNS automation.
 | AWS | `utils/aws_cloud.py` | every workload; CloudFront edge for the fronted redirector |
 | Linode | `utils/linode_cloud.py` | every workload |
 | FlokiNET | `utils/flokinet_cloud.py` | every workload on a server you ordered by hand; the driver adopts the host over SSH and cleanup revokes its key |
+| Local | `utils/local_cloud.py` | every workload on a host you built yourself (bare metal, VirtualBox, libvirt, Proxmox), adopted over SSH like FlokiNET; private addresses allowed |
+
+A workload may require a capability (`WorkloadProfile.requires`) and a
+driver declares what it has (`CloudDriver.capabilities`): the LUDUS host
+needs `nested_virtualization`, which Linode cannot offer, so the registry
+hides Linode for it and the coverage audit reports the pair as `gated`.
 
 Every provider runs the same lifecycle: plan, save state under
 `deployments/<provider>/<id>.json`, create the network boundary and the VM,
@@ -259,6 +265,18 @@ deployment key. Teardown revokes the key; the server and whatever the
 service installed stay until you cancel or reinstall it in the panel. A
 WEBRUNNER pool on FlokiNET gets exactly one node.
 
+## Lab
+
+Main menu `12) Lab` builds a private purple-team range: one WireGuard
+gateway with logged NAT egress, a LUDUS host running a custom Active
+Directory range, an exfil receiver (MinIO, SFTP, HTTPS drop) and lab-mode
+C2, payload server, attack box, logging server and chat, all reachable only
+through the gateway. Azure and AWS members sit in a shared private subnet
+with a managed NAT gateway and flow logs; other providers ride the
+WireGuard overlay. `teardown.py --lab <name>` removes the whole lab.
+Runbook, address plan, exfil exercise and acceptance checklist:
+`docs/LAB.md`.
+
 ## Architecture in one screen
 
 ```
@@ -310,6 +328,7 @@ Step-by-step recipes, skeletons and the validation errors you may hit:
 | `venv/bin/python scripts/test_provider_workload_live.py --provider <p> --workload <w>` | dry run; add `--activate` for a real deploy, SSH verification, repeat, standalone teardown and inventory restore |
 | `venv/bin/python scripts/test_azure_phantom_live.py --activate [--service share]` | the Phantom handoff route on Azure, or the share drive built on it |
 | `venv/bin/python scripts/test_flokinet_live.py --activate` | the FlokiNET route against an Azure VM standing in for a hand-ordered root host |
+| `venv/bin/python scripts/test_lab_live.py --provider <p> --members exfil_receiver,c2 --activate` | a lab end to end: shared network, gateway, overlay join, logged egress, each member's service, `teardown.py --lab`, account totals restored (`--provider local` with VMs from `scripts/local_vm.py`) |
 
 Live runs write evidence under `logs/<provider>-<workload>-live/<deployment_id>/`
 with the commit they executed from.

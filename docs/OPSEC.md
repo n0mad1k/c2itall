@@ -54,6 +54,30 @@ inventories and is listed under Open items below.
 | Host | the deployment key line in `/root/.ssh/authorized_keys` (removed on teardown); `ufw` is reset and rebuilt from the workload's rules, so any rules you had are gone; password login is turned off; everything the service installed stays |
 | Provider | nothing is created; the server you ordered stays until you cancel it in the panel |
 
+### Local
+
+| Where | Trace |
+|---|---|
+| Host | as FlokiNET: the deployment key line, a rebuilt `ufw`, password login off; the host and everything installed stay |
+| Provider | nothing; the hosts are yours |
+
+## Lab
+
+| Where | Trace |
+|---|---|
+| Internet | one public listener per lab: the gateway's UDP 51820 (silent to unknown keys) and SSH from the operator /32; members have no public inbound rule, and Azure/AWS members have no public address at all |
+| Provider | `c2itall-lab-<name>` resource group / VPC with a NAT gateway, flow logs and their storage account / bucket; members as any deployment |
+| Gateway | `/var/log/lab/flows.log` records every new connection forwarded from the overlay (`LABFLOW`); `/etc/wireguard/` holds the hub key and one `[Peer]` block per member |
+| Controller | `deployments/lab/<name>.json` and `deployments/lab/<name>/` (operator WireGuard config, gateway known-hosts, C2 operator passwords, exfil credentials, range identities, implant journal), `~/.ssh/c2deploy_lab-<name>` |
+| LUDUS host | the `lab` user's API key in `/root/.ludus-lab.env` (0600, never copied off the host); range identities and their passwords inside the range config; LUDUS's own local administrator on every VM; synthetic datasets under `/srv/lab-datasets` |
+| Exfil receiver | everything uploaded stays under `/srv/exfil` until `exfil-receiver clean`; the ledger is rotated, not deleted |
+
+The lab uses `198.18.0.0/16` (RFC 2544 benchmarking space) so it never
+collides with LUDUS ranges, Docker, VirtualBox host-only networks or AWS
+default VPCs; that choice is visible on every member's `wg0`. Teardown
+removes the record, the key and the secret directory; what the flow logs
+captured is deleted with their storage.
+
 ## Email tracker
 
 | Where | Trace |
