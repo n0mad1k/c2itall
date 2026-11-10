@@ -190,9 +190,14 @@ key, record and secrets. It stops at the first failure and can be run again.
   1-2 h on hardware, 3-6 h under nested VirtualBox; `mini` deploy 30-50 min;
   `corp` 1-2 h; exfil receiver 3-5 min.
 - `havoc_killall.sh` cuts agents off; it cannot make them exit.
-- Range-VM source attribution at the receiver depends on the range router
-  not translating addresses toward the lab networks; the ledger records what
-  arrives.
+- The rendered range tells the LUDUS router not to translate addresses
+  toward the lab networks (`iptables -t nat -I POSTROUTING -d <lab cidr> -j
+  ACCEPT`), so the receiver should see range-VM sources; the ledger records
+  what actually arrives.
+- The LUDUS installer turns the host's management interface into the Proxmox
+  bridge and rewrites `/etc/network/interfaces`; a local VM therefore needs
+  its management address on the interface that reaches the gateway, and its
+  internet egress rides the tunnel afterwards.
 - Identity passwords also live in the range config on the LUDUS host, and
   LUDUS's own local administrator stays on every VM: lab artefacts, not
   secrets.
