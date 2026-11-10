@@ -9,6 +9,7 @@ adapters in ``vm_workloads``.
 
 from . import controller_io
 from .provider_registry import InfrastructureAdapter
+from .ssh_utils import ssh_options
 
 
 class ProvisionRequest:
@@ -153,6 +154,12 @@ class CloudDriver:
     def run_command(self, argv, timeout=60, deadline=None, check=True):
         return controller_io.run_command(argv, timeout=timeout, deadline=deadline,
                                          check=check, label=self.provider)
+
+    def ssh_argv(self, state, address, known_hosts, key=None):
+        """The ssh command that reaches one of this provider's VMs, via the lab gateway when set."""
+        return ['ssh', *ssh_options(known_hosts, key or state['ssh_private_key_path'],
+                                    state.get('ssh_proxy')),
+                self.ssh_user + '@' + str(address)]
 
     def check_connection(self):
         """Read-only connectivity probe; return a dict describing the account."""

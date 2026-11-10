@@ -259,6 +259,15 @@ def run_member_playbook(name, deployment_id, playbook, variables, log_suffix, ti
     return adapter._run_playbook(config, str(ROOT / playbook), inventory, merged, log_suffix, timeout)
 
 
+def member_command(name, deployment_id, argv, timeout=120):
+    """Run one command on a ready member through its usual SSH path; return the CompletedProcess."""
+    lab = load(name)
+    adapter, config = member_adapter(lab, deployment_id)
+    known_hosts = adapter._export_ssh_known_hosts(config)
+    command = adapter.driver.ssh_argv(config, config['ssh_host'], known_hosts) + list(argv)
+    return adapter.driver.run_command(command, timeout=timeout, check=False)
+
+
 def set_range(lab, deployment_id, cidr):
     """Record the LUDUS range behind a member; refresh() pushes the routes to everyone."""
     cidr = str(ipaddress.ip_network(cidr, strict=True))

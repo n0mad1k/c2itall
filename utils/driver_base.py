@@ -19,7 +19,7 @@ import time
 
 from .cloud_driver import CloudDriver
 from .controller_io import ROOT, interruption_handlers, run_command, secure_directory
-from .ssh_utils import ipv4, ssh_options
+from .ssh_utils import ipv4
 from .state_store import StateStore
 
 ID_PATTERN = re.compile(r'[a-z0-9][a-z0-9-]{0,39}')
@@ -366,11 +366,6 @@ class StatefulDriver(CloudDriver):
         return exported
 
     # --- SSH ----------------------------------------------------------------
-    def ssh_argv(self, state, address, known_hosts, key=None):
-        return ['ssh', *ssh_options(known_hosts, key or state['ssh_private_key_path'],
-                                    state.get('ssh_proxy')),
-                self.ssh_user + '@' + str(address)]
-
     def after_ssh(self, state, deadline):
         """Provider-specific host fix-ups that need SSH; the default needs none."""
 
