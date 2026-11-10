@@ -6,6 +6,7 @@ gets a uniform login user through cloud-init so Kali and Ubuntu images
 behave the same; no EC2 key pair is ever registered.
 """
 
+import ipaddress
 import re
 import secrets
 import time
@@ -21,9 +22,10 @@ PREFIX_LIST = 'com.amazonaws.global.cloudfront.origin-facing'
 CACHING_DISABLED = '4135ea2d-6df8-44a3-9df3-4b5a84be39ad'
 ALL_VIEWER_EXCEPT_HOST = 'b689b0a8-53d0-40ab-baf2-68738e2966ac'
 ORIGIN_POLICY = {'HttpsOnly': 'https-only', 'HttpOnly': 'http-only', 'MatchRequest': 'match-viewer'}
-UBUNTU_PARAMETERS = {
+IMAGE_PARAMETERS = {
     'ubuntu': '/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id',
     'ubuntu2204': '/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id',
+    'debian12': '/aws/service/debian/release/12/latest/amd64',
 }
 KALI_PRODUCT_CODE = '7lgvy7mt78lgoi4lant0znp5h'
 ATTACK_BOX_SIZES = {'small': 't3.small', 'medium': 't3.medium', 'large': 't3.large', 'xlarge': 't3.xlarge'}
@@ -44,10 +46,15 @@ def cloud_config(user, public_key):
             'ssh_pwauth: false\n')
 
 
+def lab_tags(lab):
+    return {'c2itall-deployment': 'lab-' + lab['name'], 'c2itall-owner': lab['ownership_marker']}
+
+
 class AwsDriver(StatefulDriver):
     provider = 'aws'
     ssh_user = 'ec2-user'
     prefix = 'aws_'
+    capabilities = frozenset({'lab_network', 'nested_virtualization'})
     identity_keys = ('aws_region',)
     option_keys = ('aws_state_dir', 'aws_cleanup_deadline')
     provider_keys = ('region', 'instance_type')
@@ -88,11 +95,14 @@ class AwsDriver(StatefulDriver):
         return list(config.get('aws_regions') or [self.region(config)])
 
     def apply_profile(self, config, workload, profile, value):
-        if workload != 'attack_box' or profile != 'instance_size':
+        if workload == 'attack_box' and profile == 'instance_size':
+            if value not in ATTACK_BOX_SIZES:
+                raise ValueError('Unsupported AWS attack-box instance size')
+            config['aws_instance_type'] = ATTACK_BOX_SIZES[value]
             return config
-        if value not in ATTACK_BOX_SIZES:
-            raise ValueError('Unsupported AWS attack-box instance size')
-        config['aws_instance_type'] = ATTACK_BOX_SIZES[value]
+        if workload == 'ludus_host' and profile == 'instance_size' and value == 'nested':
+            config['aws_instance_type'] = 'c5.metal'
+            return config
         return config
 
     def plan(self, config, request):
@@ -103,6 +113,8 @@ class AwsDriver(StatefulDriver):
 
     def planned_ids(self, state):
         name = 'c2itall-' + state['deployment_id']
+        if state.get('aws_lab'):
+            return {kind: name for kind in ('security_group', 'instance')}
         kinds = ['vpc', 'internet_gateway', 'subnet', 'security_group', 'instance']
         if state.get('aws_edge'):
             kinds.append('edge')
@@ -138,7 +150,7 @@ class AwsDriver(StatefulDriver):
 
     # --- images ------------------------------------------------------------
     def image(self, role):
-        return UBUNTU_PARAMETERS.get(role, 'marketplace:' + KALI_PRODUCT_CODE)
+        return IMAGE_PARAMETERS.get(role, 'marketplace:' + KALI_PRODUCT_CODE)
 
     def resolve_image(self, role, region):
         """Return {'id', 'root_device'} for the newest image of a role in a region."""
@@ -153,7 +165,7 @@ class AwsDriver(StatefulDriver):
             image = max(images, key=lambda item: item['CreationDate'])
         else:
             image_id = self.client('ssm', region).get_parameter(
-                Name=UBUNTU_PARAMETERS[role])['Parameter']['Value']
+                Name=IMAGE_PARAMETERS[role])['Parameter']['Value']
             image = ec2.describe_images(ImageIds=[image_id])['Images'][0]
         return {'id': image['ImageId'], 'root_device': image['RootDeviceName']}
 
@@ -209,6 +221,17 @@ class AwsDriver(StatefulDriver):
                                 'PrefixListIds': [{'PrefixListId': self._prefix_list(ec2)}]})
         return permissions
 
+    def _lab_permissions(self, state):
+        lab = state['aws_lab']
+        permissions = [{'IpProtocol': '-1', 'IpRanges': [{'CidrIp': cidr}]} for cidr in lab['cidrs']]
+        permissions.append({'IpProtocol': 'tcp', 'FromPort': 22, 'ToPort': 22,
+                            'IpRanges': [{'CidrIp': state['operator_ip']}]})
+        for rule in state['aws_inbound_rules']:
+            permissions.append({'IpProtocol': rule['protocol'].lower(),
+                                'FromPort': int(rule['port']), 'ToPort': int(rule['port']),
+                                'IpRanges': [{'CidrIp': '0.0.0.0/0' if rule['source'] == '*' else rule['source']}]})
+        return permissions
+
     def create(self, state, deadline):
         region = state['aws_region']
         ec2 = self.client('ec2', region)
@@ -222,43 +245,47 @@ class AwsDriver(StatefulDriver):
             if ids:
                 resources[kind] = ids[0]
         name = 'c2itall-' + state['deployment_id']
+        lab = state.get('aws_lab')
 
-        if 'vpc' not in resources:
-            resources['vpc'] = ec2.create_vpc(
-                CidrBlock='10.0.0.0/16',
-                TagSpecifications=self._tag_specifications(state, 'vpc'))['Vpc']['VpcId']
-            self.save(state)
-        vpc = resources['vpc']
-        ec2.modify_vpc_attribute(VpcId=vpc, EnableDnsSupport={'Value': True})
-        ec2.modify_vpc_attribute(VpcId=vpc, EnableDnsHostnames={'Value': True})
+        if lab:
+            vpc = lab['network']['vpc']
+        else:
+            if 'vpc' not in resources:
+                resources['vpc'] = ec2.create_vpc(
+                    CidrBlock='10.0.0.0/16',
+                    TagSpecifications=self._tag_specifications(state, 'vpc'))['Vpc']['VpcId']
+                self.save(state)
+            vpc = resources['vpc']
+            ec2.modify_vpc_attribute(VpcId=vpc, EnableDnsSupport={'Value': True})
+            ec2.modify_vpc_attribute(VpcId=vpc, EnableDnsHostnames={'Value': True})
 
-        if 'internet_gateway' not in resources:
-            resources['internet_gateway'] = ec2.create_internet_gateway(
-                TagSpecifications=self._tag_specifications(state, 'internet-gateway'))['InternetGateway']['InternetGatewayId']
-            self.save(state)
-        gateway = ec2.describe_internet_gateways(
-            InternetGatewayIds=[resources['internet_gateway']])['InternetGateways'][0]
-        if not any(item.get('VpcId') == vpc for item in gateway.get('Attachments', [])):
-            ec2.attach_internet_gateway(InternetGatewayId=resources['internet_gateway'], VpcId=vpc)
+            if 'internet_gateway' not in resources:
+                resources['internet_gateway'] = ec2.create_internet_gateway(
+                    TagSpecifications=self._tag_specifications(state, 'internet-gateway'))['InternetGateway']['InternetGatewayId']
+                self.save(state)
+            gateway = ec2.describe_internet_gateways(
+                InternetGatewayIds=[resources['internet_gateway']])['InternetGateways'][0]
+            if not any(item.get('VpcId') == vpc for item in gateway.get('Attachments', [])):
+                ec2.attach_internet_gateway(InternetGatewayId=resources['internet_gateway'], VpcId=vpc)
 
-        if 'subnet' not in resources:
-            # Not every zone offers every instance type (us-east-1e has no t3); pick one that does.
-            zones = sorted(item['Location'] for item in ec2.describe_instance_type_offerings(
-                LocationType='availability-zone',
-                Filters=[{'Name': 'instance-type', 'Values': [state['aws_instance_type']]}])['InstanceTypeOfferings'])
-            if not zones:
-                raise RuntimeError(state['aws_instance_type'] + ' is not offered in ' + state['aws_region'])
-            resources['subnet'] = ec2.create_subnet(
-                VpcId=vpc, CidrBlock='10.0.1.0/24', AvailabilityZone=zones[0],
-                TagSpecifications=self._tag_specifications(state, 'subnet'))['Subnet']['SubnetId']
-            self.save(state)
-        ec2.modify_subnet_attribute(SubnetId=resources['subnet'], MapPublicIpOnLaunch={'Value': True})
-        table = ec2.describe_route_tables(Filters=[
-            {'Name': 'vpc-id', 'Values': [vpc]},
-            {'Name': 'association.main', 'Values': ['true']}])['RouteTables'][0]
-        if not any(route.get('DestinationCidrBlock') == '0.0.0.0/0' for route in table['Routes']):
-            ec2.create_route(RouteTableId=table['RouteTableId'], DestinationCidrBlock='0.0.0.0/0',
-                             GatewayId=resources['internet_gateway'])
+            if 'subnet' not in resources:
+                # Not every zone offers every instance type (us-east-1e has no t3); pick one that does.
+                zones = sorted(item['Location'] for item in ec2.describe_instance_type_offerings(
+                    LocationType='availability-zone',
+                    Filters=[{'Name': 'instance-type', 'Values': [state['aws_instance_type']]}])['InstanceTypeOfferings'])
+                if not zones:
+                    raise RuntimeError(state['aws_instance_type'] + ' is not offered in ' + state['aws_region'])
+                resources['subnet'] = ec2.create_subnet(
+                    VpcId=vpc, CidrBlock='10.0.1.0/24', AvailabilityZone=zones[0],
+                    TagSpecifications=self._tag_specifications(state, 'subnet'))['Subnet']['SubnetId']
+                self.save(state)
+            ec2.modify_subnet_attribute(SubnetId=resources['subnet'], MapPublicIpOnLaunch={'Value': True})
+            table = ec2.describe_route_tables(Filters=[
+                {'Name': 'vpc-id', 'Values': [vpc]},
+                {'Name': 'association.main', 'Values': ['true']}])['RouteTables'][0]
+            if not any(route.get('DestinationCidrBlock') == '0.0.0.0/0' for route in table['Routes']):
+                ec2.create_route(RouteTableId=table['RouteTableId'], DestinationCidrBlock='0.0.0.0/0',
+                                 GatewayId=resources['internet_gateway'])
 
         if 'security_group' not in resources:
             resources['security_group'] = ec2.create_security_group(
@@ -266,26 +293,35 @@ class AwsDriver(StatefulDriver):
                 TagSpecifications=self._tag_specifications(state, 'security-group'))['GroupId']
             self.save(state)
         group = ec2.describe_security_groups(GroupIds=[resources['security_group']])['SecurityGroups'][0]
-        wanted = self._permissions(ec2, state)
+        wanted = self._lab_permissions(state) if lab else self._permissions(ec2, state)
         if not group['IpPermissions']:
             ec2.authorize_security_group_ingress(GroupId=resources['security_group'], IpPermissions=wanted)
 
         if 'instance' not in resources:
             image = self.resolve_image(state['aws_image_role'], region)
             resources['image'] = image['id']
-            instance = ec2.run_instances(
+            launch = dict(
                 ImageId=image['id'], InstanceType=state['aws_instance_type'], MinCount=1, MaxCount=1,
-                SubnetId=resources['subnet'], SecurityGroupIds=[resources['security_group']],
                 UserData=cloud_config(self.ssh_user, Path(state['ssh_key_path']).read_text().strip()),
                 BlockDeviceMappings=[{'DeviceName': image['root_device'],
                                       'Ebs': {'VolumeSize': state['aws_disk_gb'], 'VolumeType': 'gp3',
                                               'DeleteOnTermination': True, 'Encrypted': True}}],
                 MetadataOptions={'HttpTokens': 'required', 'HttpEndpoint': 'enabled'},
                 TagSpecifications=self._tag_specifications(state, 'instance', 'volume'))
+            if lab:
+                subnet = lab['network']['public_subnet'] if lab['public_ip'] else lab['network']['private_subnet']
+                launch['NetworkInterfaces'] = [{'DeviceIndex': 0, 'SubnetId': subnet,
+                                                'Groups': [resources['security_group']],
+                                                'AssociatePublicIpAddress': lab['public_ip']}]
+            else:
+                launch.update(SubnetId=resources['subnet'], SecurityGroupIds=[resources['security_group']])
+            instance = ec2.run_instances(**launch)
             resources['instance'] = instance['Instances'][0]['InstanceId']
             self.save(state)
         self._wait(ec2, 'instance_running', deadline, InstanceIds=[resources['instance']])
         instance = ec2.describe_instances(InstanceIds=[resources['instance']])['Reservations'][0]['Instances'][0]
+        if lab:
+            return {'public_ip': instance['PublicIpAddress'] if lab['public_ip'] else instance['PrivateIpAddress']}
         outputs = {'public_ip': instance.get('PublicIpAddress', ''),
                    'public_dns': instance.get('PublicDnsName', '')}
         if state.get('aws_edge'):
@@ -424,6 +460,213 @@ class AwsDriver(StatefulDriver):
                     return True
                 raise
         wait_until(deadline, attempt, interval=10, what='AWS dependency release')
+
+    # --- lab networks --------------------------------------------------------
+    @staticmethod
+    def _lab_filters(lab):
+        return [{'Name': 'tag:' + key, 'Values': [value]} for key, value in lab_tags(lab).items()]
+
+    @staticmethod
+    def _lab_tag_specifications(lab, name, *types):
+        tags = [{'Key': 'Name', 'Value': name}] + [
+            {'Key': key, 'Value': value} for key, value in lab_tags(lab).items()]
+        return [{'ResourceType': kind, 'Tags': tags} for kind in types]
+
+    def _lab_owned(self, ec2, filters):
+        """Every live lab-network resource carrying this lab's ownership tags."""
+        return {
+            'vpc': [item['VpcId'] for item in ec2.describe_vpcs(Filters=filters)['Vpcs']],
+            'internet_gateway': [item['InternetGatewayId']
+                                 for item in ec2.describe_internet_gateways(Filters=filters)['InternetGateways']],
+            'subnet': [item['SubnetId'] for item in ec2.describe_subnets(Filters=filters)['Subnets']],
+            'route_table': [item['RouteTableId']
+                            for item in ec2.describe_route_tables(Filters=filters)['RouteTables']],
+            'address': [item['AllocationId'] for item in ec2.describe_addresses(Filters=filters)['Addresses']],
+            'nat_gateway': [item['NatGatewayId'] for item in ec2.describe_nat_gateways(
+                Filters=filters + [{'Name': 'state', 'Values': ['pending', 'available', 'deleting']}]
+            )['NatGateways']],
+            'flow_log': [item['FlowLogId'] for item in ec2.describe_flow_logs(Filters=filters)['FlowLogs']],
+        }
+
+    def _lab_availability_zone(self, ec2, region, instance_type):
+        def offered(types):
+            return {item['Location'] for item in ec2.describe_instance_type_offerings(
+                LocationType='availability-zone',
+                Filters=[{'Name': 'instance-type', 'Values': types}])['InstanceTypeOfferings']}
+        both = offered([instance_type]) & offered(['c5.metal'])
+        if both:
+            return sorted(both)[0]
+        # ponytail: no AZ in this region offers both the configured type and
+        # c5.metal for a future ludus_host; fall back to the configured type
+        # alone. A metal build landing here fails loudly at launch time.
+        zones = offered([instance_type])
+        if not zones:
+            raise RuntimeError(instance_type + ' is not offered in ' + region)
+        return sorted(zones)[0]
+
+    def _lab_find_or_create_subnet(self, ec2, lab, name, vpc, cidr, az, subnets, label):
+        for subnet in subnets:
+            if subnet['CidrBlock'] == cidr:
+                return subnet['SubnetId']
+        return ec2.create_subnet(
+            VpcId=vpc, CidrBlock=cidr, AvailabilityZone=az,
+            TagSpecifications=self._lab_tag_specifications(lab, name + '-' + label, 'subnet'))['Subnet']['SubnetId']
+
+    @staticmethod
+    def _lab_find_route_table(route_tables, subnet_id):
+        for table in route_tables:
+            if any(assoc.get('SubnetId') == subnet_id for assoc in table.get('Associations', [])):
+                return table['RouteTableId']
+        return None
+
+    @staticmethod
+    def _bucket_exists(s3, bucket):
+        try:
+            s3.head_bucket(Bucket=bucket)
+            return True
+        except Exception as exc:
+            if '404' in str(exc) or 'NotFound' in str(exc):
+                return False
+            raise
+
+    def lab_network(self, lab, config):
+        region = self.region(config)
+        ec2 = self.client('ec2', region)
+        filters = self._lab_filters(lab)
+        name = 'c2itall-lab-' + lab['name']
+        block = ipaddress.ip_network(lab['blocks']['aws'])
+        public_cidr, private_cidr = (str(net) for net in list(block.subnets(new_prefix=24))[:2])
+        deadline = time.monotonic() + 600
+
+        owned = self._lab_owned(ec2, filters)
+        if len(owned['vpc']) > 1:
+            raise RuntimeError('More than one owned lab VPC exists for ' + lab['name'])
+        vpc = owned['vpc'][0] if owned['vpc'] else ec2.create_vpc(
+            CidrBlock=str(block), TagSpecifications=self._lab_tag_specifications(lab, name, 'vpc'))['Vpc']['VpcId']
+        ec2.modify_vpc_attribute(VpcId=vpc, EnableDnsSupport={'Value': True})
+        ec2.modify_vpc_attribute(VpcId=vpc, EnableDnsHostnames={'Value': True})
+
+        igw = owned['internet_gateway'][0] if owned['internet_gateway'] else ec2.create_internet_gateway(
+            TagSpecifications=self._lab_tag_specifications(lab, name, 'internet-gateway')
+        )['InternetGateway']['InternetGatewayId']
+        gateway = ec2.describe_internet_gateways(InternetGatewayIds=[igw])['InternetGateways'][0]
+        if not any(item.get('VpcId') == vpc for item in gateway.get('Attachments', [])):
+            ec2.attach_internet_gateway(InternetGatewayId=igw, VpcId=vpc)
+
+        az = self._lab_availability_zone(ec2, region, config.get('aws_instance_type', 't3.medium'))
+
+        subnets = ec2.describe_subnets(Filters=filters)['Subnets']
+        public_subnet = self._lab_find_or_create_subnet(ec2, lab, name, vpc, public_cidr, az, subnets, 'public')
+        ec2.modify_subnet_attribute(SubnetId=public_subnet, MapPublicIpOnLaunch={'Value': True})
+        private_subnet = self._lab_find_or_create_subnet(ec2, lab, name, vpc, private_cidr, az, subnets, 'private')
+
+        route_tables = ec2.describe_route_tables(Filters=filters)['RouteTables']
+        public_rt = self._lab_find_route_table(route_tables, public_subnet)
+        if public_rt is None:
+            public_rt = ec2.create_route_table(
+                VpcId=vpc, TagSpecifications=self._lab_tag_specifications(
+                    lab, name + '-public', 'route-table'))['RouteTable']['RouteTableId']
+            ec2.create_route(RouteTableId=public_rt, DestinationCidrBlock='0.0.0.0/0', GatewayId=igw)
+            ec2.associate_route_table(RouteTableId=public_rt, SubnetId=public_subnet)
+
+        allocation_id = owned['address'][0] if owned['address'] else ec2.allocate_address(
+            Domain='vpc', TagSpecifications=self._lab_tag_specifications(lab, name, 'elastic-ip'))['AllocationId']
+
+        if owned['nat_gateway']:
+            nat_gateway = owned['nat_gateway'][0]
+        else:
+            nat_gateway = ec2.create_nat_gateway(
+                SubnetId=public_subnet, AllocationId=allocation_id,
+                TagSpecifications=self._lab_tag_specifications(lab, name, 'natgateway')
+            )['NatGateway']['NatGatewayId']
+            self._wait(ec2, 'nat_gateway_available', deadline, NatGatewayIds=[nat_gateway])
+        nat_ip = ec2.describe_nat_gateways(
+            NatGatewayIds=[nat_gateway])['NatGateways'][0]['NatGatewayAddresses'][0]['PublicIp']
+
+        private_rt = self._lab_find_route_table(route_tables, private_subnet)
+        if private_rt is None:
+            private_rt = ec2.create_route_table(
+                VpcId=vpc, TagSpecifications=self._lab_tag_specifications(
+                    lab, name + '-private', 'route-table'))['RouteTable']['RouteTableId']
+            ec2.create_route(RouteTableId=private_rt, DestinationCidrBlock='0.0.0.0/0', NatGatewayId=nat_gateway)
+            ec2.associate_route_table(RouteTableId=private_rt, SubnetId=private_subnet)
+
+        account_id = self.client('sts').get_caller_identity()['Account']
+        bucket = name + '-' + account_id
+        s3 = self.client('s3', region)
+        if not self._bucket_exists(s3, bucket):
+            if region == 'us-east-1':
+                s3.create_bucket(Bucket=bucket)
+            else:
+                s3.create_bucket(Bucket=bucket, CreateBucketConfiguration={'LocationConstraint': region})
+        s3.put_public_access_block(Bucket=bucket, PublicAccessBlockConfiguration={
+            'BlockPublicAcls': True, 'IgnorePublicAcls': True,
+            'BlockPublicPolicy': True, 'RestrictPublicBuckets': True})
+
+        flow_log = owned['flow_log'][0] if owned['flow_log'] else ec2.create_flow_logs(
+            ResourceType='VPC', ResourceIds=[vpc], TrafficType='ALL',
+            LogDestinationType='s3', LogDestination='arn:aws:s3:::' + bucket,
+            TagSpecifications=self._lab_tag_specifications(lab, name, 'vpc-flow-log'))['FlowLogIds'][0]
+
+        return {'region': region, 'availability_zone': az, 'vpc': vpc, 'internet_gateway': igw,
+                'public_subnet': public_subnet, 'private_subnet': private_subnet,
+                'public_route_table': public_rt, 'private_route_table': private_rt,
+                'eip_allocation': allocation_id, 'nat_gateway': nat_gateway, 'nat_ip': nat_ip,
+                'bucket': bucket, 'flow_log': flow_log}
+
+    def delete_lab_network(self, lab, network):
+        region = network.get('region') or self.region({})
+        ec2 = self.client('ec2', region)
+        filters = self._lab_filters(lab)
+        deadline = time.monotonic() + 600
+        owned = self._lab_owned(ec2, filters)
+        for vpc in owned['vpc']:
+            live = ec2.describe_instances(Filters=[
+                {'Name': 'vpc-id', 'Values': [vpc]},
+                {'Name': 'instance-state-name', 'Values': LIVE_STATES}])['Reservations']
+            if any(reservation['Instances'] for reservation in live):
+                raise RuntimeError('Refusing to delete the lab network for ' + lab['name'] +
+                                   ': instances still exist in ' + vpc)
+
+        for flow_log in owned['flow_log']:
+            ec2.delete_flow_logs(FlowLogIds=[flow_log])
+        for nat_gateway in owned['nat_gateway']:
+            ec2.delete_nat_gateway(NatGatewayId=nat_gateway)
+            self._wait(ec2, 'nat_gateway_deleted', deadline, NatGatewayIds=[nat_gateway])
+        for allocation_id in owned['address']:
+            ec2.release_address(AllocationId=allocation_id)
+        for table in ec2.describe_route_tables(Filters=filters)['RouteTables']:
+            for assoc in table.get('Associations', []):
+                if not assoc.get('Main'):
+                    ec2.disassociate_route_table(AssociationId=assoc['RouteTableAssociationId'])
+            ec2.delete_route_table(RouteTableId=table['RouteTableId'])
+        for subnet in ec2.describe_subnets(Filters=filters)['Subnets']:
+            ec2.delete_subnet(SubnetId=subnet['SubnetId'])
+        for gateway in ec2.describe_internet_gateways(Filters=filters)['InternetGateways']:
+            for attachment in gateway.get('Attachments', []):
+                ec2.detach_internet_gateway(InternetGatewayId=gateway['InternetGatewayId'], VpcId=attachment['VpcId'])
+            ec2.delete_internet_gateway(InternetGatewayId=gateway['InternetGatewayId'])
+        for vpc in owned['vpc']:
+            ec2.delete_vpc(VpcId=vpc)
+
+        bucket = network.get('bucket')
+        if not bucket:
+            account_id = self.client('sts').get_caller_identity()['Account']
+            bucket = 'c2itall-lab-' + lab['name'] + '-' + account_id
+        s3 = self.client('s3', region)
+        if self._bucket_exists(s3, bucket):
+            for page in s3.get_paginator('list_objects_v2').paginate(Bucket=bucket):
+                keys = [{'Key': item['Key']} for item in page.get('Contents', [])]
+                if keys:
+                    s3.delete_objects(Bucket=bucket, Delete={'Objects': keys})
+            s3.delete_bucket(Bucket=bucket)
+
+        remaining = self._lab_owned(ec2, filters)
+        if any(remaining.values()):
+            raise RuntimeError('Owned lab resources remain after deletion: ' + str(remaining))
+        if self._bucket_exists(s3, bucket):
+            raise RuntimeError('Lab bucket still exists after deletion: ' + bucket)
+        return True
 
     # --- health ------------------------------------------------------------
     def inspect(self, state, deadline):

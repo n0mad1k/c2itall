@@ -42,9 +42,13 @@ class FakeEc2:
 
     def __init__(self):
         self.vpcs, self.gateways, self.subnets, self.groups, self.instances = {}, {}, {}, {}, {}
+        self.route_tables, self.addresses, self.nat_gateways, self.flow_logs = {}, {}, {}, {}
         self.routes = []
         self.calls = []
         self.counter = 0
+        # Per-instance-type AZ offerings a lab test can seed; unseeded types
+        # fall back to the two legacy zones every other test relies on.
+        self.instance_type_zones = {}
 
     def _id(self, prefix):
         self.counter += 1
@@ -66,6 +70,9 @@ class FakeEc2:
                     return False
             elif name == 'vpc-id':
                 if item.get('VpcId') not in values:
+                    return False
+            elif name == 'state':
+                if item.get('State') not in values:
                     return False
             elif name not in ('association.main', 'prefix-list-name'):
                 raise AssertionError('unexpected filter ' + name)
@@ -118,8 +125,10 @@ class FakeEc2:
 
     # Subnet and routes
     def describe_instance_type_offerings(self, LocationType, Filters):
-        self.calls.append(('describe_instance_type_offerings', Filters[0]['Values'][0]))
-        return {'InstanceTypeOfferings': [{'Location': 'us-east-1e'}, {'Location': 'us-east-1a'}]}
+        instance_type = Filters[0]['Values'][0]
+        self.calls.append(('describe_instance_type_offerings', instance_type))
+        zones = self.instance_type_zones.get(instance_type, ['us-east-1e', 'us-east-1a'])
+        return {'InstanceTypeOfferings': [{'Location': zone} for zone in zones]}
 
     def create_subnet(self, VpcId, CidrBlock, AvailabilityZone, TagSpecifications):
         self.calls.append(('create_subnet', AvailabilityZone))
@@ -137,11 +146,90 @@ class FakeEc2:
     def delete_subnet(self, SubnetId):
         del self.subnets[SubnetId]
 
-    def describe_route_tables(self, Filters):
-        return {'RouteTables': [{'RouteTableId': 'rtb-main', 'Routes': list(self.routes)}]}
+    def describe_route_tables(self, Filters=None):
+        if any(condition['Name'] == 'association.main' for condition in Filters or []):
+            # The one legacy per-VM VPC's main table; never tagged, never in self.route_tables.
+            return {'RouteTables': [{'RouteTableId': 'rtb-main', 'Routes': list(self.routes),
+                                     'Associations': [{'Main': True}]}]}
+        return {'RouteTables': self._select(self.route_tables, Filters)}
 
-    def create_route(self, RouteTableId, DestinationCidrBlock, GatewayId):
-        self.routes.append({'DestinationCidrBlock': DestinationCidrBlock, 'GatewayId': GatewayId})
+    def create_route(self, RouteTableId, DestinationCidrBlock, GatewayId=None, NatGatewayId=None):
+        route = {'DestinationCidrBlock': DestinationCidrBlock}
+        if GatewayId:
+            route['GatewayId'] = GatewayId
+        if NatGatewayId:
+            route['NatGatewayId'] = NatGatewayId
+        if RouteTableId in self.route_tables:
+            self.route_tables[RouteTableId]['Routes'].append(route)
+        else:
+            self.routes.append(route)
+
+    def create_route_table(self, VpcId, TagSpecifications):
+        table = {'RouteTableId': self._id('rtb'), 'VpcId': VpcId, 'Routes': [], 'Associations': [],
+                 'Tags': self._tags(TagSpecifications, 'route-table')}
+        self.route_tables[table['RouteTableId']] = table
+        return {'RouteTable': table}
+
+    def associate_route_table(self, RouteTableId, SubnetId):
+        association_id = self._id('rtbassoc')
+        self.route_tables[RouteTableId]['Associations'].append(
+            {'RouteTableAssociationId': association_id, 'SubnetId': SubnetId, 'Main': False})
+        return {'AssociationId': association_id}
+
+    def disassociate_route_table(self, AssociationId):
+        for table in self.route_tables.values():
+            table['Associations'] = [assoc for assoc in table['Associations']
+                                     if assoc['RouteTableAssociationId'] != AssociationId]
+
+    def delete_route_table(self, RouteTableId):
+        del self.route_tables[RouteTableId]
+
+    # Elastic IPs
+    def allocate_address(self, Domain, TagSpecifications):
+        allocation_id = self._id('eipalloc')
+        address = {'AllocationId': allocation_id, 'PublicIp': '8.8.9.' + str(10 + len(self.addresses)),
+                   'Tags': self._tags(TagSpecifications, 'elastic-ip')}
+        self.addresses[allocation_id] = address
+        return address
+
+    def describe_addresses(self, Filters=None):
+        return {'Addresses': self._select(self.addresses, Filters)}
+
+    def release_address(self, AllocationId):
+        del self.addresses[AllocationId]
+
+    # NAT gateways
+    def create_nat_gateway(self, SubnetId, AllocationId, TagSpecifications):
+        nat_id = self._id('nat')
+        nat = {'NatGatewayId': nat_id, 'SubnetId': SubnetId, 'State': 'available',
+               'NatGatewayAddresses': [{'AllocationId': AllocationId,
+                                       'PublicIp': self.addresses[AllocationId]['PublicIp']}],
+               'Tags': self._tags(TagSpecifications, 'natgateway')}
+        self.nat_gateways[nat_id] = nat
+        return {'NatGateway': nat}
+
+    def describe_nat_gateways(self, Filters=None, NatGatewayIds=None):
+        return {'NatGateways': self._select(self.nat_gateways, Filters, NatGatewayIds)}
+
+    def delete_nat_gateway(self, NatGatewayId):
+        self.nat_gateways[NatGatewayId]['State'] = 'deleted'
+
+    # VPC flow logs
+    def create_flow_logs(self, ResourceType, ResourceIds, TrafficType, LogDestinationType,
+                         LogDestination, TagSpecifications):
+        flow_id = self._id('fl')
+        self.flow_logs[flow_id] = {
+            'FlowLogId': flow_id, 'ResourceId': ResourceIds[0], 'TrafficType': TrafficType,
+            'LogDestinationType': LogDestinationType, 'LogDestination': LogDestination,
+            'Tags': self._tags(TagSpecifications, 'vpc-flow-log')}
+        return {'FlowLogIds': [flow_id], 'Unsuccessful': []}
+
+    def describe_flow_logs(self, Filters=None):
+        return {'FlowLogs': self._select(self.flow_logs, Filters)}
+
+    def delete_flow_logs(self, FlowLogIds):
+        for flow_id in FlowLogIds:
+            self.flow_logs.pop(flow_id, None)
 
     # Security group
     def create_security_group(self, GroupName, Description, VpcId, TagSpecifications):
@@ -164,9 +252,19 @@ class FakeEc2:
 
     # Instances
     def run_instances(self, **kwargs):
-        instance = {'InstanceId': self._id('i'), 'State': {'Name': 'running'},
-                    'PublicIpAddress': '8.8.8.20', 'PublicDnsName': 'ec2-8-8-8-20.compute-1.amazonaws.com',
+        if 'NetworkInterfaces' in kwargs:
+            interface = kwargs['NetworkInterfaces'][0]
+            subnet_id = interface['SubnetId']
+            public = bool(interface.get('AssociatePublicIpAddress'))
+        else:
+            subnet_id = kwargs.get('SubnetId')
+            public = True
+        vpc_id = self.subnets[subnet_id]['VpcId'] if subnet_id in self.subnets else None
+        instance = {'InstanceId': self._id('i'), 'State': {'Name': 'running'}, 'VpcId': vpc_id,
+                    'SubnetId': subnet_id, 'PrivateIpAddress': '10.0.1.' + str(20 + len(self.instances)),
                     'Tags': self._tags(kwargs['TagSpecifications'], 'instance'), 'Launch': kwargs}
+        if public:
+            instance.update(PublicIpAddress='8.8.8.20', PublicDnsName='ec2-8-8-8-20.compute-1.amazonaws.com')
         self.instances[instance['InstanceId']] = instance
         return {'Instances': [instance]}
 
@@ -242,6 +340,49 @@ class FakeCloudFront:
         if Id not in self.distributions:
             raise self.exceptions.NoSuchDistribution()
         return {'Distribution': {'Id': Id}}
+
+
+class FakeS3:
+    """The bucket subset the lab network uses: create, lock down, empty, delete."""
+
+    def __init__(self):
+        self.buckets = {}
+
+    def head_bucket(self, Bucket):
+        if Bucket not in self.buckets:
+            raise Exception('404 Not Found')
+        return {}
+
+    def create_bucket(self, Bucket, CreateBucketConfiguration=None):
+        self.buckets[Bucket] = {'objects': {}, 'public_access_block': None,
+                                'location': (CreateBucketConfiguration or {}).get('LocationConstraint')}
+
+    def put_public_access_block(self, Bucket, PublicAccessBlockConfiguration):
+        self.buckets[Bucket]['public_access_block'] = PublicAccessBlockConfiguration
+
+    def put_object(self, Bucket, Key, Body=b''):
+        self.buckets[Bucket]['objects'][Key] = Body
+
+    def get_paginator(self, name):
+        assert name == 'list_objects_v2'
+        buckets = self.buckets
+
+        class Paginator:
+            def paginate(self, Bucket):
+                yield {'Contents': [{'Key': key} for key in buckets[Bucket]['objects']]}
+        return Paginator()
+
+    def delete_objects(self, Bucket, Delete):
+        for item in Delete['Objects']:
+            self.buckets[Bucket]['objects'].pop(item['Key'], None)
+
+    def delete_bucket(self, Bucket):
+        del self.buckets[Bucket]
+
+
+class FakeSts:
+    def get_caller_identity(self):
+        return {'Account': '123456789012'}
 
 
 class FakeLinodeApi:
@@ -385,9 +526,19 @@ class AwsDriverTests(DriverCase):
         super().setUp()
         self.ec2 = FakeEc2()
         self.cloudfront = FakeCloudFront()
+        self.s3 = FakeS3()
+        self.sts = FakeSts()
         self.driver = aws_cloud.AwsDriver()
-        self.driver.client = lambda service, region='us-east-1': {'ec2': self.ec2, 'cloudfront': self.cloudfront}[service]
+        self.driver.client = lambda service, region='us-east-1': {
+            'ec2': self.ec2, 'cloudfront': self.cloudfront, 's3': self.s3, 'sts': self.sts}[service]
         self.driver.resolve_image = lambda role, region: {'id': 'ami-' + role, 'root_device': '/dev/sda1'}
+
+    def _lab_network(self, instance_type='t3.small'):
+        """A ready lab network a lab VM test can place its instance into."""
+        self.ec2.instance_type_zones = {instance_type: ['us-east-1a', 'us-east-1e'], 'c5.metal': ['us-east-1a']}
+        lab = {'name': 'redteam', 'ownership_marker': 'marker-1', 'blocks': {'aws': '198.18.16.0/20'}}
+        config = self.config('aws', aws_region='us-east-1', aws_instance_type=instance_type)
+        return lab, config, self.driver.lab_network(lab, config)
 
     def test_lifecycle_creates_tagged_resources_and_retires_them(self):
         config = self.config('aws', aws_region='us-east-1', aws_instance_type='t3.small')
@@ -460,6 +611,141 @@ class AwsDriverTests(DriverCase):
         self.assertFalse((self.state_dir / 'lt-aws-unit.json').exists())
         self.assertEqual(json.loads((self.state_dir / 'archive' / 'lt-aws-unit.json').read_text())['status'], 'deleted')
         self.assertTrue(self.private.exists(), 'a module-owned key is never deleted by the driver')
+
+    def test_lab_network_creates_every_tagged_resource_and_is_idempotent(self):
+        lab, config, network = self._lab_network()
+        self.assertEqual(network['region'], 'us-east-1')
+        self.assertEqual(network['availability_zone'], 'us-east-1a')
+        vpc = self.ec2.vpcs[network['vpc']]
+        self.assertEqual(vpc['CidrBlock'], '198.18.16.0/20')
+        self.assertEqual({tag['Key']: tag['Value'] for tag in vpc['Tags']},
+                         {'Name': 'c2itall-lab-redteam', 'c2itall-deployment': 'lab-redteam',
+                          'c2itall-owner': 'marker-1'})
+        self.assertTrue(any(item.get('VpcId') == network['vpc']
+                            for item in self.ec2.gateways[network['internet_gateway']]['Attachments']))
+        self.assertEqual(self.ec2.subnets[network['public_subnet']]['CidrBlock'], '198.18.16.0/24')
+        self.assertEqual(self.ec2.subnets[network['private_subnet']]['CidrBlock'], '198.18.17.0/24')
+        public_rt = self.ec2.route_tables[network['public_route_table']]
+        self.assertEqual(public_rt['Routes'],
+                         [{'DestinationCidrBlock': '0.0.0.0/0', 'GatewayId': network['internet_gateway']}])
+        self.assertEqual([assoc['SubnetId'] for assoc in public_rt['Associations']], [network['public_subnet']])
+        private_rt = self.ec2.route_tables[network['private_route_table']]
+        self.assertEqual(private_rt['Routes'],
+                         [{'DestinationCidrBlock': '0.0.0.0/0', 'NatGatewayId': network['nat_gateway']}])
+        self.assertEqual([assoc['SubnetId'] for assoc in private_rt['Associations']], [network['private_subnet']])
+        self.assertEqual(network['nat_ip'], self.ec2.addresses[network['eip_allocation']]['PublicIp'])
+        self.assertTrue(any(call[0] == 'wait' and call[1] == 'nat_gateway_available'
+                            and call[2]['NatGatewayIds'] == [network['nat_gateway']]
+                            for call in self.ec2.calls))
+        self.assertEqual(network['bucket'], 'c2itall-lab-redteam-123456789012')
+        self.assertIn(network['bucket'], self.s3.buckets)
+        self.assertEqual(self.s3.buckets[network['bucket']]['public_access_block'], {
+            'BlockPublicAcls': True, 'IgnorePublicAcls': True,
+            'BlockPublicPolicy': True, 'RestrictPublicBuckets': True})
+        flow_log = self.ec2.flow_logs[network['flow_log']]
+        self.assertEqual(flow_log['LogDestination'], 'arn:aws:s3:::' + network['bucket'])
+        self.assertEqual((flow_log['TrafficType'], flow_log['LogDestinationType']), ('ALL', 's3'))
+
+        counts_before = (len(self.ec2.vpcs), len(self.ec2.subnets), len(self.ec2.route_tables),
+                         len(self.ec2.addresses), len(self.ec2.nat_gateways), len(self.ec2.flow_logs),
+                         len(self.s3.buckets))
+        again = self.driver.lab_network(lab, config)
+        self.assertEqual(again, network)
+        self.assertEqual((len(self.ec2.vpcs), len(self.ec2.subnets), len(self.ec2.route_tables),
+                          len(self.ec2.addresses), len(self.ec2.nat_gateways), len(self.ec2.flow_logs),
+                          len(self.s3.buckets)), counts_before)
+
+    def test_lab_member_launches_in_the_private_subnet_without_a_public_ip(self):
+        lab, config, network = self._lab_network()
+        placement = {'name': 'redteam', 'role': 'member', 'lab_ip': '198.18.0.10', 'public_ip': False,
+                     'cidrs': ['198.18.0.0/16'], 'range_cidrs': [], 'network': network,
+                     'ssh_source': '9.9.9.9/32', 'ssh_proxy': None, 'egress_via_hub': True}
+        request = ProvisionRequest('lt-aws-lab-member', 'exfil_receiver', [], 'debian12', 64,
+                                   str(self.public), str(self.private), False, lab=placement)
+        plan = self.driver.validate_config(self.driver.plan(config, request))
+        self.assertEqual(plan['operator_ip'], '9.9.9.9/32')
+        self.driver.prepare_state(plan)
+        self.assertTrue(self.driver.deploy(plan))
+        state = self.driver.store.load('lt-aws-lab-member', self.state_dir)
+        self.assertEqual(set(state['resources']), {'image', 'security_group', 'instance'})
+        instance = self.ec2.instances[state['resources']['instance']]
+        self.assertEqual(instance['SubnetId'], network['private_subnet'])
+        self.assertFalse(instance['Launch']['NetworkInterfaces'][0]['AssociatePublicIpAddress'])
+        self.assertNotIn('PublicIpAddress', instance)
+        self.assertEqual(self.driver.public_address('lt-aws-lab-member', config), instance['PrivateIpAddress'])
+        group = self.ec2.groups[state['resources']['security_group']]
+        self.assertEqual(group['IpPermissions'], [
+            {'IpProtocol': '-1', 'IpRanges': [{'CidrIp': '198.18.0.0/16'}]},
+            {'IpProtocol': 'tcp', 'FromPort': 22, 'ToPort': 22, 'IpRanges': [{'CidrIp': '9.9.9.9/32'}]}])
+        self.assertEqual(self.driver.planned_ids(plan),
+                         {'security_group': 'c2itall-lt-aws-lab-member', 'instance': 'c2itall-lt-aws-lab-member'})
+        self.assertNotIn('vpc', self.driver.planned_ids(plan))
+
+    def test_lab_gateway_launches_in_the_public_subnet(self):
+        lab, config, network = self._lab_network()
+        placement = {'name': 'redteam', 'role': 'gateway', 'lab_ip': '198.18.0.1', 'public_ip': True,
+                     'cidrs': ['198.18.0.0/16'], 'range_cidrs': [], 'network': network,
+                     'ssh_source': OPERATOR + '/32', 'ssh_proxy': None, 'egress_via_hub': False}
+        rules = [{'name': 'wireguard', 'protocol': 'Udp', 'port': 51820, 'source': '*'}]
+        request = ProvisionRequest('lt-aws-lab-gateway', 'lab_gateway', rules, 'debian12', 32,
+                                   str(self.public), str(self.private), False, lab=placement)
+        plan = self.driver.validate_config(self.driver.plan(config, request))
+        self.driver.prepare_state(plan)
+        self.assertTrue(self.driver.deploy(plan))
+        state = self.driver.store.load('lt-aws-lab-gateway', self.state_dir)
+        instance = self.ec2.instances[state['resources']['instance']]
+        self.assertEqual(instance['SubnetId'], network['public_subnet'])
+        self.assertTrue(instance['Launch']['NetworkInterfaces'][0]['AssociatePublicIpAddress'])
+        self.assertEqual(self.driver.public_address('lt-aws-lab-gateway', config), instance['PublicIpAddress'])
+        group = self.ec2.groups[state['resources']['security_group']]
+        self.assertEqual(group['IpPermissions'][-1], {
+            'IpProtocol': 'udp', 'FromPort': 51820, 'ToPort': 51820, 'IpRanges': [{'CidrIp': '0.0.0.0/0'}]})
+
+    def test_lab_member_delete_leaves_the_lab_vpc_in_place(self):
+        lab, config, network = self._lab_network()
+        placement = {'name': 'redteam', 'role': 'member', 'lab_ip': '198.18.0.12', 'public_ip': False,
+                     'cidrs': ['198.18.0.0/16'], 'range_cidrs': [], 'network': network,
+                     'ssh_source': '9.9.9.9/32', 'ssh_proxy': None, 'egress_via_hub': True}
+        request = ProvisionRequest('lt-aws-lab-del', 'exfil_receiver', [], 'debian12', 64,
+                                   str(self.public), str(self.private), False, lab=placement)
+        plan = self.driver.validate_config(self.driver.plan(config, request))
+        self.driver.prepare_state(plan)
+        self.assertTrue(self.driver.deploy(plan))
+        state = self.driver.store.load('lt-aws-lab-del', self.state_dir)
+        instance_id = state['resources']['instance']
+        group_id = state['resources']['security_group']
+        self.assertTrue(self.driver.cleanup({'deployment_id': 'lt-aws-lab-del', 'aws_state_dir': str(self.state_dir)}))
+        self.assertEqual(self.ec2.instances[instance_id]['State']['Name'], 'terminated')
+        self.assertNotIn(group_id, self.ec2.groups)
+        self.assertIn(network['vpc'], self.ec2.vpcs)
+        self.assertIn(network['public_subnet'], self.ec2.subnets)
+        self.assertIn(network['private_subnet'], self.ec2.subnets)
+        self.assertIn(network['nat_gateway'], self.ec2.nat_gateways)
+
+    def test_delete_lab_network_refuses_with_a_live_instance_then_removes_everything(self):
+        lab, config, network = self._lab_network()
+        placement = {'name': 'redteam', 'role': 'member', 'lab_ip': '198.18.0.13', 'public_ip': False,
+                     'cidrs': ['198.18.0.0/16'], 'range_cidrs': [], 'network': network,
+                     'ssh_source': '9.9.9.9/32', 'ssh_proxy': None, 'egress_via_hub': True}
+        request = ProvisionRequest('lt-aws-lab-net', 'exfil_receiver', [], 'debian12', 64,
+                                   str(self.public), str(self.private), False, lab=placement)
+        plan = self.driver.validate_config(self.driver.plan(config, request))
+        self.driver.prepare_state(plan)
+        self.assertTrue(self.driver.deploy(plan))
+        with self.assertRaisesRegex(RuntimeError, 'instance'):
+            self.driver.delete_lab_network(lab, network)
+        self.assertTrue(self.driver.cleanup({'deployment_id': 'lt-aws-lab-net', 'aws_state_dir': str(self.state_dir)}))
+
+        self.assertTrue(self.driver.delete_lab_network(lab, network))
+        self.assertEqual((self.ec2.vpcs, self.ec2.gateways, self.ec2.subnets, self.ec2.route_tables,
+                          self.ec2.addresses, self.ec2.flow_logs), ({}, {}, {}, {}, {}, {}))
+        # A deleted NAT gateway lingers in describe output with State 'deleted', as AWS itself does.
+        self.assertTrue(all(nat['State'] == 'deleted' for nat in self.ec2.nat_gateways.values()))
+        self.assertNotIn(network['bucket'], self.s3.buckets)
+        with self.assertRaises(Exception):
+            self.s3.head_bucket(Bucket=network['bucket'])
+        # Re-running after everything is already gone stays re-runnable.
+        self.assertTrue(self.driver.delete_lab_network(lab, network))
 
 
 class LinodeDriverTests(DriverCase):
