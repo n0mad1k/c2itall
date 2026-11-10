@@ -263,7 +263,10 @@ class Live:
     def verify_c2(self, deployment_id):
         lab = lab_mod.load(self.name)
         ip = lab['members'][deployment_id]['lab_ip']
-        result = self.member_ssh(deployment_id, "systemctl is-active havoc; ss -ltn | grep -c -E ':(40056|9443|8443) '; "
+        # The teamserver finishes starting after the play returns; give it up to three minutes.
+        result = self.member_ssh(deployment_id, "for i in $(seq 1 36); do [ \"$(systemctl is-active havoc)\" = active ] && "
+                                 "[ \"$(ss -ltn | grep -c -E ':(40056|9443|8443) ')\" = 3 ] && break; sleep 5; done; "
+                                 "systemctl is-active havoc; ss -ltn | grep -c -E ':(40056|9443|8443) '; "
                                  "sudo -n grep -c '\"" + ip + "\"' /root/Tools/Havoc/data/havoc.yaotl; "
                                  "sudo -n grep -c 'Cert {' /root/Tools/Havoc/data/havoc.yaotl; "
                                  "sudo -n grep -c 'user \"red1\"' /root/Tools/Havoc/data/havoc.yaotl; "

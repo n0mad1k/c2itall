@@ -256,7 +256,8 @@ mkdir -p $PAYLOADS_DIR/stagers
 generate_profiles
 
 # Generate payloads
-payload_info=$(generate_payloads)
+# The function logs progress to stdout; only its last line is the result triple.
+payload_info=$(generate_payloads | tail -n 1)
 
 # Generate stagers
 generate_stagers $(echo $payload_info | cut -d':' -f1) $(echo $payload_info | cut -d':' -f3)
