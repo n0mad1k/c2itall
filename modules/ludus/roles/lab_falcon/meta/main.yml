@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  author: lab
+  description: "Install the CrowdStrike Falcon sensor when an installer was supplied"
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Windows
+      versions: [all]
+dependencies: []

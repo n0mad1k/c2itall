@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  author: lab
+  description: "Assert the seeded objects and the range to C2 path"
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Windows
+      versions: [all]
+dependencies: []

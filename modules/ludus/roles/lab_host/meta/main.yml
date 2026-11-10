@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  author: lab
+  description: "Prepare a lab member: shares, datasets, local accounts and per-host services"
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Windows
+      versions: [all]
+dependencies: []
