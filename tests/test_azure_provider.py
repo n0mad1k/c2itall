@@ -3242,12 +3242,14 @@ class LabNetworkTests(AzureFixture):
                                   return_value={'properties': {'outputs': outputs}}):
             network = azure.create_lab_network(lab, self.config)
         self.assertEqual([call[:2] for call in calls], [
-            ['group', 'create'], ['deployment', 'group'], ['network', 'watcher'], ['network', 'watcher']])
+            ['group', 'create'], ['deployment', 'group'], ['network', 'watcher'], ['group', 'create'],
+            ['network', 'watcher'], ['network', 'watcher']])
+        self.assertEqual(calls[3][2:4], ['--name', 'NetworkWatcherRG'])
         self.assertIn('c2itall-deployment=lab-blue', calls[0])
         template = json.loads(Path(calls[1][calls[1].index('--template-file') + 1]).read_text()) \
             if Path(calls[1][calls[1].index('--template-file') + 1]).exists() else None
         self.assertIsNone(template)  # rendered into a temporary directory that is gone again
-        self.assertEqual(calls[3][2:4], ['flow-log', 'create'])
+        self.assertEqual(calls[5][2:4], ['flow-log', 'create'])
         self.assertEqual(network['subnet_id'], self.SUBNET)
         self.assertEqual(network['nat_ip'], '20.0.0.9')
         self.assertEqual(network['resource_group'], 'c2itall-lab-blue')
@@ -3271,6 +3273,14 @@ class LabNetworkTests(AzureFixture):
                 mock.patch.object(azure, '_group', return_value=group):
             with self.assertRaises(RuntimeError):
                 azure.delete_lab_network(lab, network)
+        calls.clear()
+        with mock.patch.object(azure, 'run_az', side_effect=run_az), \
+                mock.patch.object(azure, '_group', side_effect=[group, None]), \
+                mock.patch.object(azure, 'check_connection', return_value={'subscription_id': smoke.SUBSCRIPTION}), \
+                mock.patch.object(azure.time, 'sleep'):
+            self.assertTrue(azure.delete_lab_network(lab, {'status': 'creating', 'cidr': '198.18.16.0/20'}))
+        self.assertEqual([call[:2] for call in calls], [['group', 'delete']])
+        self.assertEqual(calls[0][2:4], ['--name', 'c2itall-lab-blue'])
         foreign = dict(group, tags={'c2itall-deployment': 'other', 'c2itall-owner': 'x'})
         with mock.patch.object(azure, 'run_az', side_effect=run_az), \
                 mock.patch.object(azure, '_group', return_value=foreign):

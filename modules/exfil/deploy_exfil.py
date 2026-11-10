@@ -9,7 +9,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from utils import lab as lab_mod
 from utils.common import COLORS, clear_screen, confirm_action, generate_deployment_id, print_banner, wait_for_input
-from utils.provider_utils import gather_provider_config, prepare_module_ssh_key, select_provider
+from utils.provider_utils import gather_provider_config, select_provider
 
 
 def _credentials(lab):
@@ -52,10 +52,7 @@ def gather_exfil_parameters(lab_name):
     config.update(exfil_minio_user=creds['minio_user'], exfil_minio_password=creds['minio_password'],
                   exfil_http_user=creds['http_user'], exfil_http_password=creds['http_password'],
                   exfil_sftp_password=creds['sftp_password'])
-    ready, _ = prepare_module_ssh_key(config, config['deployment_id'])
-    if not ready:
-        print(f"{COLORS['RED']}Failed to prepare the SSH key{COLORS['RESET']}")
-        return None
+    config['ssh_key_path'] = lab['ssh_key_path']
     return config
 
 

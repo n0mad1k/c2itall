@@ -595,8 +595,12 @@ def create_lab_network(lab, config):
         network = {key: outputs[key]['value']
                    for key in ('vnet_id', 'subnet_id', 'nat_ip', 'storage_account_id')}
         flow = identity['deployment_id'] + '-flow'
-        run_az(['network', 'watcher', 'configure', '--locations', location, '--enabled', 'true',
-                '--resource-group', 'NetworkWatcherRG'], sub, deadline, timeout=120)
+        # Flow logs need the region's Network Watcher; Azure does not always create it with the VNet.
+        if not run_az(['network', 'watcher', 'list', '--query', "[?location=='" + location + "'].name"],
+                      sub, deadline):
+            run_az(['group', 'create', '--name', 'NetworkWatcherRG', '--location', location], sub, deadline)
+            run_az(['network', 'watcher', 'configure', '--locations', location, '--enabled', 'true',
+                    '--resource-group', 'NetworkWatcherRG'], sub, deadline, timeout=120)
         run_az(['network', 'watcher', 'flow-log', 'create', '--location', location,
                 '--resource-group', group, '--name', flow, '--vnet', network['vnet_id'],
                 '--storage-account', network['storage_account_id'], '--enabled', 'true',
@@ -606,9 +610,15 @@ def create_lab_network(lab, config):
 
 
 def delete_lab_network(lab, network):
-    """Remove the flow log and the lab's resource group once no NIC uses the subnet."""
-    sub = str(uuid.UUID(network['subscription_id']))
-    identity = _lab_identity(lab, sub, network['resource_group'])
+    """Remove the flow log and the lab's resource group once no NIC uses the subnet.
+
+    A record left at 'creating' carries only the block; the group name is
+    derived and the CLI's current subscription is used, so a half-built
+    network is still removed.
+    """
+    sub = network.get('subscription_id') or check_connection()['subscription_id']
+    group_name = network.get('resource_group') or 'c2itall-lab-' + lab['name']
+    identity = _lab_identity(lab, sub, group_name)
     deadline = time.monotonic() + 900
     with lifecycle_lock(identity):
         group = _group(identity, deadline)
@@ -616,16 +626,17 @@ def delete_lab_network(lab, network):
             return True
         tags = ownership_tags(identity)
         if any((group.get('tags') or {}).get(k) != v for k, v in tags.items()):
-            raise ValueError('Refusing foreign resource group ' + network['resource_group'])
-        if run_az(['network', 'vnet', 'subnet', 'show', '--ids', network['subnet_id'],
-                   '--query', 'ipConfigurations'], sub, deadline):
+            raise ValueError('Refusing foreign resource group ' + group_name)
+        if network.get('subnet_id') and run_az(['network', 'vnet', 'subnet', 'show', '--ids',
+                                                network['subnet_id'], '--query', 'ipConfigurations'],
+                                               sub, deadline):
             raise RuntimeError('Lab subnet still has network interfaces; tear down the members first')
-        if run_az(['network', 'watcher', 'flow-log', 'list', '--location', network['location'],
-                   '--query', "[?name=='" + network['flow_log'] + "'].name"], sub, deadline):
+        if network.get('flow_log') and run_az(
+                ['network', 'watcher', 'flow-log', 'list', '--location', network['location'],
+                 '--query', "[?name=='" + network['flow_log'] + "'].name"], sub, deadline):
             run_az(['network', 'watcher', 'flow-log', 'delete', '--location', network['location'],
                     '--name', network['flow_log']], sub, deadline, timeout=300)
-        run_az(['group', 'delete', '--name', network['resource_group'], '--yes', '--no-wait'],
-               sub, deadline)
+        run_az(['group', 'delete', '--name', group_name, '--yes', '--no-wait'], sub, deadline)
         while _group(identity, deadline) is not None:
             if time.monotonic() >= deadline:
                 raise TimeoutError('Lab resource group deletion deadline exceeded')

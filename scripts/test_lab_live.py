@@ -144,7 +144,7 @@ class Live:
         result = self.gateway_ssh(
             "set -e; sudo -n wg show wg0 peers | grep -c . ; sudo -n sysctl -n net.ipv4.ip_forward; "
             "systemctl is-active wg-quick@wg0 lab-hub-fw rsyslog; sudo -n iptables -t nat -S LAB_NAT | grep -c MASQUERADE; "
-            "sudo -n test -f /var/log/lab/flows.log && echo flows; sudo -n ufw status | head -1")
+            "test -f /etc/rsyslog.d/10-labflow.conf && echo flows; sudo -n ufw status | head -1")
         lines = result.stdout.split()
         self.step('gateway_hub_up', result.returncode == 0 and lines[:1] >= ['1'] and lines[1:2] == ['1']
                   and lines[2:5] == ['active'] * 3 and 'flows' in lines and 'active' in result.stdout.split('\n')[-2],
@@ -192,10 +192,10 @@ class Live:
         env = ' '.join('{0}={1}'.format(key, json.dumps(str(value))) for key, value in creds.items())
         upload = self.gateway_ssh(
             'set -e; export ' + env + '; cd /tmp; for f in http s3 sftp; do head -c 200000 /dev/urandom > lab-$f.bin; done; '
-            'curl -ks --fail -u "$exfil_http_user:$exfil_http_password" -T lab-http.bin https://' + ip + ':8443/upload/lab-http.bin; '
-            'rclone --s3-provider Minio --s3-endpoint http://' + ip + ':9000 --s3-access-key-id "$exfil_minio_user" '
-            '--s3-secret-access-key "$exfil_minio_password" copyto lab-s3.bin :s3:drop/lab-s3.bin; '
-            'curl -ks --fail -u "drop:$exfil_sftp_password" -T lab-sftp.bin sftp://' + ip + ':2222/upload/lab-sftp.bin; '
+            'curl -ks --fail -u "$http_user:$http_password" -T lab-http.bin https://' + ip + ':8443/upload/lab-http.bin; '
+            'rclone --s3-provider Minio --s3-endpoint http://' + ip + ':9000 --s3-access-key-id "$minio_user" '
+            '--s3-secret-access-key "$minio_password" copyto lab-s3.bin :s3:drop/lab-s3.bin; '
+            'curl -ks --fail -u "$sftp_user:$sftp_password" -T lab-sftp.bin sftp://' + ip + ':2222/upload/lab-sftp.bin; '
             'sha256sum lab-http.bin lab-s3.bin lab-sftp.bin', timeout=300)
         self.step('exfil.uploads_from_gateway', upload.returncode == 0, upload.stdout + upload.stderr)
         hashes = dict(line.split()[::-1] for line in upload.stdout.splitlines() if line.strip().endswith('.bin'))
@@ -316,7 +316,8 @@ class Live:
         baseline = self.cloud.totals()
         self.record('baseline.json', baseline)
         lab = lab_mod.create(self.name)
-        self.step('lab_created', (lab_mod.LAB_ROOT / (self.name + '.json')).is_file(), lab_mod.LAB_ROOT / self.name)
+        self.record_path = lab_mod.LAB_ROOT / ('lab-' + self.name + '.json')
+        self.step('lab_created', self.record_path.is_file(), self.record_path)
         try:
             setup_logging('lab-' + self.name, 'live_test')
             if args.provider == 'flokinet':
@@ -351,7 +352,7 @@ class Live:
                                 capture_output=True, text=True, timeout=3600)
         (self.evidence / 'standalone-teardown.txt').write_text(result.stdout[-30000:] + '\n--- stderr ---\n' + result.stderr[-5000:])
         self.step('standalone_teardown', result.returncode == 0, 'exit ' + str(result.returncode) + ' ' + result.stdout[-300:])
-        gone = not (lab_mod.LAB_ROOT / (self.name + '.json')).exists() and not (lab_mod.LAB_ROOT / self.name).exists()
+        gone = not self.record_path.exists() and not (lab_mod.LAB_ROOT / self.name).exists()
         self.step('lab_record_and_secrets_removed', gone, str(lab_mod.LAB_ROOT))
         getattr(self.cloud, 'settle', lambda: None)()
         deadline = time.monotonic() + 600
