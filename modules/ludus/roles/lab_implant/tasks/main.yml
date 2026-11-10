@@ -1,0 +1,44 @@
+---
+# Added to exactly one VM's role list by render.py, with lab_implant_user,
+# lab_implant_payload_url, lab_implant_sha256 and lab_implant_mode as role_vars.
+- name: Download the implant payload by sha256
+  ansible.windows.win_get_url:
+    url: "{{ lab_implant_payload_url }}"
+    dest: 'C:\Windows\Temp\implant.bin'
+    checksum: "{{ lab_implant_sha256 }}"
+    checksum_algorithm: sha256
+
+- name: Register the implant as a scheduled task (s4u, no stored password)
+  community.windows.win_scheduled_task:
+    name: LabImplant
+    description: "c2itall lab implant ({{ lab_implant_mode }})"
+    actions:
+      - path: 'C:\Windows\Temp\implant.bin'
+    triggers:
+      - type: registration
+    username: "{{ lab_implant_user }}"
+    logon_type: s4u
+    run_level: limited
+    enabled: true
+    state: present
+  register: lab_implant_s4u
+  ignore_errors: true
+
+# ponytail: s4u needs a cached interactive token for the user; falls back to a
+# stored password when that token does not exist yet.
+- name: Register the implant with a stored password when s4u is not available
+  community.windows.win_scheduled_task:
+    name: LabImplant
+    description: "c2itall lab implant ({{ lab_implant_mode }})"
+    actions:
+      - path: 'C:\Windows\Temp\implant.bin'
+    triggers:
+      - type: registration
+    username: "{{ lab_implant_user }}"
+    password: "{{ user_passwords[lab_implant_user] | default(domain_user_password) }}"
+    logon_type: password
+    run_level: limited
+    enabled: true
+    state: present
+  when: lab_implant_s4u is failed
+  no_log: true

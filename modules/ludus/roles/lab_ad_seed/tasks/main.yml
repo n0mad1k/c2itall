@@ -1,0 +1,60 @@
+---
+# Runs on DC01. identities/weaknesses/user_passwords/domain_admin_user come from
+# global_role_vars (modules/ludus/render.py).
+- name: Create the organizational units
+  microsoft.ad.ou:
+    name: "{{ item }}"
+    path: DC=lab,DC=internal
+    state: present
+  loop: "{{ identities.ous }}"
+
+- name: Create the security groups
+  microsoft.ad.group:
+    name: "{{ item.key }}"
+    scope: global
+    category: security
+    path: "OU={{ item.value.ou }},DC=lab,DC=internal"
+    state: present
+  loop: "{{ identities.groups | dict2items }}"
+
+- name: Create the lab users
+  microsoft.ad.user:
+    name: "{{ item.sam }}"
+    sam_account_name: "{{ item.sam }}"
+    firstname: "{{ item.name }}"
+    upn: "{{ item.sam }}@lab.internal"
+    path: "OU={{ item.ou }},DC=lab,DC=internal"
+    password: "{{ user_passwords[item.sam] }}"
+    enabled: "{{ not item.get('disabled', false) }}"
+    spn:
+      add: "{{ [item.spn] if item.spn is defined else [] }}"
+    groups:
+      add: "{{ item.get('groups', []) }}"
+    state: present
+  loop: "{{ identities.users }}"
+  no_log: true
+
+- name: Add the domain admin to Protected Users
+  microsoft.ad.user:
+    identity: "{{ domain_admin_user if item == 'domain_admin' else item }}"
+    groups:
+      add: [Protected Users]
+  loop: "{{ identities.protect | default([]) }}"
+
+- name: "Weakness: kerberoastable service account never rotates its password"
+  microsoft.ad.user:
+    identity: svc-sql
+    password_never_expires: true
+  when: "'kerberoastable_service_account' in weaknesses"
+
+- name: "Weakness: the former employee's known password stays valid"
+  microsoft.ad.user:
+    identity: jsmith.former
+    password_never_expires: true
+  when: "'disabled_user_known_password' in weaknesses"
+
+- name: "Weakness: APP01 is trusted for unconstrained delegation"
+  microsoft.ad.computer:
+    identity: APP01
+    trusted_for_delegation: true
+  when: "'unconstrained_delegation_app01' in weaknesses"
