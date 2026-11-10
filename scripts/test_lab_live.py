@@ -168,7 +168,8 @@ class Live:
         ping = self.gateway_ssh('ping -c 2 -W 3 ' + member['lab_ip'])
         self.step(prefix + 'reachable_over_overlay', ping.returncode == 0, ping.stdout[-200:])
         egress = self.member_ssh(deployment_id, 'curl -4 -s --max-time 25 https://api.ipify.org')
-        expected = network['nat_ip'] if native else lab['gateway']['public_ip']
+        # An overlay member must leave through the hub, wherever the hub itself leaves (a local hub NATs again).
+        expected = network['nat_ip'] if native else self.gateway_ssh('curl -4 -s --max-time 25 https://api.ipify.org').stdout.strip()
         self.step(prefix + 'egress_through_' + ('nat_gateway' if native else 'hub'),
                   egress.stdout.strip() == expected, egress.stdout.strip() + ' expected ' + str(expected))
         if native:

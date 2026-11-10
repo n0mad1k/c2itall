@@ -44,12 +44,12 @@
           - -c
           - |
             import json, subprocess, sys
-            names = {'win2022-server-x64-template', 'win11-22h2-x64-enterprise-template'}
+            names = {'debian-12-x64-server-template', 'win2022-server-x64-template', 'win11-22h2-x64-enterprise-template'}
             out = subprocess.run(['ludus', 'templates', 'list', '--json', '--url', '{{ ludus_url }}'],
                                   capture_output=True, text=True, check=True).stdout
-            pending = [row for row in json.loads(out) if row.get('name') in names
-                       and 'not built' in str(row.get('status', '')).lower()]
-            sys.exit(1 if pending else 0)
+            # `built` is omitted from the JSON while false (Go omitempty).
+            built = {row.get('name') for row in json.loads(out) if row.get('built')}
+            sys.exit(1 if names - built else 0)
       environment:
         LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
       register: ludus_templates_ready
@@ -113,7 +113,7 @@
 
     - name: Snapshot the range as 'baseline'
       ansible.builtin.command:
-        argv: [ludus, snapshots, create, -d, baseline, --url, "{{ ludus_url }}"]
+        argv: [ludus, snapshots, create, baseline, --url, "{{ ludus_url }}"]
       environment:
         LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
       when: ludus_action == 'snapshot'
@@ -122,7 +122,7 @@
 
     - name: Revert the range to its baseline snapshot
       ansible.builtin.command:
-        argv: [ludus, snapshots, revert, --url, "{{ ludus_url }}"]
+        argv: [ludus, snapshots, revert, baseline, --url, "{{ ludus_url }}"]
       environment:
         LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
       when: ludus_action == 'revert'
@@ -194,7 +194,7 @@
           block:
             - name: Snapshot 'baseline'
               ansible.builtin.command:
-                argv: [ludus, snapshots, create, -d, baseline, --url, "{{ ludus_url }}"]
+                argv: [ludus, snapshots, create, baseline, --url, "{{ ludus_url }}"]
               environment:
                 LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
               changed_when: true

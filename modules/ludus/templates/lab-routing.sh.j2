@@ -24,3 +24,13 @@ iptables -A LAB_FWD -d 192.0.2.0/24 -s {{ cidr }} -j ACCEPT
 {% endfor %}
 iptables -A LAB_FWD -j RETURN
 iptables -C FORWARD -j LAB_FWD 2>/dev/null || iptables -I FORWARD 1 -j LAB_FWD
+
+# LUDUS only masquerades its 192.0.2.0/24 setup network out the Proxmox bridge;
+# when the host's egress rides the tunnel, hide that network behind the lab
+# address too (never toward the lab itself, so range sources stay visible).
+iptables -t nat -N LAB_SNAT 2>/dev/null || iptables -t nat -F LAB_SNAT
+{% for cidr in lab.cidrs %}
+iptables -t nat -A LAB_SNAT -d {{ cidr }} -j RETURN
+{% endfor %}
+iptables -t nat -A LAB_SNAT -s 192.0.2.0/24 -o lab0 -j MASQUERADE
+iptables -t nat -C POSTROUTING -j LAB_SNAT 2>/dev/null || iptables -t nat -I POSTROUTING 1 -j LAB_SNAT

@@ -74,7 +74,7 @@ inventories and is listed under Open items below.
 
 The lab uses `198.18.0.0/16` (RFC 2544 benchmarking space) so it never
 collides with LUDUS ranges, Docker, VirtualBox host-only networks or AWS
-default VPCs; that choice is visible on every member's `wg0`. Teardown
+default VPCs; that choice is visible on every member's `lab0`. Teardown
 removes the record, the key and the secret directory; what the flow logs
 captured is deleted with their storage.
 

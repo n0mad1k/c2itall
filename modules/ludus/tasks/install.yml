@@ -81,7 +81,38 @@
              | select('match', '^10\.') | map('regex_replace', '^10\.(\d+)\..*$', '\1')
              | map('int') | unique | list }}
 
+    # The spoke already owns the default route, so the Proxmox bridge must be
+    # described from the interface that carries the management address instead.
+    - name: Describe the interface that carries the management address
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import ipaddress, json, subprocess, sys
+            want = sys.argv[1]
+            for line in subprocess.run(['ip', '-4', '-o', 'addr', 'show'], capture_output=True, text=True, check=True).stdout.splitlines():
+                words = line.split()
+                if words[3].split('/')[0] == want:
+                    iface, cidr = words[1], words[3]
+                    break
+            else:
+                sys.exit('no interface carries ' + want)
+            network = ipaddress.ip_interface(cidr).network
+            gateway = str(network[1])
+            for line in subprocess.run(['ip', '-4', 'route', 'show', 'default', 'table', 'main', 'dev', iface],
+                                       capture_output=True, text=True).stdout.splitlines():
+                words = line.split()
+                if 'via' in words:
+                    gateway = words[words.index('via') + 1]
+            print(json.dumps({'interface': iface, 'netmask': str(network.netmask), 'gateway': gateway}))
+          - "{{ inventory_hostname }}"
+      register: ludus_mgmt_raw
+      changed_when: false
+
     - name: Write the LUDUS server config
+      vars:
+        ludus_mgmt: "{{ ludus_mgmt_raw.stdout | from_json }}"
       ansible.builtin.template:
         src: templates/ludus-config.yml.j2
         dest: /opt/ludus-lab-bootstrap/config.yml
@@ -94,16 +125,12 @@
         chdir: /opt/ludus-lab-bootstrap
         executable: /bin/bash
 
-    - name: Wait for the install reboot and the host to come back
-      ansible.builtin.wait_for_connection:
-        delay: 20
-        timeout: 900
-        sleep: 10
-
-    - name: Wait for the install to finish
-      ansible.builtin.wait_for:
-        path: /opt/ludus/install/.stage-3-complete
-        timeout: 2700
+    # The installer reboots the host up to three times; an `until` loop dies on
+    # the first unreachable attempt, so the wait recurses round by round instead.
+    - name: Wait for the install to finish across its reboots
+      ansible.builtin.include_tasks: wait_install.yml
+      vars:
+        ludus_wait_rounds: 0
 
     - name: Read the root API key
       ansible.builtin.slurp:
@@ -156,7 +183,7 @@
 
     - name: Work out the range number LUDUS assigned
       ansible.builtin.set_fact:
-        ludus_range_number: "{{ (ludus_range_list.stdout | from_json)[0].rangeNumber }}"
+        ludus_range_number: "{{ (ludus_range_list.stdout | from_json).rangeNumber }}"
 
     - name: Write the lab environment file (the API key never leaves this file)
       ansible.builtin.copy:

@@ -99,12 +99,19 @@
       & stop
   notify: restart rsyslog
 
+# rsyslog drops to the syslog account on Ubuntu and stays root on Debian.
+- name: Look up the syslog account
+  ansible.builtin.getent:
+    database: passwd
+    key: syslog
+    fail_key: false
+
 - name: Create the flow log directory
   ansible.builtin.file:
     path: /var/log/lab
     state: directory
     mode: '0750'
-    owner: syslog
+    owner: "{{ 'syslog' if ansible_facts.getent_passwd.syslog else 'root' }}"
     group: adm
 
 - name: Rotate the flow log
@@ -118,7 +125,7 @@
           compress
           missingok
           notifempty
-          create 0640 syslog adm
+          create 0640 {{ 'syslog' if ansible_facts.getent_passwd.syslog else 'root' }} adm
           postrotate
               systemctl kill -s HUP rsyslog.service
           endscript

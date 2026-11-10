@@ -12,7 +12,7 @@ starts as a standard user; initial access is out of scope.
 
 ```
 operator ──wg0──► gateway (hub 198.18.0.1, logged NAT)
-                     │ WireGuard spokes, one per member
+                     │ WireGuard spokes, one per member (interface lab0; a LUDUS host keeps wg0 for its own VPN)
       ┌──────────────┼──────────────┬───────────────┬──────────────┐
    LUDUS host     exfil receiver   Havoc C2      payload server   attack box / logging / chat
   198.18.0.10+   MinIO:9000        teamserver    nginx 443        (lab mode)

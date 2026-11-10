@@ -1,0 +1,29 @@
+---
+# One round of waiting for the unattended LUDUS install; re-included until the
+# stage-3 marker exists (ponytail: 120 rounds of 30 s is the one-hour ceiling).
+- name: Wait for the host to answer
+  ansible.builtin.wait_for_connection:
+    delay: 5
+    timeout: 900
+
+- name: Look for the stage-3 marker
+  ansible.builtin.stat:
+    path: /opt/ludus/install/.stage-3-complete
+  register: ludus_stage3
+  ignore_unreachable: true
+
+- name: Give the installer another half minute
+  ansible.builtin.pause:
+    seconds: 30
+  when: not (ludus_stage3.stat.exists | default(false))
+
+- name: Refuse to wait past one hour
+  ansible.builtin.fail:
+    msg: "LUDUS install did not reach stage 3 within an hour; see /opt/ludus-lab-bootstrap/install.log and ludus-install-status on the host"
+  when: not (ludus_stage3.stat.exists | default(false)) and ludus_wait_rounds | int >= 120
+
+- name: Keep waiting
+  ansible.builtin.include_tasks: wait_install.yml
+  vars:
+    ludus_wait_rounds: "{{ ludus_wait_rounds | int + 1 }}"
+  when: not (ludus_stage3.stat.exists | default(false))

@@ -121,6 +121,8 @@ def render_range(name, lab_vars, identities, passwords, weaknesses, falcon, impl
     for cidr in lab_cidrs:
         commands.append('iptables -I FORWARD -s ' + cidr + ' -j ACCEPT')
         commands.append('iptables -I FORWARD -d ' + cidr + ' -j ACCEPT')
+        # LUDUS masquerades every VLAN out the router's WAN; keep range sources visible to the lab.
+        commands.append('iptables -t nat -I POSTROUTING -d ' + cidr + ' -j ACCEPT')
     router['iptables_commands'] = commands
     if not all(any(cidr in command for command in commands) for cidr in lab_cidrs):
         raise ValueError('router.iptables_commands must admit every lab CIDR')

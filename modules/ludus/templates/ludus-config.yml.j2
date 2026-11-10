@@ -1,10 +1,10 @@
 ---
 proxmox_node: {{ ansible_hostname }}
-proxmox_interface: {{ ansible_default_ipv4.interface }}
-proxmox_local_ip: {{ ludus_host_ip }}
+proxmox_interface: {{ ludus_mgmt.interface }}
+proxmox_local_ip: {{ inventory_hostname }}
 proxmox_public_ip: {{ ludus_host_ip }}
-proxmox_gateway: {{ ansible_default_ipv4.gateway }}
-proxmox_netmask: {{ ansible_default_ipv4.netmask }}
+proxmox_gateway: {{ ludus_mgmt.gateway }}
+proxmox_netmask: {{ ludus_mgmt.netmask }}
 proxmox_vm_storage_pool: local
 proxmox_vm_storage_format: qcow2
 proxmox_iso_storage_pool: local
