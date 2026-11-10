@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import time
+import traceback
 import uuid
 from pathlib import Path
 from unittest import mock
@@ -70,10 +71,20 @@ class Live:
         target = lab_mod.gateway_target(lab)
         argv = ['ssh', *ssh_options(target['known_hosts'], target['key']),
                 target['user'] + '@' + target['host'], command]
-        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        return self._timed(lambda: subprocess.run(argv, capture_output=True, text=True, timeout=timeout))
 
     def member_ssh(self, deployment_id, command, timeout=120):
-        return lab_mod.member_command(self.name, deployment_id, ['sh', '-c', command], timeout=timeout)
+        return self._timed(lambda: lab_mod.member_command(
+            self.name, deployment_id, ['sh', '-c', command], timeout=timeout))
+
+    @staticmethod
+    def _timed(run):
+        # A hung remote command fails its step with the partial output; it never crashes the run.
+        try:
+            return run()
+        except subprocess.TimeoutExpired as exc:
+            return subprocess.CompletedProcess(exc.cmd, 124, (exc.stdout or b'').decode() if isinstance(exc.stdout, bytes) else (exc.stdout or ''),
+                                               'timed out after {0} s\n'.format(exc.timeout) + ((exc.stderr or b'').decode() if isinstance(exc.stderr, bytes) else (exc.stderr or '')))
 
     # --- configs -----------------------------------------------------------
     def account(self, provider, host=None):
@@ -264,14 +275,17 @@ class Live:
         lab = lab_mod.load(self.name)
         ip = lab['members'][deployment_id]['lab_ip']
         # The teamserver finishes starting after the play returns; give it up to three minutes.
-        result = self.member_ssh(deployment_id, "for i in $(seq 1 36); do [ \"$(systemctl is-active havoc)\" = active ] && "
+        result = self.member_ssh(deployment_id, "for i in $(seq 1 30); do [ \"$(systemctl is-active havoc)\" = active ] && "
                                  "[ \"$(ss -ltn | grep -c -E ':(40056|9443|8443) ')\" = 3 ] && break; sleep 5; done; "
                                  "systemctl is-active havoc; ss -ltn | grep -c -E ':(40056|9443|8443) '; "
                                  "sudo -n grep -c '\"" + ip + "\"' /root/Tools/Havoc/data/havoc.yaotl; "
                                  "sudo -n grep -c 'Cert {' /root/Tools/Havoc/data/havoc.yaotl; "
                                  "sudo -n grep -c 'user \"red1\"' /root/Tools/Havoc/data/havoc.yaotl; "
-                                 "sudo -n jq -r .windows_exe_sha256 /root/Tools/Havoc/payloads/manifest.json", timeout=180)
-        lines = result.stdout.split()
+                                 "sudo -n jq -r .windows_exe_sha256 /root/Tools/Havoc/payloads/manifest.json; "
+                                 # The service journal rides along so a failed start explains itself.
+                                 "echo ---; sudo -n systemctl status havoc --no-pager -n 0 | head -4; "
+                                 "sudo -n journalctl -u havoc -n 40 --no-pager -o cat | cut -c1-200", timeout=300)
+        lines = result.stdout.split('---')[0].split()
         self.step('c2.teamserver_on_lab_address', lines[:5] == ['active', '3', '1', '0', '1'] and len(lines) > 5
                   and len(lines[5]) == 64, result.stdout + result.stderr)
         manifest = self.member_ssh(deployment_id, 'sudo -n jq -r .windows_exe /root/Tools/Havoc/payloads/manifest.json').stdout.strip()
@@ -390,6 +404,9 @@ class Live:
                 self.check_flow_logs()
             self.record('lab-record.json', lab_mod.load(self.name))
             return not self.failed
+        except Exception:
+            self.step('harness_crashed', False, traceback.format_exc())
+            return False
         finally:
             if args.keep:
                 print('Keeping lab ' + self.name + ' as requested')
