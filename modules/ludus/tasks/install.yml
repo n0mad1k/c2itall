@@ -176,8 +176,9 @@
           - add
           - --name
           - Lab
+          # Not "lab": LUDUS creates a PAM account per user and a local VM's install user may own that name.
           - --userid
-          - lab
+          - c2lab
           - --email
           - lab@lab.internal
           - --password
@@ -189,6 +190,8 @@
         LUDUS_API_KEY: "{{ (ludus_root_key_raw.content | b64decode).strip() }}"
       register: ludus_user_add
       changed_when: true
+      # The client prints the server's error on stderr and exits 0 under --json.
+      failed_when: "'apiKey' not in ludus_user_add.stdout"
       no_log: true
 
     - name: Record the lab user's API key
