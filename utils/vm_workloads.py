@@ -149,10 +149,12 @@ class SingleVmAdapter(WorkloadAdapter):
                 'ansible_host': gateway['host'], 'ansible_user': gateway['user'],
                 'ansible_ssh_common_args': shlex.join(ssh_options(gateway['known_hosts']))}}},
         }
+        # Routes this host fronts (a LUDUS range) live in the lab record, not the placement.
+        member = lab['members'].get(config['deployment_id']) or {}
         variables = {'lab': lab_mod.service_variables(lab, config['deployment_id']),
                      'spoke': {'deployment_id': config['deployment_id'], 'lab_ip': placement['lab_ip'],
                                'egress_via_hub': placement['egress_via_hub'],
-                               'hub_routes': list(placement.get('hub_routes') or [])}}
+                               'hub_routes': list(member.get('hub_routes') or [])}}
         return self._run_playbook(config, str(ROOT / 'modules/lab/spoke.yml'), inventory,
                                   variables, 'lab-spoke', 900)
 

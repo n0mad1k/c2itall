@@ -293,10 +293,7 @@ def refresh(name):
         if entry.get('status') != 'ready':
             continue
         adapter, config = member_adapter(lab, deployment_id)
-        placement = dict(config[adapter.driver.prefix + 'lab'],
-                         hub_routes=list(entry.get('hub_routes') or []),
-                         range_cidrs=list(lab['range_cidrs']))
-        if not adapter._run_spoke_playbook(config, lab, placement):
+        if not adapter._run_spoke_playbook(config, lab, config[adapter.driver.prefix + 'lab']):
             return False
     return True
 

@@ -111,6 +111,9 @@ class LabTests(unittest.TestCase):
         self.assertTrue(gateway_run['argv'][1].endswith('modules/gateway/service.yml'))
         self.assertEqual(gateway_run['variables']['lab']['range_cidrs'], ['10.7.0.0/16'])
         self.assertEqual(spoke_run['variables']['spoke']['hub_routes'], ['10.7.0.0/16'])
+        # A redeploy after the range is routed must keep the range out of the member's own tunnel.
+        self.assertTrue(member.deploy(self.config('tracker', 'm1', domain='lab.test')))
+        self.assertEqual(self.driver.runs[-2]['variables']['spoke']['hub_routes'], ['10.7.0.0/16'])
         self.assertTrue(lab_mod.run_member_playbook(
             'unit', 'm1', 'modules/lab/spoke.yml', {'extra': 1}, 'unit-extra', 60))
         self.assertEqual(self.driver.runs[-1]['variables']['extra'], 1)

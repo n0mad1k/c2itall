@@ -87,8 +87,9 @@ class FakeDriver(CloudDriver):
     def deploy(self, infrastructure):
         self.calls.append(('deploy', infrastructure['deployment_id']))
         if self.deploy_result:
-            self.addresses[infrastructure['deployment_id']] = (
-                '8.8.8.' + str(10 + len(self.addresses)))
+            # A redeployed VM keeps its address, as on every real provider.
+            self.addresses.setdefault(infrastructure['deployment_id'],
+                                      '8.8.8.' + str(10 + len(self.addresses)))
         return self.deploy_result
 
     def public_address(self, deployment_id, config):
