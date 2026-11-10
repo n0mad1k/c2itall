@@ -6,7 +6,8 @@
   hosts: member
   become: true
   vars:
-    allowed_ips: "{{ lab.cidrs + lab.range_cidrs + (['0.0.0.0/0'] if spoke.egress_via_hub else []) }}"
+    # A host that fronts a range never routes that range into the tunnel.
+    allowed_ips: "{{ lab.cidrs + (lab.range_cidrs | difference(spoke.hub_routes)) + (['0.0.0.0/0'] if spoke.egress_via_hub else []) }}"
     gateway: "{{ groups['gateway'][0] }}"
   tasks:
     - name: Install WireGuard tools

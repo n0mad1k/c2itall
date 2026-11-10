@@ -312,10 +312,13 @@ class RegistryTests(unittest.TestCase):
     def test_every_provider_serves_every_workload_through_its_driver(self):
         summary = registry.validate_provider_registry(load_references=True)
         self.assertEqual(summary['routes'], 0)
-        self.assertEqual(summary['counts']['native'], summary['pairs'])
+        self.assertEqual(summary['counts']['native'] + summary['counts']['gated'], summary['pairs'])
         for provider in ('aws', 'linode', 'flokinet', 'azure', 'local'):
             for workload in registry.CANONICAL_WORKLOADS:
-                self.assertEqual(registry.provider_route_kind(provider, workload), 'native')
+                profile = load_profile(workload)
+                served = profile is None or profile.requires <= registry.provider_driver(provider).capabilities
+                self.assertEqual(registry.provider_route_kind(provider, workload),
+                                 'native' if served else 'gated', (provider, workload))
         self.assertEqual(registry.provider_driver('aws').ssh_user, 'ec2-user')
         self.assertEqual(registry.provider_driver('linode').ssh_user, 'root')
         self.assertEqual(registry.provider_driver('flokinet').ssh_user, 'root')
@@ -569,14 +572,17 @@ class LocalDriverTests(DriverCase):
                 self.config('flokinet', flokinet_host='192.168.56.20'), request))
 
     def test_profiles_that_require_a_capability_are_gated_per_driver(self):
+        baseline = registry.validate_provider_registry(load_references=True)['counts']['gated']
+        lacking = [provider for provider in registry.PROVIDER_SPECS
+                   if 'nested_virtualization' not in registry.provider_driver(provider).capabilities]
+        self.assertIn('linode', lacking)
         with mock.patch.object(load_profile('tracker'), 'requires', frozenset({'nested_virtualization'})):
             self.assertEqual(registry.provider_route_kind('linode', 'tracker'), 'gated')
             self.assertEqual(registry.provider_route_kind('local', 'tracker'), 'native')
             self.assertNotIn('linode', registry.providers_for('tracker'))
             self.assertIsNone(registry.provider_dispatcher('linode').route('tracker'))
-            # Only the adopt-a-host drivers declare nested virtualization so far.
-            self.assertEqual(registry.validate_provider_registry(load_references=True)['counts']['gated'], 3)
-            self.assertEqual(registry.provider_route_kind('aws', 'tracker'), 'gated')
+            self.assertEqual(registry.validate_provider_registry(load_references=True)['counts']['gated'],
+                             baseline + len(lacking))
         self.assertEqual(registry.provider_route_kind('linode', 'tracker'), 'native')
 
 

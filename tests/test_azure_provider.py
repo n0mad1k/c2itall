@@ -831,11 +831,17 @@ class RoutingAndTemplateTests(AzureFixture):
 
     def test_provider_coverage_audit_reports_actual_azure_gaps(self):
         validation = registry.validate_provider_registry(load_references=True)
+        # A pair is gated only when the profile requires a capability the driver lacks.
+        gated = sum(
+            1 for provider in registry.PROVIDER_SPECS for workload in registry.CANONICAL_WORKLOADS
+            if load_profile(workload) is not None
+            and not load_profile(workload).requires <= registry.provider_driver(provider).capabilities)
         self.assertEqual(validation, {
-            'providers': 5, 'workloads': 14, 'controllers': 14,
-            'pairs': 70, 'routes': 0, 'driver_routes': 70, 'staged_routes': 0,
+            'providers': 5, 'workloads': 16, 'controllers': 16,
+            'pairs': 80, 'routes': 0, 'driver_routes': 80, 'staged_routes': 0,
             'counts': {
-                'native': 70, 'gated': 0, 'legacy_fallback': 0, 'staged': 0, 'unsupported': 0,
+                'native': 80 - gated, 'gated': gated, 'legacy_fallback': 0, 'staged': 0,
+                'unsupported': 0,
             },
         })
         rows = registry.provider_support_matrix()
@@ -846,7 +852,8 @@ class RoutingAndTemplateTests(AzureFixture):
              if provider == 'azure' and lookup[(provider, workload)] == 'native'},
             {'infrastructure', 'attack_box', 'phantom', 'chat', 'redirector', 'c2',
              'payload_server', 'webrunner', 'phishing', 'tracker', 'logging_server',
-             'share', 'hashtopolis', 'lab_gateway'})
+             'share', 'hashtopolis', 'lab_gateway', 'exfil_receiver', 'ludus_host'})
+        self.assertEqual(lookup[('linode', 'ludus_host')], 'gated')
         self.assertEqual(
             {workload for provider, workload in lookup
              if provider == 'azure' and
@@ -857,7 +864,7 @@ class RoutingAndTemplateTests(AzureFixture):
              if provider == 'azure' and
              lookup[(provider, workload)] == 'staged'},
             set())
-        self.assertEqual({kind for kind in lookup.values()}, {'native'})
+        self.assertEqual({kind for kind in lookup.values()} - {'gated'}, {'native'})
         with legacy_provider():
             self.assertEqual(registry.provider_route_kind('legacyco', 'c2'), 'legacy_fallback')
             self.assertEqual(registry.provider_route_kind('legacyco', 'tracker'), 'unsupported')
@@ -1080,6 +1087,8 @@ class RoutingAndTemplateTests(AzureFixture):
             'share': 'modules/share-drive/deploy_share.py',
             'hashtopolis': 'modules/hashtopolis/deploy_hashtopolis.py',
             'lab_gateway': 'modules/gateway/deploy_gateway.py',
+            'exfil_receiver': 'modules/exfil/deploy_exfil.py',
+            'ludus_host': 'modules/ludus/deploy_ludus.py',
         }
         self.assertEqual(
             {workload: spec.entrypoint

@@ -227,6 +227,67 @@ def service_variables(lab, deployment_id):
     }
 
 
+def member_adapter(lab, deployment_id):
+    """The adapter and reconstructed config of one ready member or the gateway."""
+    from .provider_registry import load_infrastructure_state, workload_route
+    state = load_infrastructure_state(deployment_id)
+    if state is None:
+        raise ValueError('No recovery state for ' + deployment_id)
+    gateway = lab.get('gateway') or {}
+    entry = (gateway if gateway.get('deployment_id') == deployment_id
+             else lab['members'].get(deployment_id))
+    if not entry or entry.get('status') != 'ready':
+        raise ValueError(deployment_id + ' is not a ready part of lab ' + lab['name'])
+    adapter = workload_route(state)
+    config = dict(state, lab=lab['name'], ssh_host=entry['ssh_host'],
+                  ssh_user=adapter.driver.ssh_user, ssh_key=state['ssh_private_key_path'])
+    if adapter.profile.address_key:
+        config[adapter.profile.address_key] = (
+            entry['public_ip'] if entry is gateway else entry['lab_ip'])
+    return adapter, config
+
+
+def run_member_playbook(name, deployment_id, playbook, variables, log_suffix, timeout):
+    """Run an extra play (repo-relative path) on a ready member with its lab variables."""
+    lab = load(name)
+    adapter, config = member_adapter(lab, deployment_id)
+    address = config['ssh_host']
+    inventory = address + ','
+    if adapter.profile.inventory_group:
+        inventory = '[' + adapter.profile.inventory_group + ']\n' + address + ' ansible_host=' + address + '\n'
+    merged = dict(variables, lab=service_variables(lab, deployment_id))
+    return adapter._run_playbook(config, str(ROOT / playbook), inventory, merged, log_suffix, timeout)
+
+
+def set_range(lab, deployment_id, cidr):
+    """Record the LUDUS range behind a member; refresh() pushes the routes to everyone."""
+    cidr = str(ipaddress.ip_network(cidr, strict=True))
+    if cidr not in lab['range_cidrs']:
+        lab['range_cidrs'].append(cidr)
+    routes = lab['members'][deployment_id].setdefault('hub_routes', [])
+    if cidr not in routes:
+        routes.append(cidr)
+    save(lab)
+
+
+def refresh(name):
+    """Re-run the gateway play and every member's spoke join so new routes reach all of them."""
+    lab = load(name)
+    adapter, config = member_adapter(lab, lab['gateway']['deployment_id'])
+    if not adapter._run_service_playbook(config):
+        return False
+    for deployment_id, entry in lab['members'].items():
+        if entry.get('status') != 'ready':
+            continue
+        adapter, config = member_adapter(lab, deployment_id)
+        placement = dict(config[adapter.driver.prefix + 'lab'],
+                         hub_routes=list(entry.get('hub_routes') or []),
+                         range_cidrs=list(lab['range_cidrs']))
+        if not adapter._run_spoke_playbook(config, lab, placement):
+            return False
+    return True
+
+
 def teardown(name):
     """Members first, then the gateway, then every shared network; stop at the first failure."""
     from .cleanup_engine import cleanup_ssh_keys_for_deployment

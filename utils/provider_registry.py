@@ -150,6 +150,8 @@ WORKLOAD_SPECS = {
     'share': WorkloadSpec('modules/share-drive/deploy_share.py', False),
     'hashtopolis': WorkloadSpec('modules/hashtopolis/deploy_hashtopolis.py', False),
     'lab_gateway': WorkloadSpec('modules/gateway/deploy_gateway.py', False),
+    'exfil_receiver': WorkloadSpec('modules/exfil/deploy_exfil.py', False),
+    'ludus_host': WorkloadSpec('modules/ludus/deploy_ludus.py', False),
 }
 CANONICAL_WORKLOADS = tuple(WORKLOAD_SPECS)
 LEGACY_FALLBACK_WORKLOADS = frozenset(

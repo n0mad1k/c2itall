@@ -1,0 +1,4 @@
+---
+- name: Placeholder until the receiver tasks land
+  ansible.builtin.debug:
+    msg: "exfil receiver tasks pending"

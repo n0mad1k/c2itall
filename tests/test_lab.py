@@ -104,6 +104,18 @@ class LabTests(unittest.TestCase):
         lab = lab_mod.load('unit')
         self.assertEqual(lab['members']['m1']['status'], 'ready')
 
+        lab_mod.set_range(lab, 'm1', '10.7.0.0/16')
+        runs = len(self.driver.runs)
+        self.assertTrue(lab_mod.refresh('unit'))
+        gateway_run, spoke_run = self.driver.runs[runs], self.driver.runs[runs + 1]
+        self.assertTrue(gateway_run['argv'][1].endswith('modules/gateway/service.yml'))
+        self.assertEqual(gateway_run['variables']['lab']['range_cidrs'], ['10.7.0.0/16'])
+        self.assertEqual(spoke_run['variables']['spoke']['hub_routes'], ['10.7.0.0/16'])
+        self.assertTrue(lab_mod.run_member_playbook(
+            'unit', 'm1', 'modules/lab/spoke.yml', {'extra': 1}, 'unit-extra', 60))
+        self.assertEqual(self.driver.runs[-1]['variables']['extra'], 1)
+        self.assertEqual(self.driver.runs[-1]['variables']['lab']['member']['lab_ip'], '198.18.0.10')
+
         self.assertTrue(lab_mod.teardown('unit'))
         order = [call[0] + ':' + call[1] for call in self.driver.calls
                  if call[0] in ('cleanup', 'delete_lab_network')]

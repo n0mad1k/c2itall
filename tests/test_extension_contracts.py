@@ -274,7 +274,7 @@ class ProfileContractTests(unittest.TestCase):
         self.assertEqual(profiled_workloads(), [
             'attack_box', 'c2', 'redirector', 'phishing', 'payload_server',
             'webrunner', 'phantom', 'chat', 'tracker', 'logging_server', 'share',
-            'hashtopolis', 'lab_gateway'])
+            'hashtopolis', 'lab_gateway', 'exfil_receiver', 'ludus_host'])
         self.assertEqual(registry.driver_workloads(), ['infrastructure', *profiled_workloads()])
         for workload in profiled_workloads():
             profile = load_profile(workload)

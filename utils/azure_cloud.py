@@ -15,6 +15,7 @@ UBUNTU_2204_IMAGE = {
 
 
 class AzureDriver(CloudDriver):
+    capabilities = frozenset({'lab_network', 'nested_virtualization'})
     provider = 'azure'
     ssh_user = 'azureuser'
     prefix = 'azure_'
