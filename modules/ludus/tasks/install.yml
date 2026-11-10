@@ -164,7 +164,8 @@
 
     - name: List the LUDUS users
       ansible.builtin.command:
-        argv: [ludus, users, list, --json, --url, 'https://127.0.0.1:8081']
+        # Without 'all' the client lists only the calling user.
+        argv: [ludus, users, list, all, --json, --url, 'https://127.0.0.1:8081']
       environment:
         LUDUS_API_KEY: "{{ (ludus_root_key_raw.content | b64decode).strip() }}"
       register: ludus_users
