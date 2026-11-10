@@ -56,13 +56,13 @@ def create(args):
     vbox('storagectl', args.name, '--name', 'SATA', '--add', 'sata', '--controller', 'IntelAhci')
     vbox('storageattach', args.name, '--storagectl', 'SATA', '--port', '0', '--device', '0', '--type', 'hdd',
          '--medium', str(disk))
-    # Runs inside the installed system at the end of the Debian install.
+    # VirtualBox runs this in the installer environment, so the command enters the
+    # installed system itself; openssh-server comes from the minimal preseed.
     post_install = (
-        "apt-get install -y openssh-server sudo >/dev/null 2>&1; "
-        "printf 'auto enp0s8\\niface enp0s8 inet static\\n address " + args.ip + "/24\\n' > /etc/network/interfaces.d/lab; "
-        "install -d -m 700 /root/.ssh; printf '%s\\n' '" + public_key + "' > /root/.ssh/authorized_keys; "
-        "chmod 600 /root/.ssh/authorized_keys; "
-        "printf 'PermitRootLogin prohibit-password\\nPasswordAuthentication no\\n' > /etc/ssh/sshd_config.d/lab.conf")
+        'chroot /target /bin/sh -c "set -e; mkdir -p /etc/network/interfaces.d /root/.ssh /etc/ssh/sshd_config.d; '
+        'printf \'auto enp0s8\\niface enp0s8 inet static\\n address ' + args.ip + '/24\\n\' > /etc/network/interfaces.d/lab; '
+        'printf \'%s\\n\' \'' + public_key + '\' > /root/.ssh/authorized_keys; chmod 700 /root/.ssh; chmod 600 /root/.ssh/authorized_keys; '
+        'printf \'PermitRootLogin prohibit-password\\nPasswordAuthentication no\\n\' > /etc/ssh/sshd_config.d/lab.conf"')
     vbox('unattended', 'install', args.name, '--iso=' + str(ISO), '--user=lab',
          '--user-password=' + secrets.token_urlsafe(16), '--hostname=' + args.name + '.lab',
          '--package-selection-adjustment=minimal', '--no-install-additions', '--time-zone=UTC',
