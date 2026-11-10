@@ -1,0 +1,33 @@
+---
+# Harness assertions; identities/weaknesses/c2_ip come from global_role_vars.
+- name: Verify the seeded AD users and groups exist
+  ansible.windows.win_powershell:
+    script: |
+      $errors = @()
+      foreach ($sam in @({{ identities.users | map(attribute='sam') | map('to_json') | join(', ') }})) {
+        try { Get-ADUser -Identity $sam -ErrorAction Stop | Out-Null }
+        catch { $errors += "missing user: $sam" }
+      }
+      foreach ($group in @({{ identities.groups.keys() | list | map('to_json') | join(', ') }})) {
+        try { Get-ADGroup -Identity $group -ErrorAction Stop | Out-Null }
+        catch { $errors += "missing group: $group" }
+      }
+      if ($errors.Count -gt 0) { throw ($errors -join '; ') }
+  when: inventory_hostname == 'DC01'
+
+- name: Verify this host's seeded shares exist
+  ansible.windows.win_powershell:
+    script: |
+      $errors = @()
+      foreach ($name in @({{ identities.shares[inventory_hostname] | map(attribute='name') | map('to_json') | join(', ') }})) {
+        if (-not (Get-SmbShare -Name $name -ErrorAction SilentlyContinue)) { $errors += "missing share: $name" }
+      }
+      if ($errors.Count -gt 0) { throw ($errors -join '; ') }
+  when: inventory_hostname in (identities.shares.keys() | list)
+
+- name: Test connectivity from WS01 to the C2 listener
+  ansible.windows.win_powershell:
+    script: |
+      $result = Test-NetConnection -ComputerName '{{ c2_ip }}' -Port 9443
+      if (-not $result.TcpTestSucceeded) { throw "No TCP connection to {{ c2_ip }}:9443" }
+  when: inventory_hostname == 'WS01' and c2_ip is not none

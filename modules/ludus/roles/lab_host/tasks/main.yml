@@ -1,0 +1,71 @@
+---
+# Runs on the member VMs (not DC01). Branches on inventory_hostname because one
+# role serves every member; identities/weaknesses/datasets_url/user_passwords
+# come from global_role_vars (modules/ludus/render.py).
+- name: Create the FS01 department shares
+  ansible.windows.win_share:
+    name: "{{ item.name }}"
+    path: "{{ item.path }}"
+    read: >-
+      {{ 'Everyone' if (item.name == 'Departments' and 'anonymous_share_access_fs01' in weaknesses)
+         else (('LAB\\' + item.group) if item.group else 'Everyone') }}
+    change: "{{ ('LAB\\' + item.group) if item.group else omit }}"
+    state: present
+  loop: "{{ identities.shares.FS01 }}"
+  when: inventory_hostname == 'FS01'
+
+- name: "Weakness: drop an exposed credential file in a readable FS01 share"
+  ansible.windows.win_copy:
+    dest: 'C:\Shares\RestrictedFinancial\credentials.txt'
+    content: "{{ identities.weaknesses.exposed_credential_in_share.user }}:{{ user_passwords[identities.weaknesses.exposed_credential_in_share.user] }}\r\n"
+  when: inventory_hostname == 'FS01' and 'exposed_credential_in_share' in weaknesses
+  no_log: true
+
+- name: Create the BK01 backup shares
+  ansible.windows.win_share:
+    name: "{{ item.name }}"
+    path: "{{ item.path }}"
+    read: "{{ 'Everyone' if not item.group else 'LAB\\' + item.group }}"
+    change: "{{ ('LAB\\' + item.group) if item.group else omit }}"
+    state: present
+  loop: "{{ identities.shares.BK01 }}"
+  when: inventory_hostname == 'BK01'
+
+- name: "Weakness: the standard domain user is a local admin on WS02"
+  ansible.windows.win_group_membership:
+    name: Administrators
+    members: ["LAB\\{{ domain_user }}"]
+    state: present
+  when: inventory_hostname == 'WS02' and 'local_admin_on_ws02' in weaknesses
+
+- name: Install IIS on APP01
+  ansible.windows.win_feature:
+    name: Web-Server
+    state: present
+  when: inventory_hostname == 'APP01'
+
+- name: Add the IT Operations group to Remote Desktop Users on MGMT01
+  ansible.windows.win_group_membership:
+    name: Remote Desktop Users
+    members: ['LAB\IT Operations']
+    state: present
+  when: inventory_hostname == 'MGMT01'
+
+- name: Fetch this host's dataset manifest
+  ansible.windows.win_get_url:
+    url: "{{ datasets_url }}/manifest-small.json"
+    dest: 'C:\LabData\manifest-small.json'
+  when: inventory_hostname in ['WS01', 'WS02', 'FS01', 'BK01']
+
+- name: Download and checksum-verify the manifest's files
+  ansible.windows.win_powershell:
+    script: |
+      $manifest = Get-Content 'C:\LabData\manifest-small.json' | ConvertFrom-Json
+      foreach ($file in $manifest.files) {
+        $dest = Join-Path 'C:\LabData' $file.path
+        New-Item -ItemType Directory -Force -Path (Split-Path $dest) | Out-Null
+        Invoke-WebRequest -Uri "{{ datasets_url }}/$($file.path)" -OutFile $dest
+        $hash = (Get-FileHash -Algorithm SHA256 $dest).Hash.ToLower()
+        if ($hash -ne $file.sha256) { throw "Checksum mismatch for $($file.path)" }
+      }
+  when: inventory_hostname in ['WS01', 'WS02', 'FS01', 'BK01']

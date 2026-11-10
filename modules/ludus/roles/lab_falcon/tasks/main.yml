@@ -1,0 +1,13 @@
+---
+# Only kept on a VM's role list when an installer was staged (render.py strips
+# it from every VM otherwise). falcon_cid comes from global_role_vars.
+- name: Stage the Falcon sensor installer
+  ansible.windows.win_copy:
+    src: WindowsSensor.exe
+    dest: 'C:\Windows\Temp\WindowsSensor.exe'
+
+- name: Install the Falcon sensor (creates-guarded)
+  ansible.windows.win_shell: 'C:\Windows\Temp\WindowsSensor.exe /install /quiet /norestart CID={{ falcon_cid }}'
+  args:
+    creates: 'C:\Program Files\CrowdStrike\CSFalconService.exe'
+  no_log: true

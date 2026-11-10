@@ -1,0 +1,26 @@
+#!/bin/sh
+# c2itall LUDUS host: scope the admin API to the lab, and forward range (10/8)
+# traffic to the lab CIDRs and back, dropping anything the lab must not reach.
+# Idempotent: chains are rebuilt on every run; jump rules are added once.
+set -eu
+
+iptables -N LAB_API 2>/dev/null || iptables -F LAB_API
+iptables -A LAB_API -i lo -j ACCEPT
+{% for cidr in lab.cidrs %}
+iptables -A LAB_API -s {{ cidr }} -j ACCEPT
+{% endfor %}
+iptables -A LAB_API -j DROP
+iptables -C INPUT -p tcp --dport 8080 -j LAB_API 2>/dev/null || iptables -I INPUT 1 -p tcp --dport 8080 -j LAB_API
+
+iptables -N LAB_FWD 2>/dev/null || iptables -F LAB_FWD
+{% for cidr in lab.blocked_cidrs %}
+iptables -A LAB_FWD -d {{ cidr }} -j DROP
+{% endfor %}
+{% for cidr in lab.cidrs %}
+iptables -A LAB_FWD -s 10.0.0.0/8 -d {{ cidr }} -j ACCEPT
+iptables -A LAB_FWD -d 10.0.0.0/8 -s {{ cidr }} -j ACCEPT
+iptables -A LAB_FWD -s 192.0.2.0/24 -d {{ cidr }} -j ACCEPT
+iptables -A LAB_FWD -d 192.0.2.0/24 -s {{ cidr }} -j ACCEPT
+{% endfor %}
+iptables -A LAB_FWD -j RETURN
+iptables -C FORWARD -j LAB_FWD 2>/dev/null || iptables -I FORWARD 1 -j LAB_FWD

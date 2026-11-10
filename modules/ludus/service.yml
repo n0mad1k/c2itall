@@ -7,7 +7,7 @@
       ansible.builtin.wait_for_connection:
         timeout: 300
 
-- name: Install LUDUS
+- name: Install LUDUS and build the lab's AD range host
   hosts: ludushosts
   become: true
   tasks:
@@ -16,7 +16,15 @@
         that:
           - lab is defined
           - lab.member is not none
-        fail_msg: "The LUDUS play needs its lab membership"
+          - lab_range in ['corp', 'mini']
+        fail_msg: "The LUDUS play needs its lab membership and a valid lab_range"
 
     - name: Install the host
       ansible.builtin.include_tasks: tasks/install.yml
+
+    - name: Configure the lab host (datasets, routing, template builds)
+      ansible.builtin.include_tasks: tasks/lab_host.yml
+  handlers:
+    - name: apply lab routing
+      ansible.builtin.command: /usr/local/sbin/lab-routing.sh
+      changed_when: false
