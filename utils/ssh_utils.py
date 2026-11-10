@@ -8,7 +8,42 @@ import subprocess
 import logging
 import re
 import glob
+import ipaddress
+import shlex
 from .common import COLORS, generate_random_string
+
+
+def ipv4(value, private_ok=False):
+    """One IPv4 address the controller may connect to: global, or private when allowed."""
+    try:
+        address = ipaddress.ip_address(str(value or '').strip())
+    except ValueError:
+        raise ValueError('invalid IPv4 address: ' + str(value))
+    if address.version != 4 or not (address.is_global or (private_ok and address.is_private)):
+        raise ValueError('address must be a global IPv4' + (' or private IPv4' if private_ok else ''))
+    return address
+
+
+def ssh_options(known_hosts, key=None, proxy=None):
+    """The ssh arguments every controller connection shares.
+
+    proxy ({'user', 'host', 'key', 'known_hosts'}) routes the connection through
+    the lab gateway with a ProxyCommand; ProxyJump is not used because the jump
+    hop does not inherit -i and the gateway accepts only the lab key.
+    """
+    options = ['-F', '/dev/null']
+    if key:
+        options += ['-i', str(key)]
+    options += ['-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes',
+                '-o', 'StrictHostKeyChecking=accept-new',
+                '-o', 'GlobalKnownHostsFile=/dev/null',
+                '-o', 'UserKnownHostsFile=' + str(known_hosts),
+                '-o', 'ConnectTimeout=10']
+    if proxy:
+        hop = ['ssh', *ssh_options(proxy['known_hosts'], proxy['key']), '-W', '%h:%p',
+               proxy['user'] + '@' + proxy['host']]
+        options += ['-o', 'ProxyCommand=' + ' '.join(shlex.quote(part) for part in hop)]
+    return options
 
 def generate_ssh_key(deployment_id=None):
     """Generate an SSH key for deployment with proper tracking for cleanup"""

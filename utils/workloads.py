@@ -9,26 +9,21 @@ exists, so a provider driver never has to know what runs on the VM.
 """
 
 import importlib.util
-import ipaddress
 from pathlib import Path
 
 from .controller_io import ROOT
+from .ssh_utils import ipv4
 
 _CACHE = {}
 
 
-def host_source(value, label='operator_ip'):
-    """Return one global IPv4 host as the /32 an inbound rule names."""
-    text = str(value or '').strip()
-    if '/' not in text:
-        text += '/32'
+def host_source(value, label='operator_ip', private_ok=False):
+    """Return one IPv4 host as the /32 an inbound rule names; private only inside a lab."""
+    text = str(value or '').strip().removesuffix('/32')
     try:
-        network = ipaddress.ip_network(text, strict=True)
+        return str(ipv4(text, private_ok)) + '/32'
     except ValueError:
         raise ValueError(label + ' must be one global IPv4 host')
-    if network.version != 4 or network.prefixlen != 32 or not network.is_global:
-        raise ValueError(label + ' must be one global IPv4 host')
-    return str(network)
 
 
 class WorkloadProfile:
@@ -52,6 +47,10 @@ class WorkloadProfile:
     manages_ssh_key = True
     recovers_from_log = False
     components = ()
+    # Provider capabilities this workload cannot run without (see CloudDriver.capabilities).
+    requires = frozenset()
+    # 'gateway' keeps its inbound rules inside a lab; a 'member' gets none.
+    lab_role = 'member'
 
     def disk_gb(self, config):
         return 32
@@ -97,6 +96,8 @@ class WorkloadProfile:
             raise TypeError('Workload profile must name its workload')
         if self.kind not in ('single', 'components', 'nodes', 'handoff'):
             raise TypeError('Unknown workload profile kind: ' + str(self.kind))
+        if not isinstance(self.requires, frozenset) or self.lab_role not in ('member', 'gateway'):
+            raise TypeError(self.label() + ' profile requires/lab_role are invalid')
         if self.kind == 'single':
             values = (self.address_key, self.service_playbook, self.log_suffix)
             if not all(isinstance(value, str) and value for value in values):

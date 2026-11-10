@@ -8,7 +8,6 @@ deterministic resource identities it plans, and the API calls that create,
 inspect and remove those resources.
 """
 
-import ipaddress
 import logging
 import os
 from pathlib import Path
@@ -20,6 +19,7 @@ import time
 
 from .cloud_driver import CloudDriver
 from .controller_io import ROOT, interruption_handlers, run_command, secure_directory
+from .ssh_utils import ipv4, ssh_options
 from .state_store import StateStore
 
 ID_PATTERN = re.compile(r'[a-z0-9][a-z0-9-]{0,39}')
@@ -31,8 +31,9 @@ EDGE_FORWARDING = ('HttpsOnly', 'HttpOnly', 'MatchRequest')
 COMMON_KEYS = frozenset({
     'provider', 'deployment_id', 'deployment_type', 'infrastructure_deployment',
     'provider_workload', 'operator_ip', 'ssh_key_path', 'ssh_private_key_path',
-    'ssh_key_generated',
+    'ssh_key_generated', 'ssh_proxy',
 })
+IMAGE_ROLES = ('ubuntu', 'ubuntu2204', 'kali', 'debian12')
 
 
 # Images that ship with password login enabled (Linode, hand-ordered hosts) turn it off.
@@ -43,18 +44,13 @@ DISABLE_PASSWORD_LOGIN = (
 )
 
 
-def host_cidr(value, label):
-    """One global IPv4 host as the /32 a rule or identity names."""
-    text = str(value or '').strip()
-    if '/' not in text:
-        text += '/32'
+def host_cidr(value, label, private_ok=False):
+    """One IPv4 host as the /32 a rule or identity names; private only when allowed."""
+    text = str(value or '').strip().removesuffix('/32')
     try:
-        network = ipaddress.ip_network(text, strict=True)
+        return str(ipv4(text, private_ok)) + '/32'
     except ValueError:
         raise ValueError(label + ' must be one global IPv4 host')
-    if network.version != 4 or network.prefixlen != 32 or not network.network_address.is_global:
-        raise ValueError(label + ' must be one global IPv4 host')
-    return str(network)
 
 
 def ownership_tags(state):
@@ -117,7 +113,7 @@ class StatefulDriver(CloudDriver):
     # --- validation ---------------------------------------------------------
     def validate_config(self, config, require_key=True):
         keys = self.config_keys | {self._key(name) for name in (
-            'inbound_rules', 'disk_gb', 'edge', 'image_role', 'state_dir')}
+            'inbound_rules', 'disk_gb', 'edge', 'image_role', 'state_dir', 'lab')}
         result = {k: v for k, v in config.items() if k in keys}
         if result.get('provider') != self.provider or result.get('infrastructure_deployment') is not True:
             raise ValueError(self.provider + ' supports infrastructure deployments only')
@@ -130,13 +126,14 @@ class StatefulDriver(CloudDriver):
         deployment_id = result.get('deployment_id', '')
         if not isinstance(deployment_id, str) or not ID_PATTERN.fullmatch(deployment_id):
             raise ValueError('Invalid ' + self.provider + ' deployment ID')
-        result['operator_ip'] = host_cidr(result.get('operator_ip'), 'operator_ip')
+        result['operator_ip'] = host_cidr(result.get('operator_ip'), 'operator_ip',
+                                          private_ok=self.private_addresses)
         disk = result.get(self._key('disk_gb'), 32)
         if type(disk) is not int or not self.disk_range[0] <= disk <= self.disk_range[1]:
             raise ValueError(self._key('disk_gb') + ' must be an integer from {0} through {1}'.format(*self.disk_range))
         result[self._key('disk_gb')] = disk
         role = result.get(self._key('image_role'), 'ubuntu')
-        if role not in ('ubuntu', 'ubuntu2204', 'kali'):
+        if role not in IMAGE_ROLES:
             raise ValueError('Invalid ' + self.provider + ' image role')
         result[self._key('image_role')] = role
         result[self._key('inbound_rules')] = self._rules(result.get(self._key('inbound_rules'), []))
@@ -153,6 +150,14 @@ class StatefulDriver(CloudDriver):
         state_dir = result.get(self._key('state_dir'))
         if state_dir is not None and (not isinstance(state_dir, str) or not state_dir):
             raise ValueError('Invalid ' + self.provider + ' state directory')
+        lab = result.get(self._key('lab'))
+        if lab is not None and (not isinstance(lab, dict)
+                                or not {'name', 'role', 'lab_ip', 'public_ip'} <= set(lab)):
+            raise ValueError('Invalid ' + self.provider + ' lab placement')
+        proxy = result.get('ssh_proxy')
+        if proxy is not None and (not isinstance(proxy, dict)
+                                  or set(proxy) != {'user', 'host', 'key', 'known_hosts'}):
+            raise ValueError('Invalid ssh_proxy')
         public = Path(result['ssh_key_path']).expanduser().absolute()
         private = Path(result.get('ssh_private_key_path', str(public).removesuffix('.pub'))).expanduser().absolute()
         if public == private:
@@ -188,7 +193,7 @@ class StatefulDriver(CloudDriver):
             if source == 'edge':
                 raise ValueError('Edge rules must be translated by the driver plan')
             if source not in ('*', self.edge_source):
-                source = host_cidr(source, 'inbound rule source')
+                source = host_cidr(source, 'inbound rule source', private_ok=self.private_addresses)
             if (not isinstance(rule['name'], str) or not RULE_NAME.fullmatch(rule['name'])
                     or protocol not in ('Tcp', 'Udp') or not 1 <= port <= 65535 or port == 22):
                 raise ValueError('Invalid ' + self.provider + ' inbound rule')
@@ -226,6 +231,13 @@ class StatefulDriver(CloudDriver):
                 result[self._key(name)] = config[self._key(name)]
         if request.edge:
             result[self._key('edge')] = dict(request.edge)
+        if request.lab:
+            result[self._key('lab')] = dict(request.lab)
+            if request.lab['role'] == 'member':
+                # Members admit SSH only from where the controller arrives.
+                result['operator_ip'] = request.lab['ssh_source']
+            if request.lab.get('ssh_proxy'):
+                result['ssh_proxy'] = dict(request.lab['ssh_proxy'])
         return result
 
     # --- durable state ------------------------------------------------------
@@ -355,21 +367,20 @@ class StatefulDriver(CloudDriver):
 
     # --- SSH ----------------------------------------------------------------
     def ssh_argv(self, state, address, known_hosts, key=None):
-        return ['ssh', '-F', '/dev/null', '-i', str(key or state['ssh_private_key_path']),
-                '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes',
-                '-o', 'StrictHostKeyChecking=accept-new',
-                '-o', 'GlobalKnownHostsFile=/dev/null',
-                '-o', 'UserKnownHostsFile=' + str(known_hosts),
-                '-o', 'ConnectTimeout=10', self.ssh_user + '@' + str(address)]
+        return ['ssh', *ssh_options(known_hosts, key or state['ssh_private_key_path'],
+                                    state.get('ssh_proxy')),
+                self.ssh_user + '@' + str(address)]
 
     def after_ssh(self, state, deadline):
         """Provider-specific host fix-ups that need SSH; the default needs none."""
 
     def wait_for_ssh(self, state, deadline):
         """Return only after the VM accepts the deployment key."""
-        address = ipaddress.ip_address((state.get('outputs') or {}).get('public_ip', ''))
-        if address.version != 4 or not address.is_global:
-            raise RuntimeError(self.provider + ' returned an invalid public IP')
+        try:
+            address = ipv4((state.get('outputs') or {}).get('public_ip', ''),
+                           private_ok=self.private_addresses or bool(state.get(self._key('lab'))))
+        except ValueError:
+            raise RuntimeError(self.provider + ' returned an invalid address')
         private_key = Path(state['ssh_private_key_path'])
         if (not private_key.is_file() or private_key.is_symlink()
                 or private_key.stat().st_uid != os.getuid()):

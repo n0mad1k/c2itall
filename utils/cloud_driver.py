@@ -15,7 +15,7 @@ class ProvisionRequest:
     """Everything a driver needs to plan one VM for a workload."""
 
     def __init__(self, deployment_id, workload, inbound_rules, image_role,
-                 disk_gb, ssh_public, ssh_private, ssh_generated, edge=None):
+                 disk_gb, ssh_public, ssh_private, ssh_generated, edge=None, lab=None):
         self.deployment_id = deployment_id
         self.workload = workload
         # A rule whose source is 'edge' admits only the provider's own edge
@@ -30,11 +30,19 @@ class ProvisionRequest:
         # forwarding is HttpsOnly, HttpOnly or MatchRequest; name is the
         # public endpoint label the provider derives a hostname from.
         self.edge = dict(edge) if edge else None
+        # Lab placement from utils.lab.placement(): role, lab_ip, cidrs,
+        # public_ip, ssh_source, ssh_proxy, egress_via_hub, network.
+        self.lab = dict(lab) if lab else None
 
 
 class CloudDriver:
     provider = None
     ssh_user = None
+    # What this provider can offer beyond a VM: 'lab_network' (a shared private
+    # subnet with managed NAT and flow logs), 'nested_virtualization'.
+    capabilities = frozenset()
+    # True when hosts and the operator may sit on private addresses (local VMs).
+    private_addresses = False
     # Configuration keys the driver owns, e.g. 'azure_'; exported to the module
     # config after provisioning so records and teardown carry them.
     prefix = None
@@ -113,6 +121,15 @@ class CloudDriver:
     def health(self, state):
         raise NotImplementedError
 
+    # --- lab networks ------------------------------------------------------
+    def lab_network(self, lab, config):
+        """Create or reuse this provider's shared lab network; return its record."""
+        raise NotImplementedError
+
+    def delete_lab_network(self, lab, network):
+        """Delete the shared lab network once no member remains; prove absence."""
+        raise NotImplementedError
+
     # --- durable state -----------------------------------------------------
     def load_state(self, deployment_id):
         """Return the recovery state for an ID, or None when there is none."""
@@ -145,7 +162,8 @@ class CloudDriver:
         """Keys the module config keeps after provisioning for records and teardown."""
         return {key: value for key, value in infrastructure.items()
                 if key.startswith(self.prefix) or key in (
-                    'operator_ip', 'ssh_key_path', 'ssh_private_key_path', 'ssh_key_generated')}
+                    'operator_ip', 'ssh_key_path', 'ssh_private_key_path', 'ssh_key_generated',
+                    'ssh_proxy')}
 
     def cleanup_request(self, config, identity=True):
         request = {'deployment_id': config['deployment_id']}

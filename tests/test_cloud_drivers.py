@@ -348,6 +348,31 @@ class SharedValidationTests(DriverCase):
             driver.validate_config(driver.plan(dict(config, linode_region='Bad Region'),
                                                self.request('lt-unit', plain, edge=None)))
 
+    def test_lab_members_admit_ssh_from_the_gateway_and_connect_through_it(self):
+        driver = linode_cloud.LinodeDriver()
+        config = self.config('linode', linode_region='us-east')
+        proxy = {'user': 'root', 'host': '9.9.9.9', 'key': str(self.private),
+                 'known_hosts': str(self.state_dir / 'gateway-known-hosts')}
+        placement = {'name': 'lab', 'role': 'member', 'lab_ip': '198.18.0.10', 'public_ip': False,
+                     'ssh_source': '9.9.9.9/32', 'ssh_proxy': proxy, 'cidrs': ['198.18.0.0/16']}
+        request = ProvisionRequest('lt-lab-unit', 'exfil_receiver', [], 'debian12', 64,
+                                   str(self.public), str(self.private), False, lab=placement)
+        plan = driver.validate_config(driver.plan(config, request))
+        self.assertEqual(plan['operator_ip'], '9.9.9.9/32')
+        self.assertEqual(plan['linode_image_role'], 'debian12')
+        self.assertEqual(plan['linode_lab']['lab_ip'], '198.18.0.10')
+        argv = driver.ssh_argv(plan, '198.18.16.5', self.state_dir / 'kh')
+        hop = [part for part in argv if part.startswith('ProxyCommand=')][0]
+        self.assertIn('-W %h:%p root@9.9.9.9', hop)
+        self.assertIn('-i ' + str(self.private), hop)
+        self.assertEqual(argv[-1], 'root@198.18.16.5')
+        self.assertNotIn('ProxyCommand', ' '.join(driver.ssh_argv(
+            dict(plan, ssh_proxy=None), '8.8.4.4', self.state_dir / 'kh')))
+        with self.assertRaisesRegex(ValueError, 'lab placement'):
+            driver.validate_config(dict(plan, linode_lab={'role': 'member'}))
+        with self.assertRaisesRegex(ValueError, 'ssh_proxy'):
+            driver.validate_config(dict(plan, ssh_proxy={'host': '9.9.9.9'}))
+
 
 class AwsDriverTests(DriverCase):
     def setUp(self):
