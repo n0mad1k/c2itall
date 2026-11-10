@@ -99,6 +99,7 @@
     owner: root
     group: root
     mode: '0600'
+  register: minio_env
   no_log: true
 
 - name: Install the MinIO service unit
@@ -121,11 +122,13 @@
       [Install]
       WantedBy=multi-user.target
 
+# A reused host (local VMs) keeps the previous lab's MinIO running under the
+# old credentials; a changed env file means a restart, repeat deploys do not.
 - name: Start MinIO
   ansible.builtin.systemd:
     name: minio
     enabled: true
-    state: started
+    state: "{{ 'restarted' if minio_env.changed else 'started' }}"
     daemon_reload: true
 
 - name: Wait for MinIO to accept connections
