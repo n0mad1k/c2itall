@@ -24,6 +24,8 @@ INSTANCE_RATES = {
         'Standard_D2as_v4': 0.086,
         'Standard_D4as_v4': 0.172,
     },
+    # A host the operator already owns costs nothing extra per hour.
+    'local': {'host': 0.0},
 }
 
 SCAN_MODES = {
@@ -45,6 +47,7 @@ DEFAULT_INSTANCE = {
     'aws':      't3.small',
     'flokinet': 'vps-2',
     'azure':    'Standard_D2as_v4',
+    'local':    'host',
 }
 
 BILLING_MINIMUM = {
@@ -52,6 +55,7 @@ BILLING_MINIMUM = {
     'aws':      0.017,  # billed per second, ~1 min minimum in practice
     'flokinet': 1.0,
     'azure':    0.017,  # billed per second
+    'local':    0.0,
 }
 
 

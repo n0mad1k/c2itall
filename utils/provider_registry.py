@@ -116,8 +116,10 @@ class ProviderSpec(namedtuple(
 
     @property
     def capabilities(self):
-        # A cloud driver serves every workload that publishes a native profile.
-        covered = driver_workloads() if self.driver else ()
+        # A cloud driver serves every workload that publishes a native profile,
+        # unless the profile requires a capability the driver does not declare.
+        covered = [workload for workload in driver_workloads()
+                   if _driver_serves(self, workload)] if self.driver else ()
         return frozenset(self.routes) | frozenset(covered)
 
     @property
@@ -194,6 +196,14 @@ PROVIDER_SPECS = {
                           config_loader='utils.azure_utils:gather_azure_config',
                           runtime_loader='utils.azure_runtime:azure_runtime',
                           driver='utils.azure_cloud:azure_driver'),
+    'local': ProviderSpec('Local', 'root', False,
+                          config_loader='utils.local_cloud:gather_local_config',
+                          cleanup_automated=False,
+                          cleanup_guidance=(
+                              'The deployment key for {deployment_id} was revoked from the host',
+                              'Reset or delete the machine yourself when the engagement ends',
+                          ),
+                          driver='utils.local_cloud:local_driver'),
 }
 
 
@@ -201,6 +211,20 @@ def driver_workloads():
     """Workloads any cloud driver serves: the infrastructure VM plus every profile."""
     from .workloads import profiled_workloads
     return ['infrastructure', *profiled_workloads()]
+
+
+def _driver_serves(spec, workload):
+    """A driver serves a profiled workload unless it requires more than the driver offers."""
+    if workload == 'infrastructure':
+        return True
+    from .workloads import load_profile
+    profile = load_profile(workload)
+    if profile is None:
+        return False
+    if not profile.requires:
+        return True
+    from .vm_workloads import load_driver
+    return profile.requires <= load_driver(spec.driver).capabilities
 
 
 def _load(reference):
@@ -230,7 +254,7 @@ class ProviderDispatcher:
             if not reference:
                 raise ValueError(f'Registered route is missing for {self.provider}/{workload}')
             return _load(reference)()
-        if self.spec.driver and workload in driver_workloads():
+        if self.spec.driver and workload in self.spec.capabilities:
             from .vm_workloads import driver_route
             return driver_route(self.spec.driver, workload)
         return None
@@ -383,8 +407,11 @@ def provider_route_kind(provider, workload):
     if spec is None:
         raise ValueError('Unknown provider: ' + str(provider))
     reference = spec.routes.get(workload)
-    if reference or (spec.driver and workload in driver_workloads()):
+    if reference or (spec.driver and workload in spec.capabilities):
         return 'native'
+    if spec.driver and workload in driver_workloads():
+        # The profile requires a capability this driver does not declare.
+        return 'gated'
     if (workload in LEGACY_FALLBACK_WORKLOADS and
             workload in spec.legacy_capabilities):
         return 'legacy_fallback'
@@ -645,7 +672,7 @@ def validate_provider_registry(load_references=True):
                     'Invalid provider cleanup guidance template: ' + provider) from exc
 
     counts = {kind: 0 for kind in (
-        'native', 'legacy_fallback', 'staged', 'unsupported')}
+        'native', 'gated', 'legacy_fallback', 'staged', 'unsupported')}
     rows = provider_support_matrix()
     for row in rows:
         provider = row['provider']

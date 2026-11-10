@@ -163,7 +163,7 @@ class StubModuleProfileTests(unittest.TestCase):
         for workload in ('tracker', 'logging_server', 'share', 'hashtopolis'):
             with self.subTest(workload=workload):
                 self.assertEqual(registry.providers_for(workload, legacy_fallback=True),
-                                 ['aws', 'linode', 'flokinet', 'azure'])
+                                 ['aws', 'linode', 'flokinet', 'azure', 'local'])
                 for provider in registry.PROVIDER_SPECS:
                     self.assertEqual(registry.provider_route_kind(provider, workload), 'native')
                 self.assertTrue((ROOT / registry.WORKLOAD_SPECS[workload].entrypoint).is_file())

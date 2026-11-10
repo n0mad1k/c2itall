@@ -58,7 +58,7 @@ class FakeProviderTests(unittest.TestCase):
     def test_registering_one_driver_serves_every_profiled_workload(self):
         with mock.patch.dict(registry.PROVIDER_SPECS, {'fakecloud': FAKE_SPEC}):
             summary = registry.validate_provider_registry(load_references=True)
-            self.assertEqual(summary['providers'], 5)
+            self.assertEqual(summary['providers'], 6)
             for workload in registry.driver_workloads():
                 with self.subTest(workload=workload):
                     self.assertIn('fakecloud', registry.providers_for(workload))
@@ -72,7 +72,7 @@ class FakeProviderTests(unittest.TestCase):
                 frozenset({'quick_recon', 'kali', 'ubuntu'}))
             self.assertEqual(
                 provider_utils.available_providers('c2', legacy_fallback=True),
-                ['aws', 'linode', 'flokinet', 'azure', 'fakecloud'])
+                ['aws', 'linode', 'flokinet', 'azure', 'local', 'fakecloud'])
             self.assertEqual(
                 provider_utils.gather_provider_config('fakecloud', 'redirector'),
                 dict(self.driver.gather_config(), provider_manages_ssh_key=True))

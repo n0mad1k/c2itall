@@ -511,7 +511,7 @@ class RoutingAndTemplateTests(AzureFixture):
             self.assertEqual(provider_utils.select_provider(), "flokinet")
 
     def test_every_driver_provider_serves_every_profiled_workload(self):
-        everyone = ['aws', 'linode', 'flokinet', 'azure']
+        everyone = ['aws', 'linode', 'flokinet', 'azure', 'local']
         for workload in ('c2', 'phishing', 'attack_box', 'tracker', 'share'):
             with self.subTest(workload=workload):
                 self.assertEqual(
@@ -832,10 +832,10 @@ class RoutingAndTemplateTests(AzureFixture):
     def test_provider_coverage_audit_reports_actual_azure_gaps(self):
         validation = registry.validate_provider_registry(load_references=True)
         self.assertEqual(validation, {
-            'providers': 4, 'workloads': 13, 'controllers': 13,
-            'pairs': 52, 'routes': 0, 'driver_routes': 52, 'staged_routes': 0,
+            'providers': 5, 'workloads': 13, 'controllers': 13,
+            'pairs': 65, 'routes': 0, 'driver_routes': 65, 'staged_routes': 0,
             'counts': {
-                'native': 52, 'legacy_fallback': 0, 'staged': 0, 'unsupported': 0,
+                'native': 65, 'gated': 0, 'legacy_fallback': 0, 'staged': 0, 'unsupported': 0,
             },
         })
         rows = registry.provider_support_matrix()
@@ -1375,7 +1375,7 @@ class RoutingAndTemplateTests(AzureFixture):
                 keys.assert_called_once_with('x', config['ssh_key_path'])
 
     def test_every_provider_resolves_module_service_playbooks(self):
-        for provider in ('aws', 'linode', 'flokinet', 'azure'):
+        for provider in ('aws', 'linode', 'flokinet', 'azure', 'local'):
             with self.subTest(provider=provider):
                 self.assertTrue(deployment_engine.determine_playbook(
                     {'provider': provider, 'c2_only': True}).endswith('modules/c2/service.yml'))
@@ -1405,16 +1405,16 @@ class RoutingAndTemplateTests(AzureFixture):
     def test_phantom_and_attack_box_routes_do_not_expose_unimplemented_azure_workloads(self):
         self.assertEqual(
             provider_utils.available_providers('phantom', legacy_fallback=True),
-            ['aws', 'linode', 'flokinet', 'azure'])
+            ['aws', 'linode', 'flokinet', 'azure', 'local'])
         self.assertEqual(
             provider_utils.available_providers('c2', legacy_fallback=True),
-            ['aws', 'linode', 'flokinet', 'azure'])
+            ['aws', 'linode', 'flokinet', 'azure', 'local'])
         self.assertEqual(
             provider_utils.available_providers('attack_box', legacy_fallback=True),
-            ['aws', 'linode', 'flokinet', 'azure'])
+            ['aws', 'linode', 'flokinet', 'azure', 'local'])
         self.assertEqual(
             provider_utils.available_providers('chat', legacy_fallback=True),
-            ['aws', 'linode', 'flokinet', 'azure'])
+            ['aws', 'linode', 'flokinet', 'azure', 'local'])
         _service_rules = load_profile('phantom').inbound_rules
         self.assertEqual(
             {(rule['protocol'], rule['port']) for rule in _service_rules({
@@ -2581,7 +2581,7 @@ class ProviderContractTests(AzureFixture):
             "assert 'utils.azure_cloud' not in sys.modules; "
             "assert 'utils.azure_utils' not in sys.modules; "
             "assert 'utils.aws_cloud' not in sys.modules; "
-            "assert provider_utils.available_providers() == ['aws', 'linode', 'flokinet', 'azure']"],
+            "assert provider_utils.available_providers() == ['aws', 'linode', 'flokinet', 'azure', 'local']"],
             cwd=ROOT, capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
 

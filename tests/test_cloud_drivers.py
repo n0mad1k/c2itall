@@ -17,10 +17,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils import aws_cloud, flokinet_cloud, linode_cloud
+from utils import aws_cloud, flokinet_cloud, linode_cloud, local_cloud
 from utils import provider_registry as registry
 from utils.cloud_driver import ProvisionRequest
 from utils.driver_base import StatefulDriver
+from utils.workloads import load_profile
 
 OPERATOR = '8.8.8.8'
 RULES = [
@@ -312,12 +313,14 @@ class RegistryTests(unittest.TestCase):
         summary = registry.validate_provider_registry(load_references=True)
         self.assertEqual(summary['routes'], 0)
         self.assertEqual(summary['counts']['native'], summary['pairs'])
-        for provider in ('aws', 'linode', 'flokinet', 'azure'):
+        for provider in ('aws', 'linode', 'flokinet', 'azure', 'local'):
             for workload in registry.CANONICAL_WORKLOADS:
                 self.assertEqual(registry.provider_route_kind(provider, workload), 'native')
         self.assertEqual(registry.provider_driver('aws').ssh_user, 'ec2-user')
         self.assertEqual(registry.provider_driver('linode').ssh_user, 'root')
         self.assertEqual(registry.provider_driver('flokinet').ssh_user, 'root')
+        self.assertEqual(registry.provider_driver('local').ssh_user, 'root')
+        self.assertTrue(registry.provider_driver('local').private_addresses)
         self.assertTrue(registry.provider_driver('aws').supports_edge)
         self.assertFalse(registry.provider_driver('linode').supports_edge)
         self.assertFalse(registry.provider_driver('flokinet').supports_edge)
@@ -546,6 +549,35 @@ class FlokinetDriverTests(DriverCase):
         self.assertIn('grep -vxF', script)
         self.assertNotIn('ufw', script)
         self.assertFalse((self.state_dir / 'lt-floki-unit.json').exists())
+
+
+class LocalDriverTests(DriverCase):
+    def test_adopts_private_hosts_that_flokinet_refuses(self):
+        driver = local_cloud.LocalDriver()
+        driver._run_stdin = lambda argv, script, deadline: None
+        config = self.config('local', local_host='192.168.56.20', operator_ip='192.168.56.1')
+        request = ProvisionRequest('lt-local-unit', 'exfil_receiver', [], 'debian12', 64,
+                                   str(self.public), str(self.private), False)
+        plan = driver.validate_config(driver.plan(config, request))
+        self.assertEqual((plan['local_host'], plan['operator_ip']), ('192.168.56.20', '192.168.56.1/32'))
+        driver.prepare_state(plan)
+        self.assertTrue(driver.deploy(plan))
+        self.assertEqual(driver.public_address('lt-local-unit', config), '192.168.56.20')
+        self.assertIn('nested_virtualization', driver.capabilities)
+        with self.assertRaisesRegex(ValueError, 'flokinet_host'):
+            flokinet_cloud.FlokinetDriver().validate_config(flokinet_cloud.FlokinetDriver().plan(
+                self.config('flokinet', flokinet_host='192.168.56.20'), request))
+
+    def test_profiles_that_require_a_capability_are_gated_per_driver(self):
+        with mock.patch.object(load_profile('tracker'), 'requires', frozenset({'nested_virtualization'})):
+            self.assertEqual(registry.provider_route_kind('linode', 'tracker'), 'gated')
+            self.assertEqual(registry.provider_route_kind('local', 'tracker'), 'native')
+            self.assertNotIn('linode', registry.providers_for('tracker'))
+            self.assertIsNone(registry.provider_dispatcher('linode').route('tracker'))
+            # Only the adopt-a-host drivers declare nested virtualization so far.
+            self.assertEqual(registry.validate_provider_registry(load_references=True)['counts']['gated'], 3)
+            self.assertEqual(registry.provider_route_kind('aws', 'tracker'), 'gated')
+        self.assertEqual(registry.provider_route_kind('linode', 'tracker'), 'native')
 
 
 if __name__ == '__main__':
