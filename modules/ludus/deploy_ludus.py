@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from utils import lab as lab_mod
 from utils.common import COLORS, clear_screen, confirm_action, generate_deployment_id, print_banner, wait_for_input
-from utils.provider_utils import apply_provider_profile, gather_provider_config, prepare_module_ssh_key, select_provider
+from utils.provider_utils import apply_provider_profile, gather_provider_config, select_provider
 
 from render import dump, load_identities, render_range
 
@@ -73,10 +73,7 @@ def gather_ludus_parameters(lab_name):
     config.update(provider=provider, provider_workload='ludus_host',
                   deployment_type='ludus_host', ludus_name='ludus-' + config['deployment_id'])
     apply_provider_profile(config, 'instance_size', 'nested')
-    ready, _ = prepare_module_ssh_key(config, config['deployment_id'])
-    if not ready:
-        print(f"{COLORS['RED']}Failed to prepare the SSH key{COLORS['RESET']}")
-        return None
+    config['ssh_key_path'] = lab_mod.load(lab_name)['ssh_key_path']
 
     lab_range = ''
     while lab_range not in ('corp', 'mini'):
