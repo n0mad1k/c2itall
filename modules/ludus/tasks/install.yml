@@ -174,9 +174,10 @@
           - ludus
           - user
           - add
+          # LUDUS derives the PAM/Proxmox account from the display name (lowercased,
+          # spaces to dashes); "lab" would collide with a local VM's install user.
           - --name
-          - Lab
-          # Not "lab": LUDUS creates a PAM account per user and a local VM's install user may own that name.
+          - c2itall lab
           - --userid
           - c2lab
           - --email
