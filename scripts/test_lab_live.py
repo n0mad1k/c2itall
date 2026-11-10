@@ -115,6 +115,8 @@ class Live:
                                           return_value=dict(self.account(provider, host), operator_ip=self.operator))]
             if hasattr(module, 'prepare_module_ssh_key'):
                 patches.append(mock.patch.object(module, 'prepare_module_ssh_key', return_value=(True, None)))
+            if hasattr(module, 'confirm_action'):
+                patches.append(mock.patch.object(module, 'confirm_action', return_value=True))
 
             def run():
                 config = getattr(module, 'gather_{0}_parameters'.format(stem))(self.name)
@@ -124,6 +126,9 @@ class Live:
                 self.record(workload + '-config.json', {k: v for k, v in config.items()
                                                         if not any(s in k for s in ('password', 'key', 'secret'))})
                 self.member_configs[workload] = config
+                if stem == 'ludus':
+                    # The menu path also records ludus.json and routes the range through the hub.
+                    return module.execute_ludus_deployment(config)
                 return deploy_infrastructure(config)
         for patch in patches:
             patch.start()
