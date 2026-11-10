@@ -153,8 +153,9 @@ def placement(lab, driver, deployment_id, profile, operator_ip):
     network = lab['networks'].get(driver.provider) if native else None
     if native and not (network and network.get('status') == 'ready'):
         raise ValueError(driver.provider + ' lab network is not ready')
-    common = {'name': lab['name'], 'cidrs': list(lab['cidrs']),
-              'range_cidrs': list(lab['range_cidrs']), 'network': network}
+    # Only what the driver needs to place the VM; range routes change later and
+    # live in the lab record (service_variables), so they stay out of driver state.
+    common = {'name': lab['name'], 'cidrs': list(lab['cidrs']), 'network': network}
     if profile.lab_role == 'gateway':
         current = lab.get('gateway')
         if current and current['deployment_id'] != deployment_id and current.get('status') == 'ready':

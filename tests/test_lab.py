@@ -149,6 +149,10 @@ class LabTests(unittest.TestCase):
         self.assertEqual((local['ssh_source'], local['ssh_proxy'], local['lab_ip']),
                          ('192.168.56.1', None, '198.18.0.11'))
         self.assertEqual(lab_mod.placement(lab, other, 'm2', profile, '8.8.4.4')['lab_ip'], '198.18.0.10')
+        # A routed range must not change a member's placement, or its redeploy conflicts with state.
+        before = lab_mod.placement(lab, other, 'm2', profile, '8.8.4.4')
+        lab_mod.set_range(lab, 'm2', '10.7.0.0/16')
+        self.assertEqual(lab_mod.placement(lab, other, 'm2', profile, '8.8.4.4'), before)
         native_elsewhere = type('Other', (fake_cloud.FakeDriver,), {'provider': 'elsewhere'})()
         lab['networks']['elsewhere'] = {'status': 'ready', 'cidr': '198.18.32.0/20'}
         with self.assertRaisesRegex(ValueError, 'needs the lab gateway on elsewhere'):
