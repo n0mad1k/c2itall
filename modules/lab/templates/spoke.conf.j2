@@ -1,0 +1,14 @@
+[Interface]
+Address = {{ spoke.lab_ip }}/32
+PrivateKey = {{ spoke_keys.stdout_lines[1] }}
+{% if spoke.egress_via_hub %}
+# Everything else leaves through the hub; the hub itself stays on the provider route.
+PostUp = ip route replace {{ lab.hub.public_ip }}/32 via {{ ansible_default_ipv4.gateway }} dev {{ ansible_default_ipv4.interface }}
+PostDown = ip route del {{ lab.hub.public_ip }}/32 via {{ ansible_default_ipv4.gateway }} dev {{ ansible_default_ipv4.interface }} || true
+{% endif %}
+
+[Peer]
+PublicKey = {{ hub_public.stdout }}
+Endpoint = {{ lab.hub.public_ip }}:{{ lab.hub.port }}
+AllowedIPs = {{ allowed_ips | join(', ') }}
+PersistentKeepalive = 25

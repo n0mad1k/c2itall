@@ -1,0 +1,21 @@
+#!/bin/sh
+# c2itall lab hub: forward between spokes, log every new flow, NAT lab egress.
+# Idempotent: the chains are rebuilt on every run; jump rules are added once.
+set -eu
+public={{ ansible_default_ipv4.interface }}
+
+iptables -N LAB_FWD 2>/dev/null || iptables -F LAB_FWD
+{% for cidr in lab.blocked_cidrs %}
+iptables -A LAB_FWD -d {{ cidr }} -j DROP
+{% endfor %}
+iptables -A LAB_FWD -i wg0 -m conntrack --ctstate NEW -j LOG --log-prefix "LABFLOW " --log-level 6
+iptables -A LAB_FWD -i wg0 -j ACCEPT
+iptables -A LAB_FWD -o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+iptables -A LAB_FWD -j RETURN
+iptables -C FORWARD -j LAB_FWD 2>/dev/null || iptables -I FORWARD 1 -j LAB_FWD
+
+iptables -t nat -N LAB_NAT 2>/dev/null || iptables -t nat -F LAB_NAT
+{% for cidr in lab.cidrs + ['10.0.0.0/8'] %}
+iptables -t nat -A LAB_NAT -s {{ cidr }} -o "$public" -j MASQUERADE
+{% endfor %}
+iptables -t nat -C POSTROUTING -j LAB_NAT 2>/dev/null || iptables -t nat -A POSTROUTING -j LAB_NAT

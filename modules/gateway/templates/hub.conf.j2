@@ -1,0 +1,10 @@
+[Interface]
+Address = {{ lab.hub.lab_ip }}/24
+ListenPort = {{ lab.hub.port }}
+PrivateKey = {{ hub_keys.stdout_lines[0] }}
+
+# BEGIN c2itall operator
+[Peer]
+PublicKey = {{ hub_keys.stdout_lines[3] }}
+AllowedIPs = {{ lab.hub.operator_ip }}/32
+# END c2itall operator

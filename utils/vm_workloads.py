@@ -10,12 +10,15 @@ import json
 import logging
 import os
 from pathlib import Path
+import shlex
 import tempfile
 import time
 
+from . import lab as lab_mod
 from .cloud_driver import CloudDriver, DriverInfrastructureAdapter, ProvisionRequest
 from .controller_io import ROOT, regular_file, secure_directory
 from .provider_registry import WorkloadAdapter, _load
+from .ssh_utils import ipv4, ssh_options
 from .workloads import load_profile
 
 
@@ -61,7 +64,12 @@ class SingleVmAdapter(WorkloadAdapter):
         deployment_id = config['deployment_id']
         if self.profile.component:
             deployment_id += '-' + self.profile.component
-        if self.profile.manages_ssh_key:
+        lab = self._lab(config)
+        if lab:
+            # One key per lab: the gateway hop and every member accept the same identity.
+            key = Path(lab['ssh_private_key_path'])
+            generated = False
+        elif self.profile.manages_ssh_key:
             key = Path.home() / '.ssh' / ('c2deploy_' + config['deployment_id'])
             generated = True
         else:
@@ -72,20 +80,31 @@ class SingleVmAdapter(WorkloadAdapter):
         if edge and not self.driver.supports_edge:
             raise ValueError('{0} cannot front {1} with an edge'.format(
                 self.driver.provider, self._label()))
+        rules = self.profile.inbound_rules(config)
+        placement = None
+        if lab:
+            placement = lab_mod.placement(lab, self.driver, deployment_id, self.profile,
+                                          config['operator_ip'])
+            if self.profile.lab_role != 'gateway':
+                # Members answer only inside the lab; each play scopes its own ports.
+                rules = []
         return ProvisionRequest(
-            deployment_id, self.profile.workload, self.profile.inbound_rules(config),
+            deployment_id, self.profile.workload, rules,
             self.profile.image_role_for(config), self.profile.disk_gb(config),
-            str(key) + '.pub', str(key), generated, edge=edge)
+            str(key) + '.pub', str(key), generated, edge=edge, lab=placement)
+
+    def _lab(self, config):
+        return lab_mod.load(config['lab']) if config.get('lab') else None
 
     def _infrastructure_config(self, config):
         return self.driver.plan(config, self._request(config))
 
-    def _public_ipv4(self, value):
-        address = ipaddress.ip_address(value)
-        if address.version != 4 or not address.is_global:
-            raise ValueError('{0} {1} deployment returned an invalid public IP'.format(
+    def _ipv4(self, value, config):
+        try:
+            return ipv4(value, private_ok=self.driver.private_addresses or bool(config.get('lab')))
+        except ValueError:
+            raise ValueError('{0} {1} deployment returned an invalid address'.format(
                 self.driver.provider, self._label()))
-        return address
 
     def _export_ssh_known_hosts(self, config):
         log_dir = self.driver.log_dir(config)
@@ -100,45 +119,75 @@ class SingleVmAdapter(WorkloadAdapter):
                    'deployment_type'} | set(self.profile.config_keys)
         variables = {key: value for key, value in config.items()
                      if key in allowed and value is not None}
-        return self.profile.service_variables(config, variables)
+        variables = self.profile.service_variables(config, variables)
+        if config.get('lab'):
+            variables['lab'] = lab_mod.service_variables(self._lab(config), config['deployment_id'])
+        return variables
 
     def _run_service_playbook(self, config):
-        address = self._public_ipv4(config[self.profile.address_key])
+        address = self._ipv4(config.get('ssh_host') or config[self.profile.address_key], config)
+        inventory = str(address) + ','
+        if self.profile.inventory_group:
+            # Shared service tasks classify hosts by their legacy group name.
+            inventory = ('[' + self.profile.inventory_group + ']\n' + str(address) +
+                         ' ansible_host=' + str(address) + '\n')
+        return self._run_playbook(config, self.playbook(config), inventory,
+                                  self._service_variables(config), self.profile.log_suffix,
+                                  self.profile.service_timeout(config))
+
+    def _run_spoke_playbook(self, config, lab, placement):
+        """Join a member to the lab overlay; the gateway is a second host for peer registration."""
+        gateway = lab_mod.gateway_target(lab)
+        known_hosts = self._export_ssh_known_hosts(config)
+        inventory = {
+            'member': {'hosts': {config['ssh_host']: {
+                'ansible_host': config['ssh_host'], 'ansible_user': self.driver.ssh_user,
+                'ansible_ssh_common_args': shlex.join(
+                    ssh_options(known_hosts, None, config.get('ssh_proxy')))}}},
+            'gateway': {'hosts': {gateway['host']: {
+                'ansible_host': gateway['host'], 'ansible_user': gateway['user'],
+                'ansible_ssh_common_args': shlex.join(ssh_options(gateway['known_hosts']))}}},
+        }
+        variables = {'lab': lab_mod.service_variables(lab, config['deployment_id']),
+                     'spoke': {'deployment_id': config['deployment_id'], 'lab_ip': placement['lab_ip'],
+                               'egress_via_hub': placement['egress_via_hub'],
+                               'hub_routes': list(placement.get('hub_routes') or [])}}
+        return self._run_playbook(config, str(ROOT / 'modules/lab/spoke.yml'), inventory,
+                                  variables, 'lab-spoke', 900)
+
+    def _run_playbook(self, config, playbook, inventory, variables, log_suffix, timeout):
+        """Run one play against this deployment; inventory is 'ip,', INI text or a dict."""
         private_key = Path(config['ssh_private_key_path'])
         if not private_key.is_file() or private_key.is_symlink():
             raise ValueError('{0} {1} private key is unavailable'.format(
                 self.driver.provider, self._label()))
         log_dir = self.driver.log_dir(config)
         known_hosts = self._export_ssh_known_hosts(config)
-        service_vars = self._service_variables(config)
-        service_vars.update(
+        variables.update(
             ansible_python_interpreter='/usr/bin/python3',
-            ansible_ssh_common_args=(
-                '-o BatchMode=yes -o IdentitiesOnly=yes '
-                '-o StrictHostKeyChecking=accept-new '
-                '-o GlobalKnownHostsFile=/dev/null '
-                '-o UserKnownHostsFile=' + str(known_hosts)),
+            ansible_ssh_common_args=shlex.join(
+                ssh_options(known_hosts, None, config.get('ssh_proxy'))),
         )
-        timeout = self.profile.service_timeout(config)
         deadline = config.get('service_deadline', time.monotonic() + timeout)
         with tempfile.TemporaryDirectory(prefix='c2itall-service-') as temporary:
-            variables = Path(temporary) / 'variables.json'
-            variables.write_text(json.dumps(service_vars))
-            variables.chmod(0o600)
-            inventory = str(address) + ','
-            if self.profile.inventory_group:
-                # Shared service tasks classify hosts by their legacy group name.
-                inventory = str(Path(temporary) / 'inventory.ini')
-                Path(inventory).write_text(
-                    '[' + self.profile.inventory_group + ']\n' + str(address) +
-                    ' ansible_host=' + str(address) + '\n')
+            variables_path = Path(temporary) / 'variables.json'
+            variables_path.write_text(json.dumps(variables))
+            variables_path.chmod(0o600)
+            if isinstance(inventory, dict):
+                inventory_path = Path(temporary) / 'inventory.json'
+                inventory_path.write_text(json.dumps(inventory))
+                inventory = str(inventory_path)
+            elif not inventory.endswith(','):
+                inventory_path = Path(temporary) / 'inventory.ini'
+                inventory_path.write_text(inventory)
+                inventory = str(inventory_path)
             result = self.driver.run_command([
-                'ansible-playbook', self.playbook(config),
+                'ansible-playbook', playbook,
                 '-i', inventory, '-u', self.driver.ssh_user,
                 '--private-key', str(private_key),
-                '--extra-vars', '@' + str(variables),
+                '--extra-vars', '@' + str(variables_path),
             ], timeout=timeout, deadline=deadline, check=False)
-        log_path = log_dir / (config['deployment_id'] + '-' + self.profile.log_suffix + '.log')
+        log_path = log_dir / (config['deployment_id'] + '-' + log_suffix + '.log')
         with secure_directory(log_dir) as directory:
             flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
             if hasattr(os, 'O_NOFOLLOW'):
@@ -154,9 +203,25 @@ class SingleVmAdapter(WorkloadAdapter):
             return False
         return True
 
+    def _join_lab(self, config, infrastructure, address):
+        """Record the VM in its lab; a member also joins the overlay before its service play."""
+        placement = infrastructure[self.driver.prefix + 'lab']
+        lab = lab_mod.load(placement['name'])
+        if placement['role'] == 'gateway':
+            lab_mod.register(lab, infrastructure['deployment_id'], address, public_ip=address)
+            return True
+        lab_mod.register(lab, infrastructure['deployment_id'], address)
+        config['ssh_host'] = address
+        if self.profile.address_key:
+            config[self.profile.address_key] = placement['lab_ip']
+        return self._run_spoke_playbook(config, lab, placement)
+
     def deploy(self, config):
         infrastructure = None
         try:
+            lab = self._lab(config)
+            if lab:
+                lab_mod.ensure_network(lab, self.driver, config)
             planned = self._infrastructure_config(config)
             # Recovery may only retire state this call created; a conflict
             # with an existing deployment must leave that deployment alone.
@@ -166,11 +231,13 @@ class SingleVmAdapter(WorkloadAdapter):
             if not self.driver.deploy(infrastructure):
                 return self._recover(config, infrastructure)
             address = self.driver.public_address(infrastructure['deployment_id'], config)
-            parsed = self._public_ipv4(address)
+            parsed = self._ipv4(address, config)
             config.update(self.driver.exported_config(infrastructure))
             config.update({self.profile.address_key: str(parsed),
                            'ssh_user': self.driver.ssh_user,
                            'ssh_key': infrastructure['ssh_private_key_path']})
+            if lab and not self._join_lab(config, infrastructure, str(parsed)):
+                return self._recover(config, infrastructure)
             if self.profile.edge(config):
                 config.update(self.driver.edge_endpoint(infrastructure['deployment_id'], config))
             if not self._run_service_playbook(config):
@@ -205,6 +272,12 @@ class SingleVmAdapter(WorkloadAdapter):
         if success:
             from .cleanup_engine import archive_deployment_logs
             archive_deployment_logs(config['deployment_id'])
+            placement = config.get(self.driver.prefix + 'lab')
+            if placement:
+                try:
+                    lab_mod.unregister(lab_mod.load(placement['name']), config['deployment_id'])
+                except (OSError, ValueError) as exc:
+                    logging.warning('Lab record %s not updated: %s', placement['name'], exc)
         return success
 
 
@@ -359,18 +432,30 @@ class HandoffAdapter(SingleVmAdapter):
     """Provision one VM and hand it to a module that configures the host itself."""
 
     def deploy(self, config):
+        lab = self._lab(config)
+        if lab:
+            lab_mod.ensure_network(lab, self.driver, config)
         infrastructure = self._infrastructure_config(config)
         self.driver.prepare_state(infrastructure)
         self.driver.prepare_ssh_key(infrastructure)
         if not self.driver.deploy(infrastructure):
             return False
-        parsed = self._public_ipv4(
-            self.driver.public_address(infrastructure['deployment_id'], config))
+        parsed = self._ipv4(
+            self.driver.public_address(infrastructure['deployment_id'], config), config)
         config.update(self.driver.exported_config(infrastructure))
         config.update(target_host=str(parsed), ssh_user=self.driver.ssh_user,
                       ssh_key=infrastructure['ssh_private_key_path'],
                       provider_workload=self.profile.workload)
         self._export_ssh_known_hosts(config)
+        if lab:
+            if not self._join_lab(config, infrastructure, str(parsed)):
+                return False
+            config['lab_ip'] = infrastructure[self.driver.prefix + 'lab']['lab_ip']
+            if config.get('ssh_proxy'):
+                # The handed-off module runs its own ansible-playbook; it sets the
+                # common SSH args itself but leaves the extra args to the environment.
+                os.environ['ANSIBLE_SSH_EXTRA_ARGS'] = shlex.join(
+                    ssh_options(config['ssh_known_hosts_path'], None, config['ssh_proxy']))
         return True
 
 

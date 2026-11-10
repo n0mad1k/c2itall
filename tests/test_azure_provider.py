@@ -832,10 +832,10 @@ class RoutingAndTemplateTests(AzureFixture):
     def test_provider_coverage_audit_reports_actual_azure_gaps(self):
         validation = registry.validate_provider_registry(load_references=True)
         self.assertEqual(validation, {
-            'providers': 5, 'workloads': 13, 'controllers': 13,
-            'pairs': 65, 'routes': 0, 'driver_routes': 65, 'staged_routes': 0,
+            'providers': 5, 'workloads': 14, 'controllers': 14,
+            'pairs': 70, 'routes': 0, 'driver_routes': 70, 'staged_routes': 0,
             'counts': {
-                'native': 65, 'gated': 0, 'legacy_fallback': 0, 'staged': 0, 'unsupported': 0,
+                'native': 70, 'gated': 0, 'legacy_fallback': 0, 'staged': 0, 'unsupported': 0,
             },
         })
         rows = registry.provider_support_matrix()
@@ -846,7 +846,7 @@ class RoutingAndTemplateTests(AzureFixture):
              if provider == 'azure' and lookup[(provider, workload)] == 'native'},
             {'infrastructure', 'attack_box', 'phantom', 'chat', 'redirector', 'c2',
              'payload_server', 'webrunner', 'phishing', 'tracker', 'logging_server',
-             'share', 'hashtopolis'})
+             'share', 'hashtopolis', 'lab_gateway'})
         self.assertEqual(
             {workload for provider, workload in lookup
              if provider == 'azure' and
@@ -1079,6 +1079,7 @@ class RoutingAndTemplateTests(AzureFixture):
             'logging_server': 'modules/logging-server/deploy_logging.py',
             'share': 'modules/share-drive/deploy_share.py',
             'hashtopolis': 'modules/hashtopolis/deploy_hashtopolis.py',
+            'lab_gateway': 'modules/gateway/deploy_gateway.py',
         }
         self.assertEqual(
             {workload: spec.entrypoint

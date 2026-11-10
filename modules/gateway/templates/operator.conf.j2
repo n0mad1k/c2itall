@@ -1,0 +1,9 @@
+[Interface]
+Address = {{ lab.hub.operator_ip }}/32
+PrivateKey = {{ hub_keys.stdout_lines[2] }}
+
+[Peer]
+PublicKey = {{ hub_keys.stdout_lines[1] }}
+Endpoint = {{ lab.hub.public_ip }}:{{ lab.hub.port }}
+AllowedIPs = {{ (lab.cidrs + lab.range_cidrs) | join(', ') }}
+PersistentKeepalive = 25

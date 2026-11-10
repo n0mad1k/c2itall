@@ -22,6 +22,7 @@ class FakeDriver(CloudDriver):
     option_keys = ('fakecloud_state_dir',)
     node_quota = 3
     supports_edge = True
+    capabilities = frozenset({'lab_network', 'nested_virtualization'})
 
     def __init__(self):
         self.states = {}
@@ -29,6 +30,7 @@ class FakeDriver(CloudDriver):
         self.calls = []
         self.runs = []
         self.deploy_result = True
+        self.networks = {}
 
     # --- configuration -----------------------------------------------------
     def gather_config(self):
@@ -60,8 +62,11 @@ class FakeDriver(CloudDriver):
             'fakecloud_rules': [dict(rule, source='fakecloud-edge') if rule['source'] == 'edge'
                                 else dict(rule) for rule in request.inbound_rules],
             'fakecloud_edge': request.edge,
+            'fakecloud_lab': request.lab,
+            'ssh_proxy': (request.lab or {}).get('ssh_proxy'),
             'fakecloud_state_dir': config.get('fakecloud_state_dir'),
-            'operator_ip': config.get('operator_ip'),
+            'operator_ip': (request.lab['ssh_source'] if request.lab and request.lab['role'] == 'member'
+                            else config.get('operator_ip')),
             'ssh_key_path': request.ssh_public,
             'ssh_private_key_path': request.ssh_private,
             'ssh_key_generated': request.ssh_generated,
@@ -103,6 +108,17 @@ class FakeDriver(CloudDriver):
     def health(self, state):
         return {'healthy': state['deployment_id'] in self.addresses}
 
+    # --- lab networks ------------------------------------------------------
+    def lab_network(self, lab, config):
+        self.calls.append(('lab_network', lab['name']))
+        self.networks[lab['name']] = {'subnet': 'subnet-' + lab['name']}
+        return dict(self.networks[lab['name']])
+
+    def delete_lab_network(self, lab, network):
+        self.calls.append(('delete_lab_network', lab['name']))
+        self.networks.pop(lab['name'], None)
+        return True
+
     # --- durable state -----------------------------------------------------
     def load_state(self, deployment_id):
         return self.states.get(deployment_id)
@@ -118,10 +134,13 @@ class FakeDriver(CloudDriver):
         return Path(config['fakecloud_state_dir']) / 'logs'
 
     def run_command(self, argv, timeout=60, deadline=None, check=True):
-        variables = None
+        variables = inventory = None
         if '--extra-vars' in argv:
             variables = json.loads(Path(argv[argv.index('--extra-vars') + 1][1:]).read_text())
-        self.runs.append({'argv': [str(arg) for arg in argv], 'variables': variables})
+        if '-i' in argv and str(argv[argv.index('-i') + 1]).endswith('.json'):
+            inventory = json.loads(Path(argv[argv.index('-i') + 1]).read_text())
+        self.runs.append({'argv': [str(arg) for arg in argv], 'variables': variables,
+                          'inventory': inventory})
         return subprocess.CompletedProcess(list(argv), 0, 'ok\n', '')
 
     def check_connection(self):

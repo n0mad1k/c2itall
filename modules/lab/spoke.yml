@@ -1,0 +1,86 @@
+---
+# Join one lab member to the gateway's WireGuard hub. The adapter runs this
+# before the member's own service play with two hosts: the member (reached
+# through the gateway when it has no public address) and the gateway.
+- name: Join the lab overlay
+  hosts: member
+  become: true
+  vars:
+    allowed_ips: "{{ lab.cidrs + lab.range_cidrs + (['0.0.0.0/0'] if spoke.egress_via_hub else []) }}"
+    gateway: "{{ groups['gateway'][0] }}"
+  tasks:
+    - name: Install WireGuard tools
+      ansible.builtin.apt:
+        name: wireguard-tools
+        state: present
+        update_cache: true
+      register: apt_result
+      until: apt_result is success
+      retries: 5
+      delay: 15
+
+    - name: Keep the spoke key on this host only
+      ansible.builtin.shell: umask 077 && wg genkey > /etc/wireguard/spoke.key
+      args:
+        creates: /etc/wireguard/spoke.key
+
+    - name: Read the spoke keys
+      ansible.builtin.shell: wg pubkey < /etc/wireguard/spoke.key && cat /etc/wireguard/spoke.key
+      register: spoke_keys
+      changed_when: false
+      no_log: true
+
+    - name: Read the hub public key
+      ansible.builtin.command: cat /etc/wireguard/hub.pub
+      delegate_to: "{{ gateway }}"
+      register: hub_public
+      changed_when: false
+
+    - name: Register this spoke on the hub
+      ansible.builtin.blockinfile:
+        path: /etc/wireguard/wg0.conf
+        marker: "# {mark} c2itall member {{ spoke.deployment_id }}"
+        block: |
+          [Peer]
+          PublicKey = {{ spoke_keys.stdout_lines[0] }}
+          AllowedIPs = {{ ([spoke.lab_ip + '/32'] + spoke.hub_routes) | join(', ') }}
+      delegate_to: "{{ gateway }}"
+
+    - name: Apply the hub configuration without dropping other peers
+      ansible.builtin.shell: wg syncconf wg0 <(wg-quick strip wg0)
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ gateway }}"
+      changed_when: false
+
+    - name: Write the spoke configuration
+      ansible.builtin.template:
+        src: templates/spoke.conf.j2
+        dest: /etc/wireguard/wg0.conf
+        mode: '0600'
+      register: spoke_conf
+      no_log: true
+
+    - name: Bring the tunnel up
+      ansible.builtin.systemd:
+        name: wg-quick@wg0
+        enabled: true
+        state: "{{ 'restarted' if spoke_conf.changed else 'started' }}"
+
+    - name: Admit lab traffic arriving through the tunnel
+      ansible.builtin.command: ufw allow in on wg0 from {{ item }}
+      loop: "{{ lab.cidrs + lab.range_cidrs }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Wait for the hub handshake
+      ansible.builtin.shell: wg show wg0 latest-handshakes | awk '{print $2}' | grep -vqx 0
+      register: handshake
+      until: handshake.rc == 0
+      retries: 12
+      delay: 5
+      changed_when: false
+
+    - name: Reach the hub through the tunnel
+      ansible.builtin.command: ping -c 2 -W 3 {{ lab.hub.lab_ip }}
+      changed_when: false

@@ -149,6 +149,7 @@ WORKLOAD_SPECS = {
     'logging_server': WorkloadSpec('modules/logging-server/deploy_logging.py', False),
     'share': WorkloadSpec('modules/share-drive/deploy_share.py', False),
     'hashtopolis': WorkloadSpec('modules/hashtopolis/deploy_hashtopolis.py', False),
+    'lab_gateway': WorkloadSpec('modules/gateway/deploy_gateway.py', False),
 }
 CANONICAL_WORKLOADS = tuple(WORKLOAD_SPECS)
 LEGACY_FALLBACK_WORKLOADS = frozenset(

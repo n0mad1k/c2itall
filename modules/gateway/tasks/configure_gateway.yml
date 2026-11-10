@@ -1,0 +1,165 @@
+---
+- name: Wait for package manager locks to clear
+  ansible.builtin.shell: while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 5; done
+  changed_when: false
+
+- name: Install the hub packages
+  ansible.builtin.apt:
+    name: [wireguard-tools, iptables, rsyslog, ufw, logrotate, rclone, curl, openssh-client]
+    state: present
+    update_cache: true
+  register: apt_result
+  until: apt_result is success
+  retries: 5
+  delay: 15
+
+- name: Forward IPv4 between the tunnel and the internet
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-lab-hub.conf
+    content: "net.ipv4.ip_forward = 1\n"
+    mode: '0644'
+  notify: apply sysctl
+
+- name: Generate the hub key once
+  ansible.builtin.shell: umask 077 && wg genkey | tee /etc/wireguard/hub.key | wg pubkey > /etc/wireguard/hub.pub
+  args:
+    creates: /etc/wireguard/hub.key
+
+- name: Generate the operator key once
+  ansible.builtin.shell: umask 077 && wg genkey | tee /etc/wireguard/operator.key | wg pubkey > /etc/wireguard/operator.pub
+  args:
+    creates: /etc/wireguard/operator.key
+
+- name: Read the hub and operator keys
+  ansible.builtin.shell: cat /etc/wireguard/hub.key /etc/wireguard/hub.pub /etc/wireguard/operator.key /etc/wireguard/operator.pub
+  register: hub_keys
+  changed_when: false
+  no_log: true
+
+- name: Write the hub configuration once (members append their peers later)
+  ansible.builtin.template:
+    src: templates/hub.conf.j2
+    dest: /etc/wireguard/wg0.conf
+    mode: '0600'
+    force: false
+  no_log: true
+
+- name: Write the operator configuration
+  ansible.builtin.template:
+    src: templates/operator.conf.j2
+    dest: /root/lab-operator.conf
+    mode: '0600'
+  no_log: true
+
+- name: Fetch the operator configuration to the controller
+  ansible.builtin.fetch:
+    src: /root/lab-operator.conf
+    dest: "{{ lab.secret_dir }}/operator.conf"
+    flat: true
+  no_log: true
+
+- name: Keep the fetched copy private
+  ansible.builtin.file:
+    path: "{{ lab.secret_dir }}/operator.conf"
+    mode: '0600'
+  delegate_to: localhost
+  become: false
+
+- name: Install the hub firewall script
+  ansible.builtin.template:
+    src: templates/lab-hub-fw.sh.j2
+    dest: /usr/local/sbin/lab-hub-fw
+    mode: '0700'
+  notify: apply hub firewall
+
+- name: Install the hub firewall unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/lab-hub-fw.service
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=c2itall lab hub forwarding, NAT and flow logging
+      After=network-online.target wg-quick@wg0.service
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/sbin/lab-hub-fw
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Keep lab flow records in their own file
+  ansible.builtin.copy:
+    dest: /etc/rsyslog.d/10-labflow.conf
+    mode: '0644'
+    content: |
+      :msg, contains, "LABFLOW " /var/log/lab/flows.log
+      & stop
+  notify: restart rsyslog
+
+- name: Create the flow log directory
+  ansible.builtin.file:
+    path: /var/log/lab
+    state: directory
+    mode: '0750'
+    owner: syslog
+    group: adm
+
+- name: Rotate the flow log
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/labflow
+    mode: '0644'
+    content: |
+      /var/log/lab/flows.log {
+          daily
+          rotate 30
+          compress
+          missingok
+          notifempty
+          create 0640 syslog adm
+          postrotate
+              systemctl kill -s HUP rsyslog.service
+          endscript
+      }
+
+- name: Admit the operator, WireGuard peers and tunnel traffic
+  ansible.builtin.command: "{{ item }}"
+  loop:
+    - ufw default deny incoming
+    - ufw default allow outgoing
+    - ufw allow from {{ operator_ip | regex_replace('/32$', '') }} to any port 22 proto tcp
+    - ufw allow {{ lab.hub.port }}/udp
+    - ufw allow in on wg0 from {{ lab.cidr | regex_replace('\\.0/24$', '.0/16') }}
+    - ufw --force enable
+  changed_when: false
+
+- name: Start the hub
+  ansible.builtin.systemd:
+    name: wg-quick@wg0
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Apply the current hub configuration
+  ansible.builtin.shell: wg syncconf wg0 <(wg-quick strip wg0)
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Start the hub firewall
+  ansible.builtin.systemd:
+    name: lab-hub-fw
+    enabled: true
+    state: started
+
+- name: Flush handlers
+  ansible.builtin.meta: flush_handlers
+
+- name: Print the gateway summary
+  ansible.builtin.debug:
+    msg:
+      - "Hub: {{ lab.hub.public_ip }}:{{ lab.hub.port }} ({{ lab.hub.lab_ip }} inside the lab)"
+      - "Operator peer: {{ lab.hub.operator_ip }}; config fetched to {{ lab.secret_dir }}/operator.conf"
+      - "Flow records: /var/log/lab/flows.log (LABFLOW lines, one per new connection)"
