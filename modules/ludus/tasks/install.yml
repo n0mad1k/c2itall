@@ -1,4 +1,202 @@
 ---
-- name: Placeholder until the LUDUS install tasks land
-  ansible.builtin.debug:
-    msg: "LUDUS install tasks pending"
+# LUDUS 2.3.10 (gitlab.com/badsectorlabs/ludus, released 2026-10-23). Release asset
+# and checksum verified directly against the GitLab generic package registry and the
+# published ludus_2.3.10_checksums.txt; `--no-prompt` and the config.yml keys below
+# were verified against the ludus-server Go source (args.go, config.go, checks.go)
+# since docs.ludus.cloud/docs/quick-start/install-ludus does not document the
+# unattended flag. /opt/ludus/install/root-api-key and the "Ludus install completed
+# successfully" / .stage-3-complete marker were verified against
+# ludus-install-status.sh.j2 in the same source tree.
+- name: Check whether LUDUS is already installed
+  ansible.builtin.stat:
+    path: /opt/ludus/install/root-api-key
+  register: ludus_installed
+
+- name: Preflight checks and the unattended LUDUS install
+  when: not ludus_installed.stat.exists
+  vars:
+    ludus_server_url: https://gitlab.com/api/v4/projects/54052321/packages/generic/ludus/2.3.10/ludus-server-2.3.10
+    ludus_server_sha256: 544c3227fbe4c0772821bac68636997a0b18964efe11ab71b3218f6c4b78c7d9
+  block:
+    - name: Require Debian 12 or 13 on x86_64
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.distribution == 'Debian'
+          - ansible_facts.distribution_major_version in ['12', '13']
+          - ansible_facts.architecture == 'x86_64'
+        fail_msg: "LUDUS needs Debian 12 or 13 on x86_64 (found {{ ansible_facts.distribution }} {{ ansible_facts.distribution_major_version }} {{ ansible_facts.architecture }})"
+
+    - name: Require CPU virtualization support (vmx or svm)
+      ansible.builtin.command: grep -Eq 'vmx|svm' /proc/cpuinfo
+      changed_when: false
+
+    - name: Collect installed package facts
+      ansible.builtin.package_facts:
+
+    - name: Refuse a host with Docker installed
+      ansible.builtin.assert:
+        that:
+          - "'docker-ce' not in ansible_facts.packages"
+          - "'docker.io' not in ansible_facts.packages"
+        fail_msg: LUDUS does not support a host that already has Docker installed
+
+    - name: Require enough RAM for this range size
+      ansible.builtin.assert:
+        # ponytail: 1 GB slack for firmware-reserved memory vs. the nominal GB figure.
+        that: ansible_facts.memtotal_mb >= ((ludus_min_ram_gb | int) * 1024) - 1024
+        fail_msg: "{{ lab_range }} needs at least {{ ludus_min_ram_gb }} GB RAM (found {{ (ansible_facts.memtotal_mb / 1024) | round(1) }} GB)"
+
+    - name: Work out free space on /
+      ansible.builtin.set_fact:
+        ludus_root_free_gb: "{{ (ansible_facts.mounts | selectattr('mount', 'equalto', '/') | first).size_available // (1024 * 1024 * 1024) }}"
+
+    - name: Require at least 120 GB free on /
+      ansible.builtin.assert:
+        that: ludus_root_free_gb | int >= 120
+        fail_msg: "Needs at least 120 GB free on / (found {{ ludus_root_free_gb }} GB)"
+
+    - name: Make the install staging directory
+      ansible.builtin.file:
+        path: /opt/ludus-lab-bootstrap
+        state: directory
+        mode: '0700'
+
+    - name: Fetch the pinned ludus-server release binary
+      ansible.builtin.get_url:
+        url: "{{ ludus_server_url }}"
+        dest: /opt/ludus-lab-bootstrap/ludus-server
+        checksum: "sha256:{{ ludus_server_sha256 }}"
+        mode: '0755'
+
+    - name: Generate the config database encryption key
+      ansible.builtin.command: openssl rand -hex 32
+      register: ludus_db_key
+      changed_when: false
+      no_log: true
+
+    - name: Work out which 10.x range numbers are already taken
+      ansible.builtin.set_fact:
+        ludus_reserved_ranges: >-
+          {{ ((lab.blocked_cidrs | default([])) + (lab.range_cidrs | default([])))
+             | select('match', '^10\.') | map('regex_replace', '^10\.(\d+)\..*$', '\1')
+             | map('int') | unique | list }}
+
+    - name: Write the LUDUS server config
+      ansible.builtin.template:
+        src: templates/ludus-config.yml.j2
+        dest: /opt/ludus-lab-bootstrap/config.yml
+        mode: '0600'
+      no_log: true
+
+    - name: Start the unattended install, detached from this SSH session
+      ansible.builtin.shell: setsid nohup ./ludus-server --no-prompt >install.log 2>&1 < /dev/null &
+      args:
+        chdir: /opt/ludus-lab-bootstrap
+        executable: /bin/bash
+
+    - name: Wait for the install reboot and the host to come back
+      ansible.builtin.wait_for_connection:
+        delay: 20
+        timeout: 900
+        sleep: 10
+
+    - name: Wait for the install to finish
+      ansible.builtin.wait_for:
+        path: /opt/ludus/install/.stage-3-complete
+        timeout: 2700
+
+    - name: Read the root API key
+      ansible.builtin.slurp:
+        src: /opt/ludus/install/root-api-key
+      register: ludus_root_key_raw
+      no_log: true
+
+    - name: Generate the lab user's LUDUS password
+      ansible.builtin.command: openssl rand -base64 24
+      register: ludus_lab_user_password
+      changed_when: false
+      no_log: true
+
+    - name: Create the lab API user
+      ansible.builtin.command:
+        argv:
+          - ludus
+          - user
+          - add
+          - --name
+          - Lab
+          - --userid
+          - lab
+          - --email
+          - lab@lab.internal
+          - --password
+          - "{{ ludus_lab_user_password.stdout }}"
+          - --json
+          - --url
+          - https://127.0.0.1:8081
+      environment:
+        LUDUS_API_KEY: "{{ (ludus_root_key_raw.content | b64decode).strip() }}"
+      register: ludus_user_add
+      changed_when: true
+      no_log: true
+
+    - name: Record the lab user's API key
+      ansible.builtin.set_fact:
+        ludus_lab_api_key: "{{ (ludus_user_add.stdout | from_json).apiKey }}"
+      no_log: true
+
+    - name: List the lab user's default range
+      ansible.builtin.command:
+        argv: [ludus, range, list, --json, --url, 'https://127.0.0.1:8080']
+      environment:
+        LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
+      register: ludus_range_list
+      changed_when: false
+      no_log: true
+
+    - name: Work out the range number LUDUS assigned
+      ansible.builtin.set_fact:
+        ludus_range_number: "{{ (ludus_range_list.stdout | from_json)[0].rangeNumber }}"
+
+    - name: Write the lab environment file (the API key never leaves this file)
+      ansible.builtin.copy:
+        dest: /root/.ludus-lab.env
+        mode: '0600'
+        content: |
+          LUDUS_API_KEY={{ ludus_lab_api_key }}
+          LUDUS_URL=https://127.0.0.1:8080
+          LAB_RANGE_NUMBER={{ ludus_range_number }}
+      no_log: true
+
+    - name: Add the Ansible collections the Windows roles need
+      ansible.builtin.command:
+        argv: [ludus, ansible, collection, add, "{{ item }}", --url, 'https://127.0.0.1:8080']
+      environment:
+        LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
+      loop: [microsoft.ad, community.windows]
+      changed_when: true
+      no_log: true
+
+    - name: Copy this lab's roles to the host
+      ansible.builtin.copy:
+        src: roles/
+        dest: /opt/ludus-lab/roles/
+        mode: '0755'
+
+    - name: Copy the Falcon installer into its role when one was given
+      ansible.builtin.copy:
+        src: "{{ falcon_installer_path }}"
+        dest: /opt/ludus-lab/roles/lab_falcon/files/WindowsSensor.exe
+        mode: '0644'
+      when: falcon_installer_path is defined and falcon_installer_path
+
+    # ponytail: roles register once, at first install; a role edit needs a manual
+    # `ludus ansible role add -d ... -f` on the host until this gets an update path.
+    - name: Register each role with LUDUS
+      ansible.builtin.command:
+        argv: [ludus, ansible, role, add, -d, "/opt/ludus-lab/roles/{{ item }}", --url, 'https://127.0.0.1:8080']
+      environment:
+        LUDUS_API_KEY: "{{ ludus_lab_api_key }}"
+      loop: [lab_ad_seed, lab_host, lab_falcon, lab_implant, lab_verify]
+      changed_when: true
+      no_log: true

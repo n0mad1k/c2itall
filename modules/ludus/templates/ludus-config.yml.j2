@@ -1,0 +1,24 @@
+---
+proxmox_node: {{ ansible_hostname }}
+proxmox_interface: {{ ansible_default_ipv4.interface }}
+proxmox_local_ip: {{ ludus_host_ip }}
+proxmox_public_ip: {{ ludus_host_ip }}
+proxmox_gateway: {{ ansible_default_ipv4.gateway }}
+proxmox_netmask: {{ ansible_default_ipv4.netmask }}
+proxmox_vm_storage_pool: local
+proxmox_vm_storage_format: qcow2
+proxmox_iso_storage_pool: local
+ludus_nat_interface: vmbr1000
+prevent_user_ansible_add: false
+sso_require_existing_user: true
+create_default_range: true
+license_key: community
+expose_admin_port: false
+port: 8080
+admin_port: 8081
+reserved_range_numbers: {{ ludus_reserved_ranges | to_json }}
+data_directory: /opt/ludus/db
+database_encryption_key: {{ ludus_db_key.stdout }}
+wireguard_port: 51820
+max_log_history: 100
+cluster_mode: false
