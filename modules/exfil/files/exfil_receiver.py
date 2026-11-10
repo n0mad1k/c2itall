@@ -171,7 +171,8 @@ def _record_audit(event):
     bucket, obj = api.get('bucket') or '', api.get('object') or ''
     if not bucket or not obj:
         return
-    remote = event.get('remoteHost') or 'unknown'
+    # MinIO writes `remotehost`, sometimes with the source port appended.
+    remote = str(event.get('remotehost') or event.get('remoteHost') or 'unknown').rsplit(':', 1)[0]
     audit_map = _load_json(AUDIT_MAP, {})
     audit_map[bucket + '/' + obj] = remote
     _save_json(AUDIT_MAP, audit_map)
