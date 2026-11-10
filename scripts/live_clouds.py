@@ -72,6 +72,14 @@ class AwsCloud:
         self.region = region
         self.ec2 = boto3.client('ec2', region_name=region)
         self.cloudfront = boto3.client('cloudfront', region_name='us-east-1')
+        self._s3 = None
+
+    @property
+    def s3(self):
+        if self._s3 is None:
+            import boto3
+            self._s3 = boto3.client('s3', region_name=self.region)
+        return self._s3
 
     @staticmethod
     def _ids(identity):
@@ -104,10 +112,19 @@ class AwsCloud:
                               'status': distribution['Status'], 'name': tags.get(self.TAG, '')})
         return sorted(items, key=lambda item: item['id'])
 
+    def _lab_buckets(self):
+        return [bucket['Name'] for bucket in self.s3.list_buckets()['Buckets']
+                if bucket['Name'].startswith('c2itall-lab-')]
+
+    @staticmethod
+    def _non_main_route_tables(route_tables):
+        return [table for table in route_tables
+                if not any(assoc.get('Main') for assoc in table.get('Associations', []))]
+
     def inventory(self, identity):
         ids = self._ids(identity)
         filters = self._filters(ids)
-        return {
+        result = {
             'instances': self._instances(filters),
             'security_groups': sorted(
                 [{'id': group['GroupId'], 'name': group['GroupName']}
@@ -119,13 +136,34 @@ class AwsCloud:
             'vpcs': sorted(item['VpcId'] for item in self.ec2.describe_vpcs(Filters=filters)['Vpcs']),
             'edges': [item for item in self._distributions() if item['name'] in ids],
         }
+        lab_names = [item[len('lab-'):] for item in ids if item.startswith('lab-')]
+        if lab_names:
+            result.update(
+                nat_gateways=sorted(item['NatGatewayId'] for item in
+                    self.ec2.describe_nat_gateways(Filters=filters)['NatGateways'] if item['State'] != 'deleted'),
+                addresses=sorted(item['AllocationId']
+                                 for item in self.ec2.describe_addresses(Filters=filters)['Addresses']),
+                flow_logs=sorted(item['FlowLogId']
+                                 for item in self.ec2.describe_flow_logs(Filters=filters)['FlowLogs']),
+                route_tables=sorted(item['RouteTableId'] for item in self._non_main_route_tables(
+                    self.ec2.describe_route_tables(Filters=filters)['RouteTables'])),
+                buckets=sorted(bucket for bucket in self._lab_buckets()
+                               if any(bucket.startswith('c2itall-lab-' + name + '-') for name in lab_names)),
+            )
+        return result
 
     def totals(self):
         groups = sum(1 for group in self.ec2.describe_security_groups()['SecurityGroups']
                      if group['GroupName'] != 'default')
         vpcs = sum(1 for vpc in self.ec2.describe_vpcs()['Vpcs'] if not vpc.get('IsDefault'))
+        nat_gateways = sum(1 for nat in self.ec2.describe_nat_gateways()['NatGateways']
+                           if nat['State'] != 'deleted')
+        route_tables = len(self._non_main_route_tables(self.ec2.describe_route_tables()['RouteTables']))
         return {'region': self.region, 'instances': len(self._instances([])), 'security_groups': groups,
-                'vpcs': vpcs, 'distributions': len(self._distributions())}
+                'vpcs': vpcs, 'distributions': len(self._distributions()), 'nat_gateways': nat_gateways,
+                'addresses': len(self.ec2.describe_addresses()['Addresses']),
+                'flow_logs': len(self.ec2.describe_flow_logs()['FlowLogs']),
+                'route_tables': route_tables, 'buckets': len(self._lab_buckets())}
 
     def address(self, identity, name):
         wanted = (identity.get('components') or {}).get(name, identity['deployment_id'])
