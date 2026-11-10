@@ -23,8 +23,11 @@
     msg: "LUDUS install did not reach stage 3 within ninety minutes; see /opt/ludus-lab-bootstrap/install.log and ludus-install-status on the host"
   when: not (ludus_stage3.stat.exists | default(false)) and ludus_wait_rounds | int >= 90
 
+# A counter passed as include vars would outrank set_fact and never move.
+- name: Count the round
+  ansible.builtin.set_fact:
+    ludus_wait_rounds: "{{ ludus_wait_rounds | int + 1 }}"
+
 - name: Keep waiting
   ansible.builtin.include_tasks: wait_install.yml
-  vars:
-    ludus_wait_rounds: "{{ ludus_wait_rounds | int + 1 }}"
   when: not (ludus_stage3.stat.exists | default(false))
