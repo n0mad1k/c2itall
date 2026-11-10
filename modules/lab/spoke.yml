@@ -54,6 +54,13 @@
       delegate_to: "{{ gateway }}"
       changed_when: false
 
+    # The main table keeps the provider's default even once wg-quick owns the
+    # default route (its 0.0.0.0/0 lives in table 51820), so a re-join sees the same answer.
+    - name: Read the provider's default route
+      ansible.builtin.command: ip -4 route show default table main
+      register: provider_route
+      changed_when: false
+
     - name: Write the spoke configuration
       ansible.builtin.template:
         src: templates/spoke.conf.j2

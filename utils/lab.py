@@ -11,6 +11,7 @@ import ipaddress
 import json
 import os
 import re
+import shlex
 import shutil
 import time
 from pathlib import Path
@@ -265,7 +266,8 @@ def member_command(name, deployment_id, argv, timeout=120):
     lab = load(name)
     adapter, config = member_adapter(lab, deployment_id)
     known_hosts = adapter._export_ssh_known_hosts(config)
-    command = adapter.driver.ssh_argv(config, config['ssh_host'], known_hosts) + list(argv)
+    # ssh joins its remote arguments with spaces; quote once so the remote shell sees argv as given.
+    command = adapter.driver.ssh_argv(config, config['ssh_host'], known_hosts) + [shlex.join(argv)]
     return adapter.driver.run_command(command, timeout=timeout, check=False)
 
 

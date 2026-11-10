@@ -208,8 +208,8 @@
     src: templates/http.env.j2
     dest: /etc/exfil/http.env
     owner: root
-    group: root
-    mode: '0600'
+    group: exfil
+    mode: '0640'
   no_log: true
 
 - name: Install the HTTP receiver service unit

@@ -115,6 +115,11 @@ class LabTests(unittest.TestCase):
             'unit', 'm1', 'modules/lab/spoke.yml', {'extra': 1}, 'unit-extra', 60))
         self.assertEqual(self.driver.runs[-1]['variables']['extra'], 1)
         self.assertEqual(self.driver.runs[-1]['variables']['lab']['member']['lab_ip'], '198.18.0.10')
+        with mock.patch.object(self.driver, 'run_command') as run_command:
+            lab_mod.member_command('unit', 'm1', ['sh', '-c', 'echo "$1" | wc -c', '_', 'a b'])
+        remote = run_command.call_args[0][0]
+        self.assertIn('-W %h:%p operator@8.8.8.10', ' '.join(remote))
+        self.assertEqual(remote[-2:], ['operator@8.8.8.11', "sh -c 'echo \"$1\" | wc -c' _ 'a b'"])
 
         self.assertTrue(lab_mod.teardown('unit'))
         order = [call[0] + ':' + call[1] for call in self.driver.calls

@@ -32,6 +32,19 @@ def load(relative):
     return module
 
 
+class SpokeRenderTests(unittest.TestCase):
+    def test_hub_route_comes_from_the_main_table_default(self):
+        context = dict(spoke={'lab_ip': '198.18.0.10', 'egress_via_hub': True, 'hub_routes': []},
+                       spoke_keys={'stdout_lines': ['PUB', 'PRIV']}, hub_public={'stdout': 'HUB'},
+                       lab={'hub': {'public_ip': '203.0.113.5', 'port': 51820}}, allowed_ips=['198.18.0.0/16', '0.0.0.0/0'],
+                       provider_route={'stdout_lines': ['default via 203.0.113.1 dev eth0 proto dhcp metric 100']})
+        conf = render('modules/lab/templates/spoke.conf.j2', **context)
+        self.assertIn('PostUp = ip route replace 203.0.113.5/32 via 203.0.113.1 dev eth0\n', conf)
+        self.assertIn('Endpoint = 203.0.113.5:51820', conf)
+        context['spoke']['egress_via_hub'] = False
+        self.assertNotIn('PostUp', render('modules/lab/templates/spoke.conf.j2', **context))
+
+
 class C2LabRenderTests(unittest.TestCase):
     LAB = {'member': {'lab_ip': '198.18.0.11'}, 'cidrs': ['198.18.0.0/16'], 'range_cidrs': []}
 
