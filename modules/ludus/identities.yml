@@ -1,0 +1,105 @@
+# Lab-only identities seeded by roles/lab_ad_seed. No passwords here; those are
+# generated once per lab by deploy_ludus.py and persisted in identities.json.
+ous:
+  - Finance
+  - Payroll
+  - Executives
+  - IT Operations
+  - VMware Administrators
+  - Service Accounts
+
+groups:
+  Finance: {ou: Finance}
+  Payroll: {ou: Payroll}
+  Executives: {ou: Executives}
+  IT Operations: {ou: IT Operations}
+  VMware Administrators: {ou: VMware Administrators}
+
+users:
+  - sam: jmartin
+    name: Jordan Martin
+    ou: Finance
+    groups: [Finance]
+  - sam: lchen
+    name: Lee Chen
+    ou: Payroll
+    groups: [Payroll]
+  - sam: rpatel
+    name: Riley Patel
+    ou: Executives
+    groups: [Executives]
+  - sam: helpdesk1
+    name: Help Desk Tech
+    ou: IT Operations
+    groups: [IT Operations]
+  - sam: srvadmin
+    name: Server Admin
+    ou: IT Operations
+    groups: [IT Operations]
+  - sam: backupop
+    name: Backup Operator
+    ou: IT Operations
+    groups: [IT Operations, Backup Operators]
+  - sam: vmwareadmin
+    name: VMware Admin
+    ou: VMware Administrators
+    groups: [VMware Administrators]
+  - sam: svc-web
+    name: Web Service Account
+    ou: Service Accounts
+    groups: []
+  - sam: svc-sql
+    name: SQL Service Account
+    ou: Service Accounts
+    groups: []
+    spn: MSSQLSvc/app01.lab.internal:1433
+  - sam: jsmith.former
+    name: Jamie Smith (former)
+    ou: IT Operations
+    groups: []
+    disabled: true
+  - sam: testcred
+    name: Test Credential
+    ou: IT Operations
+    groups: []
+
+# The built-in LUDUS domain admin (defaults.ad_domain_admin) added to Protected
+# Users; 'domain_admin' is a sentinel resolved by lab_ad_seed, not a sam.
+protect:
+  - domain_admin
+
+shares:
+  FS01:
+    - {name: Finance, path: 'C:\Shares\Finance', group: Finance, access: change}
+    - {name: Payroll, path: 'C:\Shares\Payroll', group: Payroll, access: change}
+    - {name: Executives, path: 'C:\Shares\Executives', group: Executives, access: change}
+    - {name: IT, path: 'C:\Shares\IT', group: IT Operations, access: change}
+    - {name: Departments, path: 'C:\Shares\Departments', group: null, access: read}
+    - {name: RestrictedFinancial, path: 'C:\Shares\RestrictedFinancial', group: Finance, access: read}
+  BK01:
+    - {name: Backups, path: 'D:\Backups', group: IT Operations, access: change}
+    - {name: LargeDataset, path: 'D:\Datasets', group: null, access: read}
+
+# Selectable TTP cards; only the keys the operator picks are applied.
+weaknesses:
+  exposed_credential_in_share:
+    role: lab_host
+    user: testcred
+    description: A plaintext credential file for testcred sits in a readable FS01 share.
+  kerberoastable_service_account:
+    role: lab_ad_seed
+    user: svc-sql
+    description: svc-sql carries an SPN with no managed password rotation.
+  local_admin_on_ws02:
+    role: lab_host
+    description: The standard domain user is a local administrator on WS02.
+  disabled_user_known_password:
+    role: lab_ad_seed
+    user: jsmith.former
+    description: A disabled former employee account whose password is still known.
+  unconstrained_delegation_app01:
+    role: lab_ad_seed
+    description: APP01's computer account is trusted for unconstrained delegation.
+  anonymous_share_access_fs01:
+    role: lab_host
+    description: One FS01 share allows anonymous/Everyone read access.
