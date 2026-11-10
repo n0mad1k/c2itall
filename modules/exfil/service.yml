@@ -16,7 +16,12 @@
         that:
           - lab is defined
           - lab.member is not none
-        fail_msg: "The exfil receiver play needs its lab membership"
+          - exfil_minio_user | default('') | length > 0
+          - exfil_minio_password | default('') | length > 0
+          - exfil_http_user | default('') | length > 0
+          - exfil_http_password | default('') | length > 0
+          - exfil_sftp_password | default('') | length > 0
+        fail_msg: "The exfil receiver play needs its lab membership and generated credentials"
 
     - name: Configure the drop points
       ansible.builtin.include_tasks: tasks/configure_exfil.yml
