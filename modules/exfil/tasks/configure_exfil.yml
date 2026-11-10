@@ -192,6 +192,7 @@
     src: files/exfil_receiver.py
     dest: /usr/local/bin/exfil-receiver
     mode: '0755'
+  register: exfil_script
 
 - name: Generate a self-signed certificate once
   ansible.builtin.command:
@@ -221,6 +222,7 @@
     owner: root
     group: exfil
     mode: '0640'
+  register: http_env
   no_log: true
 
 - name: Install the HTTP receiver service unit
@@ -277,7 +279,7 @@
   ansible.builtin.systemd:
     name: exfil-http
     enabled: true
-    state: started
+    state: "{{ 'restarted' if exfil_script.changed or http_env.changed else 'started' }}"
     daemon_reload: true
 
 - name: Start the scan timer

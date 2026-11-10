@@ -153,6 +153,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 remaining -= len(chunk)
         _append_ledger('http', self.client_address[0], name, size, digest.hexdigest())
         self.send_response(201)
+        # Without a length, strict clients (curl 8.14+) wait for a TLS close_notify
+        # that the plain socket close never sends and report the upload as failed.
+        self.send_header('Content-Length', '0')
         self.end_headers()
 
     def _audit(self):
@@ -162,6 +165,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         length = int(self.headers.get('Content-Length') or 0)
         body = self.rfile.read(length) if length else b''
         self.send_response(200)
+        self.send_header('Content-Length', '0')
         self.end_headers()
         try:
             event = json.loads(body) if body else {}
