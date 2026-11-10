@@ -1,4 +1,301 @@
 ---
-- name: Placeholder until the receiver tasks land
+- name: Wait for package manager locks to clear
+  ansible.builtin.shell: while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 5; done
+  changed_when: false
+
+- name: Install the receiver packages
+  ansible.builtin.apt:
+    name: [openssh-server, python3, ufw, ca-certificates, curl]
+    state: present
+    update_cache: true
+  register: apt_result
+  until: apt_result is success
+  retries: 5
+  delay: 15
+
+- name: Create the exfil service user
+  ansible.builtin.user:
+    name: exfil
+    system: true
+    shell: /usr/sbin/nologin
+    home: /srv/exfil
+    create_home: false
+
+- name: Create the SFTP drop user
+  ansible.builtin.user:
+    name: drop
+    password: "{{ exfil_sftp_password | password_hash('sha512') }}"
+    shell: /usr/sbin/nologin
+    home: /srv/exfil/sftp
+    create_home: false
+  no_log: true
+
+# sshd's ChrootDirectory requires every component of the path, including this
+# one and its parent, to be root-owned and not group/other writable.
+- name: Create the chroot's root-owned directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - /srv/exfil
+    - /srv/exfil/sftp
+
+- name: Create the service-owned directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.owner }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /srv/exfil/minio, owner: exfil, mode: '0750' }
+    - { path: /srv/exfil/http, owner: exfil, mode: '0750' }
+    - { path: /srv/exfil/sftp/upload, owner: drop, mode: '0750' }
+    - { path: /var/log/exfil, owner: exfil, mode: '0750' }
+
+- name: Create the root-only state and secret directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  loop:
+    - /var/lib/exfil
+    - /var/lib/exfil/manifests
+    - /etc/exfil
+
+# dl.min.io stopped serving community binaries (410 Gone); RELEASE.2025-09-07
+# is the last MinIO server release GitHub still has binary assets for.
+- name: Download the pinned MinIO server binary
+  ansible.builtin.get_url:
+    url: https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/minio.linux-amd64.RELEASE.2025-09-07T16-13-09Z
+    dest: /usr/local/bin/minio
+    checksum: sha256:7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f
+    mode: '0755'
+
+- name: Download the pinned mc client binary
+  ansible.builtin.get_url:
+    url: https://github.com/minio/mc/releases/download/RELEASE.2025-08-13T08-35-41Z/mc.linux-amd64.RELEASE.2025-08-13T08-35-41Z
+    dest: /usr/local/bin/mc
+    checksum: sha256:01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891
+    mode: '0755'
+
+- name: Write the MinIO environment file
+  ansible.builtin.template:
+    src: templates/minio.env.j2
+    dest: /etc/exfil/minio.env
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+
+- name: Install the MinIO service unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/minio.service
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=c2itall lab exfil receiver: MinIO S3 endpoint
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      User=exfil
+      EnvironmentFile=/etc/exfil/minio.env
+      ExecStart=/usr/local/bin/minio server /srv/exfil/minio --address :9000
+      Restart=on-failure
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Start MinIO
+  ansible.builtin.systemd:
+    name: minio
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Wait for MinIO to accept connections
+  ansible.builtin.wait_for:
+    port: 9000
+    host: 127.0.0.1
+    timeout: 30
+
+- name: Configure the mc alias for the local MinIO
+  ansible.builtin.shell: >-
+    mc alias set local http://127.0.0.1:9000
+    "{{ exfil_minio_user }}" "{{ exfil_minio_password }}"
+  changed_when: false
+  no_log: true
+
+- name: Create the drop bucket
+  ansible.builtin.command: mc mb --ignore-existing local/drop
+  changed_when: false
+
+- name: Install the SFTP sshd configuration
+  ansible.builtin.template:
+    src: templates/sshd_exfil.conf.j2
+    dest: /etc/ssh/sshd_exfil_config
+    mode: '0600'
+
+- name: Install the SFTP sshd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/sshd-exfil.service
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=c2itall lab exfil receiver: SFTP-only sshd
+      After=network.target
+
+      [Service]
+      Type=forking
+      ExecStart=/usr/sbin/sshd -f /etc/ssh/sshd_exfil_config
+      PIDFile=/run/sshd-exfil.pid
+      ExecReload=/bin/kill -HUP $MAINPID
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Start the SFTP sshd
+  ansible.builtin.systemd:
+    name: sshd-exfil
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Install the exfil receiver script
+  ansible.builtin.copy:
+    src: files/exfil_receiver.py
+    dest: /usr/local/bin/exfil-receiver
+    mode: '0755'
+
+- name: Generate a self-signed certificate once
+  ansible.builtin.command:
+    cmd: >-
+      openssl req -x509 -newkey rsa:2048 -nodes -days 3650
+      -subj /CN=exfil.lab -keyout /etc/exfil/key.pem -out /etc/exfil/cert.pem
+    creates: /etc/exfil/cert.pem
+
+- name: Restrict the certificate key to the exfil group
+  ansible.builtin.file:
+    path: /etc/exfil/key.pem
+    owner: root
+    group: exfil
+    mode: '0640'
+
+- name: Keep the certificate world-readable
+  ansible.builtin.file:
+    path: /etc/exfil/cert.pem
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Write the HTTP environment file
+  ansible.builtin.template:
+    src: templates/http.env.j2
+    dest: /etc/exfil/http.env
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+
+- name: Install the HTTP receiver service unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/exfil-http.service
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=c2itall lab exfil receiver: HTTPS upload and MinIO audit intake
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      User=exfil
+      Group=exfil
+      Environment=EXFIL_ROOT=/
+      EnvironmentFile=/etc/exfil/http.env
+      ExecStart=/usr/local/bin/exfil-receiver serve
+      Restart=on-failure
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Install the scan service unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/exfil-scan.service
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=c2itall lab exfil receiver: ledger scan
+
+      [Service]
+      Type=oneshot
+      Environment=EXFIL_ROOT=/
+      ExecStart=/usr/local/bin/exfil-receiver scan
+
+- name: Install the scan timer unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/exfil-scan.timer
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=c2itall lab exfil receiver: run the scan every 30 seconds
+
+      [Timer]
+      OnBootSec=30
+      OnUnitActiveSec=30
+
+      [Install]
+      WantedBy=timers.target
+
+- name: Start the HTTP receiver
+  ansible.builtin.systemd:
+    name: exfil-http
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Start the scan timer
+  ansible.builtin.systemd:
+    name: exfil-scan.timer
+    enabled: true
+    state: started
+
+- name: Reset the firewall defaults
+  ansible.builtin.command: "{{ item }}"
+  loop:
+    - ufw default deny incoming
+    - ufw default allow outgoing
+  changed_when: false
+
+- name: Admit SSH from the operator
+  ansible.builtin.command: >-
+    ufw allow from {{ operator_ip | regex_replace('/32$', '') }} to any port 22 proto tcp
+  changed_when: false
+
+- name: Admit SSH from the lab CIDRs
+  ansible.builtin.command: ufw allow from {{ item }} to any port 22 proto tcp
+  loop: "{{ lab.cidrs }}"
+  changed_when: false
+
+- name: Admit the receiver ports from the lab and range CIDRs
+  ansible.builtin.command: ufw allow from {{ item.0 }} to any port {{ item.1 }} proto tcp
+  loop: "{{ (lab.cidrs + lab.range_cidrs) | product([9000, 8443, 2222]) | list }}"
+  changed_when: false
+
+- name: Enable the firewall
+  ansible.builtin.command: ufw --force enable
+  changed_when: false
+
+- name: Print the exfil receiver summary
   ansible.builtin.debug:
-    msg: "exfil receiver tasks pending"
+    msg:
+      - "S3 (MinIO): {{ lab.member.lab_ip }}:9000"
+      - "HTTPS upload: https://{{ lab.member.lab_ip }}:8443/upload/<name>"
+      - "SFTP: sftp -P 2222 drop@{{ lab.member.lab_ip }}"

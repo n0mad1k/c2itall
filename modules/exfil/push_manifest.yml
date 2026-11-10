@@ -1,0 +1,19 @@
+---
+# Push one manifest JSON to the receiver's verify queue so `exfil-receiver
+# verify` can check it against the ledger.
+- name: Push a manifest to the exfil receiver
+  hosts: all
+  become: true
+  tasks:
+    - name: Create the manifest queue
+      ansible.builtin.file:
+        path: /var/lib/exfil/manifests
+        state: directory
+        owner: root
+        mode: '0700'
+
+    - name: Copy the manifest
+      ansible.builtin.copy:
+        src: "{{ manifest_src }}"
+        dest: "/var/lib/exfil/manifests/{{ manifest_src | basename }}"
+        mode: '0600'

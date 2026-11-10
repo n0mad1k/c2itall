@@ -1,0 +1,16 @@
+Port 2222
+PidFile /run/sshd-exfil.pid
+LogLevel INFO
+HostKey /etc/ssh/ssh_host_rsa_key
+HostKey /etc/ssh/ssh_host_ed25519_key
+PasswordAuthentication yes
+PubkeyAuthentication no
+UsePAM yes
+AllowUsers drop
+AllowTcpForwarding no
+X11Forwarding no
+AllowAgentForwarding no
+
+Match User drop
+    ChrootDirectory /srv/exfil/sftp
+    ForceCommand internal-sftp -l INFO
