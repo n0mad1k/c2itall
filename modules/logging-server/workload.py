@@ -29,7 +29,7 @@ class LoggingServerProfile(WorkloadProfile):
         if not isinstance(sources, list) or len(sources) > 14:
             raise ValueError('logging_ingest_sources must list at most 14 hosts')
         for source in sources:
-            host_source(source, 'logging_ingest_sources')
+            host_source(source, 'logging_ingest_sources', private_ok=bool(config.get('lab')))
         if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/-]{0,63}', str(config.get('redelk_ref', 'master'))):
             raise ValueError('redelk_ref must be a git ref')
         name = str(config.get('logging_cert_name', 'logs.internal'))
@@ -41,7 +41,8 @@ class LoggingServerProfile(WorkloadProfile):
                   'source': host_source(config.get('operator_ip'))}]
         for index, source in enumerate(config.get('logging_ingest_sources') or [], 1):
             rules.append({'name': 'beats-' + str(index), 'protocol': 'Tcp', 'port': 5044,
-                          'source': host_source(source, 'logging_ingest_sources')})
+                          'source': host_source(source, 'logging_ingest_sources',
+                                                private_ok=bool(config.get('lab')))})
         return rules
 
     def service_variables(self, config, variables):

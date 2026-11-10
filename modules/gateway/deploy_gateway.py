@@ -11,7 +11,7 @@ from utils.common import (
     COLORS, clear_screen, confirm_action, generate_deployment_id, get_public_ip,
     print_banner, wait_for_input,
 )
-from utils.provider_utils import gather_provider_config, prepare_module_ssh_key, select_provider
+from utils.provider_utils import gather_provider_config, select_provider
 
 
 def gather_gateway_parameters(lab_name):
@@ -32,10 +32,7 @@ def gather_gateway_parameters(lab_name):
         suggested = get_public_ip()
         config['operator_ip'] = input(
             f"Your IPv4 for SSH and WireGuard [detected: {suggested}]: ").strip() or suggested
-    ready, _ = prepare_module_ssh_key(config, config['deployment_id'])
-    if not ready:
-        print(f"{COLORS['RED']}Failed to prepare the SSH key{COLORS['RESET']}")
-        return None
+    config['ssh_key_path'] = lab_mod.load(lab_name)['ssh_key_path']
     return config
 
 

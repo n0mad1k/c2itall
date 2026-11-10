@@ -18,7 +18,8 @@ import requests
 from .driver_base import DISABLE_PASSWORD_LOGIN, STATE_ROOT, StatefulDriver, wait_until
 
 API = 'https://api.linode.com/v4'
-IMAGES = {'ubuntu': 'linode/ubuntu24.04', 'ubuntu2204': 'linode/ubuntu22.04', 'kali': 'linode/kali'}
+IMAGES = {'ubuntu': 'linode/ubuntu24.04', 'ubuntu2204': 'linode/ubuntu22.04', 'kali': 'linode/kali',
+          'debian12': 'linode/debian12'}
 ATTACK_BOX_SIZES = {'small': 'g6-standard-2', 'medium': 'g6-standard-4',
                     'large': 'g6-standard-8', 'xlarge': 'g6-standard-16'}
 REGION = re.compile(r'[a-z]{2}-[a-z0-9-]{2,20}')

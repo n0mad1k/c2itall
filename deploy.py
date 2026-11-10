@@ -45,8 +45,9 @@ def main_menu():
         print(f"9) Deploy Hashtopolis {COLORS['GREEN']}(cracking coordinator){COLORS['RESET']}")
         print(f"10) Deploy Chat Server {COLORS['GREEN']}(Matrix + Element + Tailscale){COLORS['RESET']}")
         print(f"11) Deploy Privacy Server {COLORS['GREEN']}(Phantom — VPN, DNS, Matrix, etc.){COLORS['RESET']}")
-        print(f"12) Tools & Utilities")
-        print(f"13) Cleanup & Teardown")
+        print(f"12) Lab {COLORS['GREEN']}(private range: gateway, LUDUS AD, exfil receiver, lab-mode red infra){COLORS['RESET']}")
+        print(f"13) Tools & Utilities")
+        print(f"14) Cleanup & Teardown")
         print(f"\n99) Exit")
         
         choice = input(f"\nSelect an option: ")
@@ -74,8 +75,10 @@ def main_menu():
         elif choice == "11":
             deploy_phantom()
         elif choice == "12":
-            tools_menu()
+            launch_module('lab', 'deploy_lab.py', 'lab_menu')
         elif choice == "13":
+            tools_menu()
+        elif choice == "14":
             cleanup_menu()
         elif choice == "99":
             print(f"\n{COLORS['GREEN']}Exiting C2ingRed. Goodbye!{COLORS['RESET']}")

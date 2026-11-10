@@ -18,9 +18,9 @@
         that:
           - provider_workload == 'c2'
           - c2_framework_tasks is defined
-          - domain | length > 0
+          - lab is defined or domain | length > 0
           - ansible_facts['distribution'] is search('Kali')
-        fail_msg: C2 requires a domain, a native framework and a Kali image
+        fail_msg: C2 requires a domain (or a lab), a native framework and a Kali image
 
     - name: Wait for cloud-init to finish
       ansible.builtin.command: cloud-init status --wait
@@ -56,6 +56,7 @@
 
     - name: Configure the mail stack
       ansible.builtin.include_tasks: "{{ playbook_dir }}/../../common/tasks/configure_mail.yml"
+      when: lab is not defined
 
     - name: Print deployment summary
       ansible.builtin.debug:

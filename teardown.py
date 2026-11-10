@@ -34,6 +34,7 @@ def main():
     parser.add_argument('--select', action='store_true', help='Interactively select deployment to teardown')
     parser.add_argument('--debug', action='store_true', help='Enable debug output')
     parser.add_argument('--force', action='store_true', help='Skip confirmation prompts')
+    parser.add_argument('--lab', help='Lab name: tear down its members, gateway and shared networks')
     
     args = parser.parse_args()
     
@@ -43,6 +44,8 @@ def main():
     print(f"{COLORS['BLUE']}C2itall Standalone Teardown Tool{COLORS['RESET']}")
     print(f"{COLORS['BLUE']}================================{COLORS['RESET']}")
     
+    if args.lab:
+        return 0 if teardown_lab(args.lab, force=args.force) else 1
     if args.list:
         return 0 if list_deployments() else 1
     elif args.all:
@@ -53,6 +56,22 @@ def main():
         return 0 if select_and_teardown_deployment() else 1
     else:
         interactive_mode()
+
+def teardown_lab(name, force=False):
+    """Members in reverse order, then the gateway, then every shared network."""
+    from utils import lab as lab_mod
+    lab = lab_mod.load(name)
+    print(f"Lab {name}: {len(lab['members'])} member(s), gateway "
+          f"{'present' if lab.get('gateway') else 'absent'}, networks {', '.join(lab['networks']) or 'none'}")
+    if not force and input(f"{COLORS['YELLOW']}Type 'DESTROY' to confirm: {COLORS['RESET']}") != 'DESTROY':
+        print(f"{COLORS['GREEN']}Operation cancelled{COLORS['RESET']}")
+        return False
+    if lab_mod.teardown(name):
+        print(f"{COLORS['GREEN']}Lab {name} torn down{COLORS['RESET']}")
+        return True
+    print(f"{COLORS['RED']}Lab {name} teardown stopped at the first failure; run it again to continue{COLORS['RESET']}")
+    return False
+
 
 def recoverable_from_log(config, provider):
     """Only legacy and bridged routes recover from a log; native ones need state."""

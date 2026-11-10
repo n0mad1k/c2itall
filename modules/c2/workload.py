@@ -42,6 +42,7 @@ class C2Profile(WorkloadProfile):
         'havoc_sleep', 'havoc_jitter', 'havoc_sleep_mask_technique',
         'setup_integrated_tracker', 'tracker_domain', 'tracker_port',
         'c2_only', 'redirector_only', 'deploy_redirector', 'deploy_tracker',
+        'havoc_operators',
     )
 
     def redirector(self, config):
@@ -56,8 +57,8 @@ class C2Profile(WorkloadProfile):
         return str(parsed)
 
     def validate(self, config):
-        if not config.get('domain'):
-            raise ValueError('C2 requires a domain')
+        if not config.get('domain') and not config.get('lab'):
+            raise ValueError('C2 requires a domain outside a lab')
         if framework(config) not in FRAMEWORKS:
             raise ValueError('C2 supports only these frameworks: ' + ', '.join(sorted(FRAMEWORKS)))
         self.redirector(config)

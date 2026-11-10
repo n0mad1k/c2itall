@@ -26,7 +26,7 @@ Listeners {
     Http {
         Name = "https"
         Hosts = [
-            "{{ redirector_subdomain }}.{{ domain }}"
+            "{% if lab is defined %}{{ lab.member.lab_ip }}{% else %}{{ redirector_subdomain }}.{{ domain }}{% endif %}"
         ]
         HostBind = "0.0.0.0"
         HostRotation = "round-robin"
@@ -51,11 +51,12 @@ Listeners {
             ]
         }
         Secure = true
-        
+{% if lab is not defined %}
         Cert {
             Cert = "/etc/letsencrypt/live/{{ domain }}/fullchain.pem"
             Key = "/etc/letsencrypt/live/{{ domain }}/privkey.pem"
         }
+{% endif %}
     }
 }
 

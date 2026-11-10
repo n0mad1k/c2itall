@@ -116,6 +116,7 @@
     - "../files/havoc_installer.sh"
     - "../files/havoc_shell_handler.sh"
     - "../files/secure_payload_sync.sh"
+    - "../files/havoc_killall.sh"
 
 - name: Copy post-install script
   copy:
@@ -216,6 +217,7 @@
     mode: '0600'
     owner: root
     group: root
+  no_log: true
 
 - name: Create Linux loader script template
   template:
@@ -283,6 +285,7 @@
   vars:
     c2_ip: "{{ ansible_host }}"
     redirector_domain: "{{ redirector_subdomain }}.{{ domain }}"
+  when: lab is not defined
 
 - name: Create Havoc usage guide
   template:

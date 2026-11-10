@@ -4,8 +4,13 @@
 # Configuration (automatically populated by Ansible)
 PAYLOADS_DIR="/root/Tools/Havoc/payloads"
 C2_HOST="{{ ansible_host }}"
+{% if lab is defined %}
+REDIRECTOR_HOST="{{ lab.member.lab_ip }}"
+REDIRECTOR_PORT="{{ havoc_https_port | default('9443') }}"
+{% else %}
 REDIRECTOR_HOST="{{ redirector_subdomain }}.{{ domain }}"
 REDIRECTOR_PORT="{{ redirector_port | default('9443') }}"
+{% endif %}
 TEAMSERVER_HOST="127.0.0.1"
 TEAMSERVER_PORT="40056"
 HAVOC_DIR="/root/Tools/Havoc"
@@ -186,11 +191,16 @@ create_manifest() {
     dll_output=$(echo $payload_info | cut -d':' -f2)
     linux_output=$(echo $payload_info | cut -d':' -f3)
     
+    sha() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
     cat > $PAYLOADS_DIR/manifest.json << EOF
 {
   "windows_exe": "$win_output",
+  "windows_exe_sha256": "$(sha $PAYLOADS_DIR/windows/$win_output)",
   "windows_dll": "$dll_output",
+  "windows_dll_sha256": "$(sha $PAYLOADS_DIR/windows/$dll_output)",
   "linux_binary": "$linux_output",
+  "linux_binary_sha256": "$(sha $PAYLOADS_DIR/linux/$linux_output)",
+  "havoc_commit": "$(git -C $HAVOC_DIR rev-parse HEAD 2>/dev/null)",
   "redirector_host": "$REDIRECTOR_HOST",
   "redirector_port": "$REDIRECTOR_PORT",
   "c2_host": "$C2_HOST",

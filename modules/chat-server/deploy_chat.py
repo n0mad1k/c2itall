@@ -160,7 +160,8 @@ def deploy_chat(config):
         raise ValueError(f"Unsupported chat server type: {server_type}")
     if not deployed:
         return False
-    if not phantom.run_playbook(ADDONS_PLAYBOOK, config):
+    # A lab member already sits on the lab's WireGuard overlay; Tailscale would be a second one.
+    if not config.get("lab") and not phantom.run_playbook(ADDONS_PLAYBOOK, config):
         phantom.err("Chat networking/bot layer failed.")
         phantom.teardown_instance(config)
         return False

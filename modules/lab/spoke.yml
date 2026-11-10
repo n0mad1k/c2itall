@@ -12,7 +12,7 @@
   tasks:
     - name: Install WireGuard tools
       ansible.builtin.apt:
-        name: wireguard-tools
+        name: [wireguard-tools, ufw]
         state: present
         update_cache: true
       register: apt_result
