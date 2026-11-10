@@ -286,6 +286,13 @@
     enabled: true
     state: started
 
+# New credentials mean a new lab: a reused host starts with empty channels
+# and a fresh ledger instead of the previous lab's drops.
+- name: Start the lab with empty channels
+  ansible.builtin.command: exfil-receiver clean
+  when: minio_env.changed
+  changed_when: true
+
 - name: Reset the firewall defaults
   ansible.builtin.command: "{{ item }}"
   loop:
