@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # OpsLogger - Complete logging solution for red team operations
-# Version 2.6.0 - Public release; hardened temp-file handling
+# Version 2.7.0 - Independent transcripts and explicit command boundaries
 
 # Configuration variables
 CONFIG_FILE="${HOME}/.ops-logger.conf"
@@ -16,7 +16,11 @@ OPS_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}/ops-logger-$(id -u)"
 LOG_MARKER="${OPS_RUNTIME_DIR}/ops-logger-active"
 RECORDING_MARKER="${OPS_RUNTIME_DIR}/ops-logger-recording"
 CONFIG_IN_PROGRESS="${OPS_RUNTIME_DIR}/ops-logger-configuring"
-VERBOSE_CMD_MARKER="${OPS_RUNTIME_DIR}/ops-logger-cmd"
+
+shell_quote() {
+    local value=${1//\'/\'\\\'\'}
+    printf "'%s'" "$value"
+}
 
 # Helper functions
 log_debug() {
@@ -67,8 +71,10 @@ load_config() {
         LOG_DIR="$DEFAULT_LOG_DIR"
     fi
     
-    TARGET_NAME="${TARGET_NAME:-$DEFAULT_TARGET}"
+    TARGET_NAME=$(validate_target_name "${TARGET_NAME:-$DEFAULT_TARGET}")
     LOG_DIR="${LOG_DIR:-$DEFAULT_LOG_DIR}"
+    validate_log_dir "$LOG_DIR" || { printf 'ERROR: unsupported log directory characters\n' >&2; return 1; }
+    [[ $LOG_DIR == /* ]] || LOG_DIR="$PWD/$LOG_DIR"
 }
 
 save_config() {
@@ -85,9 +91,9 @@ EOF
 # Get public IP
 get_public_ip() {
     local ip
-    ip=$(curl -s --connect-timeout 3 ifconfig.me) || \
-    ip=$(curl -s --connect-timeout 3 ipinfo.io/ip) || \
-    ip=$(curl -s --connect-timeout 3 icanhazip.com) || \
+    ip=$(curl -fsS --connect-timeout 3 --max-time 5 https://ifconfig.me/ip) || \
+    ip=$(curl -fsS --connect-timeout 3 --max-time 5 https://ipinfo.io/ip) || \
+    ip=$(curl -fsS --connect-timeout 3 --max-time 5 https://icanhazip.com) || \
     ip="unknown"
     echo "$ip"
 }
@@ -98,20 +104,11 @@ is_tmux() { [[ -n "$TMUX" ]]; }
 # Get normalized pane ID (session-window-pane format)
 get_pane_id() {
     if is_tmux; then
-        # If TMUX_PANE is set (from hook), use that specific pane
-        if [[ -n "$TMUX_PANE" ]]; then
-            local session=$(tmux display -t "$TMUX_PANE" -p '#{session_name}')
-            local window=$(tmux display -t "$TMUX_PANE" -p '#{window_index}')
-            local pane=$(tmux display -t "$TMUX_PANE" -p '#{pane_index}')
-            echo "${session}-${window}-${pane}"
-        else
-            local session=$(tmux display -p '#{session_name}')
-            local window=$(tmux display -p '#{window_index}')
-            local pane=$(tmux display -p '#{pane_index}')
-            echo "${session}-${window}-${pane}"
-        fi
+        local pane
+        pane=$(get_tmux_pane_ref) || return 1
+        tmux display-message -p -t "$pane" 'server-#{pid}-pane-#{pane_id}' | tr -d '%'
     else
-        echo "$$"
+        printf 'shell-%s\n' "$$"
     fi
 }
 
@@ -157,7 +154,23 @@ get_tmux_prefix() {
     fi
 }
 
-is_logging_active() { [[ -f "${LOG_MARKER}-$1" ]]; }
+logging_run_dir() {
+    local run
+    IFS= read -r run < "${LOG_MARKER}-$1" 2>/dev/null || return 1
+    [[ $run == "$OPS_RUNTIME_DIR/ops-run-"* && -d $run && ! -L $run ]] || return 1
+    printf '%s\n' "$run"
+}
+is_logging_active() {
+    local run pid
+    run=$(logging_run_dir "$1") || return 1
+    [[ -f $run/enabled ]] || return 1
+    if is_tmux; then
+        [[ $(cat "$run/capture" 2>/dev/null) == running ]] || return 1
+        read -r pid < "$run/writer.pid" || return 1
+        kill -0 "$pid" 2>/dev/null || return 1
+        [[ $(tmux display-message -p -t "$(get_tmux_pane_ref)" '#{pane_pipe}' 2>/dev/null) == 1 ]] || return 1
+    fi
+}
 is_recording_active() { [[ -f "${RECORDING_MARKER}-$1" ]]; }
 
 # ================================================================
@@ -253,49 +266,53 @@ check_dependencies() {
 
 # Setup CSV logging (ORIGINAL FORMAT MAINTAINED)
 setup_csv_log() {
-    local target="$1"
-    local log_dir="$2"
-    local csv_file="${log_dir}/${target}_commands.csv"
-    
-    ensure_dir "$log_dir" 700
-    if [[ ! -f "$csv_file" ]]; then
-        echo '"StartTime","EndTime","SourceIP","User","Path","Command"' > "$csv_file"
-    fi
-    
-    echo "$csv_file"
+    local target=$1 log_dir=$2 csv_file="$2/$1_commands.csv"
+    ensure_dir "$log_dir" 700 || return 1
+    (
+        umask 077
+        flock -x 8 || exit 1
+        if [[ ! -s $csv_file ]]; then
+            printf '%s\n' '"StartTime","EndTime","SourceIP","User","Path","Command"' >&8 || exit 1
+        fi
+    ) 8>> "$csv_file" || return 1
+    chmod 600 "$csv_file" || return 1
+    printf '%s\n' "$csv_file"
 }
 
 # ================================================================
 # UNIFIED VERBOSE LOGGING WITH COMMAND HEADERS
 # ================================================================
 
+csv_record_count() {
+    flock -s "$1" awk '
+        BEGIN { quoted=0; records=0 }
+        {
+            for (i=1; i<=length($0); i++) {
+                if (substr($0,i,1)=="\"") {
+                    if (quoted && substr($0,i+1,1)=="\"") i++
+                    else quoted=!quoted
+                }
+            }
+            if (!quoted) records++
+        }
+        END { print (records>0 ? records-1 : 0) }
+    ' "$1"
+}
+
 # Create single master verbose log file for all panes
 create_master_verbose_log() {
-    local target="$1"
-    local log_dir="$2"
-    # Remove date from filename for continuous logging
-    local verbose_dir="${log_dir}/verbose"
-    ensure_dir "$verbose_dir" 700
-    # Single log file for entire target
-    local log_file="${verbose_dir}/${target}_master.log"
-    # Create the file with header if it doesn't exist
-    if [[ ! -f "$log_file" ]]; then
-        cat > "$log_file" << EOF
-================================================================================
-                           RED TEAM TERMINAL LOGGER
-                              Master Verbose Log
-================================================================================
-Target: $target
-Date: $(date +%Y-%m-%d)
-Host: $(hostname)
-Public IP: $(get_public_ip)
-Started: $(date '+%Y-%m-%d %H:%M:%S')
-================================================================================
-
-EOF
-    fi
-    
-    echo "$log_file"
+    local target=$1 log_dir=$2 verbose_dir="$2/verbose" log_file="$2/verbose/$1_master.log"
+    ensure_dir "$verbose_dir" 700 || return 1
+    (
+        umask 077
+        flock -x 8 || exit 1
+        if [[ ! -s $log_file ]]; then
+            printf 'RED TEAM TERMINAL LOGGER\nTarget: %s\nHost: %s\nStarted: %s\n\n' \
+                "$target" "$(hostname)" "$(date '+%Y-%m-%d %H:%M:%S')" >&8 || exit 1
+        fi
+    ) 8>> "$log_file" || return 1
+    chmod 600 "$log_file" || return 1
+    printf '%s\n' "$log_file"
 }
 
 # Create debug filter that captures EVERYTHING (no filtering)
@@ -341,6 +358,10 @@ start_debug_verbose_logging() {
     local target="$3"
     local log_dir="$4"
     
+    if [[ $(tmux display-message -p -t "$tmux_pane_ref" '#{pane_pipe}') == 1 ]]; then
+        printf 'ERROR: stop the existing pane capture before enabling debug capture\n' >&2
+        return 1
+    fi
     local debug_log="${log_dir}/debug-${target}-${id}-$(date +%H%M%S).log"
     local filter_script=$(create_debug_filter_script)
     
@@ -352,7 +373,7 @@ start_debug_verbose_logging() {
     sleep 1
     
     # Check if logging started
-    if tmux list-panes -F "#{pane_id} #{pane_pipe}" | grep -q "$tmux_pane_ref.*1"; then
+    if [[ $(tmux display-message -p -t "$tmux_pane_ref" '#{pane_pipe}') == 1 ]]; then
         echo "DEBUG logging started successfully"
         echo "Raw output file: ${debug_log}.debug-raw"
         echo "Filtered output file: $debug_log"
@@ -366,366 +387,322 @@ start_debug_verbose_logging() {
     fi
 }
 
-# Create the verbose filter script
+# Generate a summary reader. Raw capture is a separate, direct file writer.
 create_verbose_filter_script() {
     local filter_script
-    filter_script=$(mktemp "${OPS_RUNTIME_DIR}/ops-verbose-filter-XXXXXX.sh") || { echo "ERROR: failed to create verbose filter script" >&2; return 1; }
-
+    filter_script=$(mktemp "${OPS_RUNTIME_DIR}/ops-verbose-filter-XXXXXX.sh") || return 1
     cat > "$filter_script" << 'EOFILTER'
 #!/usr/bin/env bash
-# Proper command boundary detection
-
-LOGFILE="$1"
-PANE_ID="$2"
-TARGET="$3"
-VERBOSE_CMD_MARKER="$4"
-
-mkdir -p "$(dirname "$LOGFILE")" 2>/dev/null
-
-# Command tracking
-CURRENT_COMMAND=""
+set -o pipefail
+LOGFILE=$1 PANE_ID=$2 TARGET=$3 RUN_DIR=$4
+TOKEN=${RUN_DIR##*/}
+PREFIX=$'\033]777;ops-logger;'"$TOKEN;"
 IN_COMMAND=false
 OUTPUT_LINE_COUNT=0
 MAX_LINES_PER_COMMAND=22
-LAST_MARKER_CHECK=""
-
-# Function to properly close a command
+exec 9>> "$LOGFILE" || exit 1
+write_log() {
+    flock 9 || return 1
+    printf '%s\n' "$@" >&9
+    local rc=$?
+    flock -u 9 || return 1
+    return "$rc"
+}
 close_current_command() {
-    if [[ "$IN_COMMAND" == "true" ]]; then
-        echo "==============================================================================" >> "$LOGFILE"
-        echo "" >> "$LOGFILE"
-        IN_COMMAND=false
-        OUTPUT_LINE_COUNT=0
-        CURRENT_COMMAND=""
+    if [[ $IN_COMMAND == true ]]; then
+        write_log "[$PANE_ID] ==============================================================================" || exit 1
+    fi
+    IN_COMMAND=false
+    OUTPUT_LINE_COUNT=0
+}
+open_command() {
+    local event=$1 cmd start_time user path public_ip pane_marker
+    [[ $event =~ ^[a-zA-Z0-9]+$ ]] || return 0
+    local file="$RUN_DIR/events/$event"
+    [[ -f $file && ! -L $file ]] || return 0
+    {
+        IFS= read -r -d '' cmd && IFS= read -r -d '' start_time &&
+        IFS= read -r -d '' user && IFS= read -r -d '' path &&
+        IFS= read -r -d '' public_ip && IFS= read -r -d '' pane_marker
+    } < "$file" || return 1
+    [[ $pane_marker == "$PANE_ID" ]] || return 1
+    close_current_command
+    # Each header is one locked write; each output line also identifies its pane.
+    write_log "[$PANE_ID] ==============================================================================" \
+        "[$PANE_ID] Command: $cmd" "[$PANE_ID] Start: $start_time" \
+        "[$PANE_ID] User: $user  Path: $path  Public IP: $public_ip" \
+        "[$PANE_ID] OUTPUT:" || return 1
+    IN_COMMAND=true
+    rm -f -- "$file"
+}
+log_output() {
+    local line=$1 clean_line
+    [[ -n $line ]] || return 0
+    # This is a short readable summary, not a terminal emulator. Raw bytes are
+    # already written to the independent transcript before this reader sees them.
+    if [[ $IN_COMMAND == false ]]; then
+        write_log "[$PANE_ID] Unattributed pane output:" || return 1
+        IN_COMMAND=true
+    fi
+    ((OUTPUT_LINE_COUNT+=1))
+    if (( OUTPUT_LINE_COUNT <= MAX_LINES_PER_COMMAND )); then
+        clean_line=$(printf '%s' "$line" | sed -E 's/\x1b\[[0-?]*[ -\/]*[@-~]//g') || return 1
+        printf -v stamp '%(%H:%M:%S)T' -1
+        write_log "$stamp [$PANE_ID] $clean_line" || return 1
+    elif (( OUTPUT_LINE_COUNT == MAX_LINES_PER_COMMAND + 1 )); then
+        write_log "[$PANE_ID] ... [OUTPUT TRUNCATED - showing first $MAX_LINES_PER_COMMAND lines only; full output in transcript] ..." || return 1
     fi
 }
-
-# Function to check for new command markers
-check_command_marker() {
-    local marker_file="${VERBOSE_CMD_MARKER}-${PANE_ID}"
-    if [[ -f "$marker_file" ]]; then
-        # Read the marker content
-        local marker_content=$(cat "$marker_file" 2>/dev/null)
-        
-        # Only process if this is a new marker (different from last check)
-        if [[ "$marker_content" != "$LAST_MARKER_CHECK" ]]; then
-            LAST_MARKER_CHECK="$marker_content"
-            
-            # Always close previous command first
-            close_current_command
-            
-            # Read command info
-            IFS='|' read -r cmd start_time user path public_ip pane_marker <<< "$marker_content"
-            
-            # Start new command if it's for this pane
-            if [[ "$pane_marker" == "$PANE_ID" && -n "$cmd" ]]; then
-                CURRENT_COMMAND="$cmd"
-                IN_COMMAND=true
-                OUTPUT_LINE_COUNT=0
-                
-                # Write command header
-                cat >> "$LOGFILE" << EOCMD
-==============================================================================
-COMMAND EXECUTION - $start_time
-==============================================================================
-Command: $cmd
-User: $user
-Path: $path
-Start: $start_time
-Pane: $PANE_ID
-Public IP: $public_ip
-------------------------------------------------------------------------------
-OUTPUT:
-EOCMD
-                
-                # Remove the marker file after processing
-                rm -f "$marker_file" 2>/dev/null
-            fi
+# Markers are in the same PTY byte stream as output. Metadata is NUL-delimited
+# and immutable per event, so pipes/newlines and rapid commands cannot replace it.
+while IFS= read -r line || [[ -n $line ]]; do
+    while [[ $line == *"$PREFIX"* ]]; do
+        before=${line%%"$PREFIX"*}
+        rest=${line#*"$PREFIX"}
+        if [[ $rest != *$'\a'* ]]; then
+            break
         fi
-    fi
-}
-
-# Simple ANSI stripping
-strip_ansi() {
-    local line="$1"
-    # Remove bracketed paste mode
-    line="${line//[?2004h/}"
-    line="${line//[?2004l/}"
-    # Remove ANSI escape sequences
-    line=$(echo "$line" | sed -E 's/\x1b\[[0-9;]*[mGKHF]//g; s/\x1b\[[?]?[0-9]*[hlc]//g')
-    echo "$line"
-}
-
-# Check if line looks like a shell prompt
-is_prompt_line() {
-    local line="$1"
-    # More specific prompt detection patterns
-    if [[ "$line" =~ .*@.*:.*[\$#][[:space:]]*$ ]] || \
-       [[ "$line" =~ ^[[:space:]]*[\$#][[:space:]]*$ ]] || \
-       [[ "$line" =~ .*[\$#][[:space:]]+[a-zA-Z] ]]; then
-        return 0
-    fi
-    return 1
-}
-
-# Main processing loop
-while IFS= read -r line; do
-    # ALWAYS check for new commands first, before any processing
-    check_command_marker
-    
-    # Clean the line
-    clean_line=$(strip_ansi "$line")
-    
-    # Skip completely empty lines
-    [[ -z "$clean_line" ]] && continue
-    
-    # If we're in a command, log the output
-    if [[ "$IN_COMMAND" == "true" ]]; then
-        OUTPUT_LINE_COUNT=$((OUTPUT_LINE_COUNT + 1))
-        
-        # Check if this looks like a prompt (indicating command end)
-        if is_prompt_line "$clean_line" && [[ $OUTPUT_LINE_COUNT -gt 1 ]]; then
-            # Don't log the prompt line, just close the command
-            close_current_command
-            continue
-        fi
-        
-        # Log the output line with timestamp
-        if [[ $OUTPUT_LINE_COUNT -le $MAX_LINES_PER_COMMAND ]]; then
-            echo "$(date '+%H:%M:%S') $clean_line" >> "$LOGFILE"
-        elif [[ $OUTPUT_LINE_COUNT -eq $(($MAX_LINES_PER_COMMAND + 1)) ]]; then
-            echo "... [OUTPUT TRUNCATED - showing first $MAX_LINES_PER_COMMAND lines only] ..." >> "$LOGFILE"
-        fi
-    fi
+        event=${rest%%$'\a'*}
+        log_output "$before" || exit 1
+        open_command "$event" || exit 1
+        line=${rest#*$'\a'}
+    done
+    log_output "$line" || exit 1
 done
-
-# End any active command on exit
 close_current_command
-
 EOFILTER
-    
-    chmod +x "$filter_script"
-    echo "$filter_script"
+    chmod 700 "$filter_script" || return 1
+    printf '%s\n' "$filter_script"
 }
 
-# Enhanced command hook that integrates with verbose logging
-create_enhanced_command_hook() {
-    local hook_script="$1"
-    local csv_log="$2"
-    local pane_id="$3"
-    local verbose_log="$4"
-    
-    cat > "$hook_script" << 'EOF'
+# The collector never pipes pane bytes through the summary reader. A slow or
+# failed summary can neither block cat nor discard its unmodified transcript.
+create_capture_script() {
+    local script
+    script=$(mktemp "${OPS_RUNTIME_DIR}/ops-capture-XXXXXX.sh") || return 1
+    cat > "$script" << 'EOCAPTURE'
 #!/usr/bin/env bash
-# Enhanced command hook with verbose integration
+set -o pipefail
+run=$1 raw=$2 master=$3 pane=$4 target=$5 filter=$6
+socket=${7:-} tmux_pane=${8:-}
+umask 077
+state() { printf '%s\n' "$2" > "$run/$1.tmp" && mv -f "$run/$1.tmp" "$run/$1"; }
+notify_failure() {
+    [[ -n $socket && -n $tmux_pane ]] || return 0
+    tmux -S "$socket" display-message -t "$tmux_pane" "ops-logger: $1" 2>/dev/null || true
+}
+exec 3>> "$raw" || { state capture failed; notify_failure 'cannot open transcript'; exit 1; }
+exec 4<&0
+cat <&4 >&3 &
+writer=$!
+printf '%s\n' "$writer" > "$run/writer.pid"
+state summary running
+(
+    tail --pid="$writer" -s 0.1 -c +1 -f -- "$raw" | bash "$filter" "$master" "$pane" "$target" "$run"
+    rc=$?
+    if (( rc )); then state summary failed; notify_failure 'summary failed; transcript capture continues'; else state summary stopped; fi
+    exit "$rc"
+) 3>&- 4<&- &
+summary=$!
+state capture running
+printf '%s\n' "$$" > "$run/collector.pid"
+: > "$run/ready"
+wait "$writer"
+rc=$?
+if (( rc )); then state capture failed; notify_failure 'transcript write failed; capture stopped'; else state capture stopped; fi
+exec 3>&- 4<&-
+wait "$summary"
+summary_rc=$?
+state done "$rc $summary_rc"
+exit "$((rc || summary_rc))"
+EOCAPTURE
+    chmod 700 "$script" || return 1
+    printf '%s\n' "$script"
+}
 
-set +e
-
-# Configuration
-CSV_LOG="__CSV_LOG__"
-VERBOSE_LOG="__VERBOSE_LOG__"
-PANE_ID="__PANE_ID__"
-PUBLIC_IP=$(timeout 5 curl -s ifconfig.me 2>/dev/null || echo "unknown")
+create_enhanced_command_hook() {
+    local hook_script=$1 csv_log=$2 pane_id=$3 verbose_log=$4 run_dir=$5
+    {
+        printf 'CSV_LOG=%q\nVERBOSE_LOG=%q\nPANE_ID=%q\nRTL_RUN_DIR=%q\n' "$csv_log" "$verbose_log" "$pane_id" "$run_dir"
+        # Preserve state across re-sourcing into the same shell.
+        cat << 'EOHOOK'
+RTL_ENABLE_FILE="$RTL_RUN_DIR/enabled"
 RTL_INTERNAL_LOGGING=true
 RTL_CMD_START_TIME=""
-VERBOSE_CMD_MARKER="__VERBOSE_CMD_MARKER__"
-
-# Function to check if command should be logged
+RTL_COMMAND_PENDING=false
+RTL_IN_PROMPT=false
+PUBLIC_IP=$(timeout 5 curl -fsS --max-time 4 https://ifconfig.me/ip 2>/dev/null || printf unknown)
 should_log_command() {
-    local cmd="$1"
-    case "$cmd" in
-        *"RTL_"*|*"log_command"*|*"CSV_LOG"*|*"should_log_command"*) return 1 ;;
-        "history "*|*"PROMPT_COMMAND"*|*"source "*"ops-hook-"*) return 1 ;;
-        "") return 1 ;;
+    case "$1" in
+        *RTL_*|*CSV_LOG*|*PROMPT_COMMAND*|*ops-hook-*|'') return 1 ;;
         *) return 0 ;;
     esac
 }
-
-# Enhanced function to write verbose command header
 write_verbose_header() {
-    local cmd="$1"
-    local start_time="$2"
-    local user=$(whoami)
-    local path=$(pwd)
-    
-    # Create marker for verbose filter
-    echo "$cmd|$start_time|$user|$path|$PUBLIC_IP|$PANE_ID" > "${VERBOSE_CMD_MARKER}-${PANE_ID}"
+    [[ -n $VERBOSE_LOG && -f $RTL_ENABLE_FILE ]] || return 0
+    local file event
+    file=$(mktemp "$RTL_RUN_DIR/events/XXXXXXXXXXXX") || return 1
+    event=${file##*/}
+    printf '%s\0' "$1" "$2" "$(whoami)" "$PWD" "$PUBLIC_IP" "$PANE_ID" > "$file" || return 1
+    # Use the controlling terminal, not a command's redirected stdout. The
+    # ignored OSC carries only an event id; metadata stays in private files.
+    printf '\033]777;ops-logger;%s;%s\a' "${RTL_RUN_DIR##*/}" "$event" > /dev/tty || return 1
 }
-
-# Function to log command to CSV (unchanged)
 RTL_log_command() {
-    local cmd="$1"
-    local start_time="$2"
-    local end_time="$3"
-    local user=$(whoami)
-    local path=$(pwd)
-    
+    local cmd=$1 start=$2 end=$3 field row="" sep="" escaped
+    [[ -f $RTL_ENABLE_FILE ]] || return 0
     should_log_command "$cmd" || return 0
-    
-    local old_flag="$RTL_INTERNAL_LOGGING"
-    RTL_INTERNAL_LOGGING=false
-    
-    local escaped_cmd=${cmd//\"/\"\"}
-    case "$escaped_cmd" in
-        [-+=@]*) escaped_cmd="'${escaped_cmd}" ;;
-    esac
-
-    printf '"%s","%s","%s","%s","%s","%s"\n' \
-        "$start_time" "$end_time" "$PUBLIC_IP" "$user" "$path" "$escaped_cmd" >> "$CSV_LOG" 2>/dev/null
-    
-    RTL_INTERNAL_LOGGING="$old_flag"
+    case "$cmd" in [-+=@]*) cmd="'$cmd" ;; esac
+    for field in "$start" "$end" "$PUBLIC_IP" "$(whoami)" "${RTL_COMMAND_PATH:-$PWD}" "$cmd"; do
+        escaped=${field//\"/\"\"}
+        row+="$sep\"$escaped\""
+        sep=,
+    done
+    # Lock one complete CSV record, including embedded newlines.
+    if ! ( flock -x 8 && printf '%s\n' "$row" >&8 ) 8>> "$CSV_LOG"; then
+        printf 'failed\n' > "$RTL_RUN_DIR/csv"
+        printf 'ops-logger: CSV write failed: %s\n' "$CSV_LOG" >&2
+        return 1
+    fi
 }
-
-# BASH-specific setup
-if [[ -n "$BASH_VERSION" ]]; then
-    [[ -z "$RTL_ORIG_PROMPT_COMMAND" ]] && RTL_ORIG_PROMPT_COMMAND="$PROMPT_COMMAND"
-    
-    RTL_LAST_COMMAND=""
-    RTL_LAST_HISTNUM=""
-    
+if [[ -n ${BASH_VERSION:-} ]]; then
+    if [[ ${RTL_HOOK_INSTALLED:-false} != true ]]; then
+        RTL_ORIG_PROMPT_DECL=$(declare -p PROMPT_COMMAND 2>/dev/null || true)
+        RTL_ORIG_DEBUG_TRAP=${RTL_INSTALL_DEBUG_TRAP:-$(trap -p DEBUG)}
+        unset RTL_INSTALL_DEBUG_TRAP
+        RTL_ORIG_PROMPTS=("${PROMPT_COMMAND[@]}")
+    fi
+    RTL_HOOK_INSTALLED=true
     RTL_preexec() {
-        local cmd="$BASH_COMMAND"
-        if should_log_command "$cmd" 2>/dev/null; then
-            RTL_CMD_START_TIME="$(date '+%Y-%m-%d %H:%M:%S')"
-            write_verbose_header "$cmd" "$RTL_CMD_START_TIME"
-        fi
-    }
-    
-    RTL_PROMPT_COMMAND() {
-        if [[ "$RTL_INTERNAL_LOGGING" == "false" ]]; then
-            return 0
-        fi
-        
-        local current_histnum=$(history 1 2>/dev/null | awk '{print $1}')
-        local current_cmd=$(history 1 2>/dev/null | sed 's/^[ ]*[0-9]*[ ]*//')
-        
-        if [[ "$current_cmd" != "$RTL_LAST_COMMAND" && "$current_histnum" != "$RTL_LAST_HISTNUM" ]]; then
-            if should_log_command "$current_cmd" 2>/dev/null; then
-                local end_time="$(date '+%Y-%m-%d %H:%M:%S')"
-                local start_time="${RTL_CMD_START_TIME:-$end_time}"
-                
-                RTL_log_command "$current_cmd" "$start_time" "$end_time"
-                
-                RTL_LAST_COMMAND="$current_cmd"
-                RTL_LAST_HISTNUM="$current_histnum"
+        [[ -f $RTL_ENABLE_FILE && $RTL_IN_PROMPT == false ]] || return 0
+        local cmd=$BASH_COMMAND
+        should_log_command "$cmd" || return 0
+        # One boundary for the entered shell command, not every simple command
+        # in a pipeline or the logger's own prompt plumbing.
+        [[ $RTL_COMMAND_PENDING == false ]] || return 0
+        RTL_COMMAND_PENDING=true
+        RTL_COMMAND_PATH=$PWD
+        RTL_CURRENT_COMMAND=$cmd
+        local entry number history_cmd
+        entry=$(HISTTIMEFORMAT= history 1)
+        if [[ $entry =~ ^[[:space:]]*([0-9]+)[[:space:]]+(.*)$ ]]; then
+            number=${BASH_REMATCH[1]}
+            history_cmd=${BASH_REMATCH[2]}
+            if [[ $number != "${RTL_PREVIOUS_HISTNUM:-}" || $history_cmd == "$cmd" ]]; then
+                RTL_CURRENT_COMMAND=$history_cmd
             fi
+            RTL_PREVIOUS_HISTNUM=$number
         fi
-        
+        printf -v RTL_CMD_START_TIME '%(%Y-%m-%d %H:%M:%S)T' -1
+        write_verbose_header "$RTL_CURRENT_COMMAND" "$RTL_CMD_START_TIME"
+    }
+    RTL_PROMPT_COMMAND() {
+        local current_cmd end_time
+        if [[ $RTL_COMMAND_PENDING == true && -f $RTL_ENABLE_FILE ]]; then
+            # Execution identity is the preexec/prompt cycle, not history text
+            # or HISTCONTROL's possibly deduplicated history number.
+            current_cmd=$RTL_CURRENT_COMMAND
+            printf -v end_time '%(%Y-%m-%d %H:%M:%S)T' -1
+            RTL_log_command "$current_cmd" "$RTL_CMD_START_TIME" "$end_time"
+        fi
+        RTL_COMMAND_PENDING=false
         RTL_CMD_START_TIME=""
     }
-    
-    trap 'RTL_preexec 2>/dev/null || true' DEBUG 2>/dev/null
-    
-    if [[ -n "$RTL_ORIG_PROMPT_COMMAND" ]]; then
-        PROMPT_COMMAND="RTL_PROMPT_COMMAND; $RTL_ORIG_PROMPT_COMMAND"
-    else
-        PROMPT_COMMAND="RTL_PROMPT_COMMAND"
-    fi
-    
-# ZSH-specific setup  
-elif [[ -n "$ZSH_VERSION" ]]; then
+    # Cleanup runs as top-level PROMPT_COMMAND code, never injected into a
+    # foreground program. Restoring DEBUG inside a function would be temporary.
+    RTL_PROMPT_DISPATCH='RTL_PROMPT_STATUS=$?; RTL_IN_PROMPT=true; if [[ -f "$RTL_ENABLE_FILE" ]]; then RTL_PROMPT_COMMAND; else trap - DEBUG; [[ -z "$RTL_ORIG_DEBUG_TRAP" ]] || eval "$RTL_ORIG_DEBUG_TRAP"; unset PROMPT_COMMAND; [[ -z "$RTL_ORIG_PROMPT_DECL" ]] || eval "$RTL_ORIG_PROMPT_DECL"; RTL_HOOK_INSTALLED=false; fi; (exit "$RTL_PROMPT_STATUS")'
+    PROMPT_COMMAND=("$RTL_PROMPT_DISPATCH" "${RTL_ORIG_PROMPTS[@]}" 'RTL_IN_PROMPT=false; (exit "$RTL_PROMPT_STATUS")') || return 1
+    trap 'RTL_preexec' DEBUG || return 1
+elif [[ -n ${ZSH_VERSION:-} ]]; then
     RTL_zsh_preexec() {
-        local cmd="$1"
-        if should_log_command "$cmd" 2>/dev/null; then
-            RTL_CMD_START_TIME="$(date '+%Y-%m-%d %H:%M:%S')"
-            write_verbose_header "$cmd" "$RTL_CMD_START_TIME"
-        fi
+        [[ -f $RTL_ENABLE_FILE ]] || return 0
+        RTL_COMMAND_PENDING=true
+        RTL_COMMAND_PATH=$PWD
+        RTL_CMD_START_TIME=$(date '+%Y-%m-%d %H:%M:%S')
+        write_verbose_header "$1" "$RTL_CMD_START_TIME"
     }
-    
     RTL_zsh_precmd() {
-        if [[ "$RTL_INTERNAL_LOGGING" == "false" ]]; then
-            return 0
+        if [[ ! -f $RTL_ENABLE_FILE ]]; then
+            add-zsh-hook -d preexec RTL_zsh_preexec
+            add-zsh-hook -d precmd RTL_zsh_precmd
+        elif [[ $RTL_COMMAND_PENDING == true ]]; then
+            RTL_log_command "$(fc -ln -1)" "$RTL_CMD_START_TIME" "$(date '+%Y-%m-%d %H:%M:%S')"
         fi
-        
-        local cmd=$(fc -ln -1 2>/dev/null)
-        
-        if should_log_command "$cmd" 2>/dev/null; then
-            local end_time="$(date '+%Y-%m-%d %H:%M:%S')"
-            local start_time="${RTL_CMD_START_TIME:-$end_time}"
-            
-            RTL_log_command "$cmd" "$start_time" "$end_time"
-        fi
-        
-        RTL_CMD_START_TIME=""
+        RTL_COMMAND_PENDING=false
     }
-    
-    if autoload -Uz add-zsh-hook 2>/dev/null; then
-        add-zsh-hook preexec RTL_zsh_preexec 2>/dev/null || true
-        add-zsh-hook precmd RTL_zsh_precmd 2>/dev/null || true
-    fi
+    autoload -Uz add-zsh-hook
+    add-zsh-hook -d preexec RTL_zsh_preexec 2>/dev/null
+    add-zsh-hook -d precmd RTL_zsh_precmd 2>/dev/null
+    add-zsh-hook preexec RTL_zsh_preexec
+    add-zsh-hook precmd RTL_zsh_precmd
+else
+    printf 'ops-logger: unsupported shell\n' >&2
+    return 1
 fi
-
-# Mark as active
-echo "$$" > "__LOG_MARKER__-${PANE_ID}"
-echo "Enhanced Ops Logger with verbose integration installed for pane $PANE_ID" >&2
-EOF
-
-    # Replace placeholders
-    sed -i "s|__CSV_LOG__|$csv_log|g" "$hook_script"
-    sed -i "s|__VERBOSE_LOG__|$verbose_log|g" "$hook_script"
-    sed -i "s|__PANE_ID__|$pane_id|g" "$hook_script"
-    sed -i "s|__LOG_MARKER__|$LOG_MARKER|g" "$hook_script"
-    sed -i "s|__VERBOSE_CMD_MARKER__|$VERBOSE_CMD_MARKER|g" "$hook_script"
-    
-    chmod +x "$hook_script"
+: > "$RTL_RUN_DIR/hook-ready"
+EOHOOK
+    } > "$hook_script" || return 1
+    chmod 700 "$hook_script"
 }
 
-# Start unified verbose logging (add delay for stability)
 start_unified_verbose_logging() {
-    local id="$1"
-    local tmux_pane_ref="$2"
-    local target="$3"
-    local log_dir="$4"
-    
-    # Create master log file
-    local master_log=$(create_master_verbose_log "$target" "$log_dir")
-    
-    # Create filter script
-    local filter_script=$(create_verbose_filter_script)
-    
-    log_debug "Starting unified verbose logging to: $master_log"
-    
-    # Use pipe-pane with our filter script
-    tmux pipe-pane -t "$tmux_pane_ref" "bash '$filter_script' '$master_log' '$id' '$target' '$VERBOSE_CMD_MARKER'"
-    
-    # Give pipe-pane time to establish
-    sleep 0.5
-    
-    # Check if logging started successfully
-    if tmux list-panes -F "#{pane_id} #{pane_pipe}" | grep -q "$tmux_pane_ref.*1"; then
-        log_debug "Unified verbose logging started successfully"
-        
-        # Store filter script path for cleanup
-        echo "$filter_script" > "${OPS_RUNTIME_DIR}/ops-filter-script-${id}"
-        
-        return 0
-    else
-        log_debug "ERROR: Unified verbose logging failed to start"
-        rm -f "$filter_script"
+    local id=$1 tmux_pane_ref=$2 target=$3 log_dir=$4 run_dir=$5
+    local master_log filter_script collector raw command i
+    [[ $(tmux display-message -p -t "$tmux_pane_ref" '#{pane_pipe}') == 0 ]] || {
+        printf 'ERROR: pane already has an output pipe; refusing to replace it\n' >&2; return 1;
+    }
+    master_log=$(create_master_verbose_log "$target" "$log_dir") || return 1
+    ensure_dir "$log_dir/transcripts" 700 || return 1
+    raw=$(mktemp "$log_dir/transcripts/${target}_${id}_$(date +%Y%m%d_%H%M%S)_XXXXXX.terminal.log") || return 1
+    chmod 600 "$raw" || return 1
+    printf '%s\n' "$raw" > "$run_dir/transcript"
+    filter_script=$(create_verbose_filter_script) || return 1
+    collector=$(create_capture_script) || return 1
+    printf '%s\n' "$filter_script" "$collector" > "$run_dir/helpers"
+    # Paths are shell-quoted for tmux's sh -c (not Bash-specific %q).
+    command=bash
+    local arg
+    for arg in "$collector" "$run_dir" "$raw" "$master_log" "$id" "$target" "$filter_script" "$(tmux display-message -p -t "$tmux_pane_ref" '#{socket_path}')" "$tmux_pane_ref"; do
+        command+=" $(shell_quote "$arg")"
+    done
+    tmux pipe-pane -t "$tmux_pane_ref" "$command" || return 1
+    for ((i=0; i<100; i++)); do
+        [[ -f $run_dir/ready ]] && break
+        sleep 0.05
+    done
+    if [[ ! -f $run_dir/ready ]] || [[ $(cat "$run_dir/capture" 2>/dev/null) != running ]] ||
+       [[ $(tmux display-message -p -t "$tmux_pane_ref" '#{pane_pipe}') != 1 ]]; then
+        tmux pipe-pane -t "$tmux_pane_ref"
+        printf 'ERROR: transcript writer failed to start\n' >&2
         return 1
     fi
 }
 
-# Stop unified verbose logging
 stop_unified_verbose_logging() {
-    local tmux_pane_ref="$1"
-    local id="$2"
-    
-    # Stop pipe-pane
-    tmux pipe-pane -t "$tmux_pane_ref" 2>/dev/null || true
-    
-    # Clean up filter script
-    if [[ -f "${OPS_RUNTIME_DIR}/ops-filter-script-${id}" ]]; then
-        local filter_script=$(cat "${OPS_RUNTIME_DIR}/ops-filter-script-${id}")
-        rm -f "$filter_script" 2>/dev/null
-        rm -f "${OPS_RUNTIME_DIR}/ops-filter-script-${id}"
+    local tmux_pane_ref=$1 id=$2 run_dir=$3 i previous="" current
+    [[ -d $run_dir ]] || return 0
+    # Allow an idle pane's already received bytes to settle before disconnect.
+    # A continuously producing pane still has an explicit bounded stop point.
+    for ((i=0; i<10; i++)); do
+        current=$(stat -c %s -- "$(cat "$run_dir/transcript")" 2>/dev/null)
+        [[ $current == "$previous" ]] && break
+        previous=$current
+        sleep 0.1
+    done
+    if [[ $(cat "$run/capture" 2>/dev/null) == running ]]; then
+        tmux pipe-pane -t "$tmux_pane_ref" || return 1
     fi
-    
-    # Clean up markers
-    rm -f "${VERBOSE_CMD_MARKER}-${id}" 2>/dev/null
-    rm -f "${OPS_RUNTIME_DIR}/ops-cmd-active-${id}" 2>/dev/null
-    
-    log_debug "Stopped unified verbose logging for pane: $tmux_pane_ref"
+    for ((i=0; i<100; i++)); do
+        [[ -f $run_dir/done ]] && break
+        sleep 0.05
+    done
+    if [[ ! -f $run_dir/done || $(cat "$run_dir/done") != '0 0' ]]; then
+        printf 'ERROR: capture/summary did not finish cleanly; evidence retained in %s\n' "$run_dir" >&2
+        return 1
+    fi
+    while IFS= read -r helper; do
+        [[ $helper == "$OPS_RUNTIME_DIR/ops-"*.sh ]] && rm -f -- "$helper"
+    done < "$run_dir/helpers"
 }
 
 # ================================================================
@@ -795,144 +772,86 @@ clear_window_indicators() {
 
 # Enhanced logging installation with unified verbose logging
 install_logging() {
-    local id="$1"
-    local csv_log="$2"
-    local target="$3"
-    local log_dir="$4"
-    
-    log_debug "Installing enhanced logging for pane $id"
-    
+    local id=$1 csv_log=$2 target=$3 log_dir=$4
+    local run hook pane current i command arg master=""
+    run=$(mktemp -d "$OPS_RUNTIME_DIR/ops-run-XXXXXXXXXXXX") || return 1
+    mkdir -m 700 "$run/events" || return 1
+    hook="$run/ops-hook.sh"
     if is_tmux; then
-        local tmux_pane_ref=$(get_tmux_pane_ref)
-        
-        # Get master verbose log path
-        local master_log=$(create_master_verbose_log "$target" "$log_dir")
-        
-        # Start unified verbose logging
-        if start_unified_verbose_logging "$id" "$tmux_pane_ref" "$target" "$log_dir"; then
-            log_debug "Unified verbose logging started successfully"
-        else
-            log_debug "Verbose logging failed, continuing with CSV only"
+        pane=$(get_tmux_pane_ref) || return 1
+        start_unified_verbose_logging "$id" "$pane" "$target" "$log_dir" "$run" || return 1
+        master="$log_dir/verbose/${target}_master.log"
+    elif [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+        printf 'ERROR: direct-shell logging must be enabled in the caller: source ops-logger.sh; start_operation_log -AutoStart\n' >&2
+        return 1
+    fi
+    : > "$run/enabled"
+    printf '%s\n' "$run" > "${LOG_MARKER}-${id}"
+    create_enhanced_command_hook "$hook" "$csv_log" "$id" "$master" "$run" || {
+        rm -f "$run/enabled"
+        is_tmux && stop_unified_verbose_logging "$pane" "$id" "$run"
+        return 1
+    }
+    if is_tmux; then
+        current=$(tmux display-message -p -t "$pane" '#{pane_current_command}')
+        case "$current" in
+            bash|zsh|-bash|-zsh)
+                # Enter is separate: send-keys must not interpret path text as
+                # key names. Enable from an empty local shell prompt.
+                printf -v command 'RTL_INSTALL_DEBUG_TRAP=$(trap -p DEBUG); source %q' "$hook"
+                tmux send-keys -t "$pane" -l "$command"
+                tmux send-keys -t "$pane" Enter
+                # A CLI started by this pane's shell must return before the
+                # queued source command can run. Capture is already verified;
+                # status reports hooks pending until their own acknowledgment.
+                if [[ $PPID == "$(tmux display-message -p -t "$pane" '#{pane_pid}')" ]]; then
+                    printf 'Transcript active; shell hooks will attach when this command returns.\n'
+                else
+                for ((i=0; i<140; i++)); do
+                    [[ -f $run/hook-ready ]] && break
+                    sleep 0.05
+                done
+                if [[ ! -f $run/hook-ready ]]; then
+                    rm -f "$run/enabled"
+                    stop_unified_verbose_logging "$pane" "$id" "$run"
+                    printf 'ERROR: shell hook did not acknowledge installation; logging stopped\n' >&2
+                    return 1
+                fi
+                fi
+                ;;
+            *)
+                # Starting inside a child console is useful for output capture,
+                # but shell code must never be sent to that program's input.
+                printf 'Transcript active; shell CSV hooks unavailable until logging is restarted at a local shell prompt.\n'
+                ;;
+        esac
+        if ! is_logging_active "$id"; then
+            printf 'ERROR: transcript writer failed during startup\n' >&2
+            rm -f "$run/enabled"
+            return 1
         fi
-        
-        # Create enhanced command hook
-        local hook_script="${OPS_RUNTIME_DIR}/ops-hook-${id}.sh"
-        create_enhanced_command_hook "$hook_script" "$csv_log" "$id" "$master_log"
-        
-        # Install the hook
-        tmux send-keys -t "$tmux_pane_ref" "source '$hook_script' 2>/dev/null && echo 'Enhanced logging hooks installed successfully' || echo 'Logging may have warnings but is active'" ENTER
-        
-        sleep 2
-        
-        # Set window indicator
-        set_window_logging_indicator "$tmux_pane_ref"
-        
-        # Mark as active
-        touch "${LOG_MARKER}-${id}"
-        touch "${LOG_MARKER}-${id}.success"
-        
+        set_window_logging_indicator "$pane"
+        printf 'Transcript: %s\n' "$(cat "$run/transcript")"
     else
-        # Direct shell logging (CSV only)
-        local hook_script="${OPS_RUNTIME_DIR}/ops-hook-${id}.sh"
-        create_enhanced_command_hook "$hook_script" "$csv_log" "$id" ""
-        source "$hook_script"
-        echo "Direct shell logging started (CSV only)"
-        
-        touch "${LOG_MARKER}-${id}"
-        touch "${LOG_MARKER}-${id}.success"
-    fi
-    
-    log_debug "Enhanced logging installation completed"
-}
-
-# Shared PROMPT_COMMAND/unset -f cleanup logic used by both remove_logging
-# branches below - dumped via declare -f into the tmux cleanup script so the two
-# call sites can never drift out of sync.
-# NOTE: trap - DEBUG deliberately does NOT live here. Bash saves/restores the
-# DEBUG trap around function calls, so clearing it from inside a function is
-# silently reverted the moment the function returns. Each call site clears
-# its own DEBUG trap inline, immediately before calling this helper.
-_ops_logger_reset_hooks() {
-    if [[ -n "$BASH_VERSION" ]]; then
-        if [[ -n "$RTL_ORIG_PROMPT_COMMAND" ]]; then
-            PROMPT_COMMAND="$RTL_ORIG_PROMPT_COMMAND"
-            unset RTL_ORIG_PROMPT_COMMAND
-        else
-            unset PROMPT_COMMAND
-        fi
-        unset -f RTL_PROMPT_COMMAND RTL_log_command should_log_command RTL_preexec write_verbose_header 2>/dev/null
-    elif [[ -n "$ZSH_VERSION" ]]; then
-        add-zsh-hook -d preexec RTL_zsh_preexec 2>/dev/null
-        add-zsh-hook -d precmd RTL_zsh_precmd 2>/dev/null
-        unset -f RTL_zsh_preexec RTL_zsh_precmd RTL_log_command should_log_command write_verbose_header 2>/dev/null
+        source "$hook" || return 1
+        printf 'Direct shell CSV logging active\n'
     fi
 }
 
-# Enhanced removal function
 remove_logging() {
-    local id="$1"
-
-    log_debug "Removing enhanced logging for pane $id"
-
+    local id=$1 run rc=0
+    run=$(logging_run_dir "$id") || return 0
+    # The installed hooks observe this flag and restore the original shell
+    # prompt/trap when the local shell next resumes. No send-keys on stop.
+    rm -f "$run/enabled"
     if is_tmux; then
-        local tmux_pane_ref=$(get_tmux_pane_ref)
-
-        # Stop unified verbose logging
-        stop_unified_verbose_logging "$tmux_pane_ref" "$id"
-
-        # Clean up command hooks (same as before)
-        local cleanup_script
-        cleanup_script=$(mktemp "${OPS_RUNTIME_DIR}/ops-cleanup-${id}-XXXXXX.sh")
-        if [[ -z "$cleanup_script" ]]; then
-            log_debug "ERROR: failed to create cleanup script for pane $id"
-        else
-        cat > "$cleanup_script" << EOF
-#!/usr/bin/env bash
-set +e
-
-$(declare -f _ops_logger_reset_hooks)
-_ops_logger_reset_hooks
-
-unset RTL_CMD_START_TIME RTL_LAST_COMMAND RTL_LAST_HISTNUM RTL_INTERNAL_LOGGING 2>/dev/null
-unset CSV_LOG VERBOSE_LOG PANE_ID PUBLIC_IP VERBOSE_CMD_MARKER 2>/dev/null
-
-# The DEBUG trap fires once more for the "trap - DEBUG" statement that
-# preceded this source (it was still active going into it), recreating one
-# marker after remove_logging's own cleanup already ran. Remove it here,
-# strictly after the trap is actually gone, to close that race.
-rm -f '${VERBOSE_CMD_MARKER}-${id}' 2>/dev/null
-
-echo "Enhanced Ops Logger hooks removed"
-EOF
-        chmod +x "$cleanup_script"
-
-        # trap - DEBUG must run as a top-level command typed directly into the
-        # pane, NOT from inside the sourced cleanup_script: bash saves/restores
-        # the DEBUG trap around the entire duration of a `source` call, so a
-        # clear issued from inside the sourced file is always reverted the
-        # moment that source finishes, no matter where in the file it lives.
-        tmux send-keys -t "$tmux_pane_ref" "[[ -n \"\$BASH_VERSION\" ]] && trap - DEBUG 2>/dev/null; source '$cleanup_script' 2>/dev/null; rm -f '$cleanup_script'" ENTER
-        fi
-
-        # Clear window indicators
-        clear_window_indicators "$tmux_pane_ref"
-
-        # Clean up temp files
-        rm -f "${OPS_RUNTIME_DIR}/ops-hook-${id}.sh"
-
-    else
-        # Direct shell cleanup (same as before)
-        [[ -n "$BASH_VERSION" ]] && trap - DEBUG 2>/dev/null
-        _ops_logger_reset_hooks
-        echo "Direct shell logging stopped"
+        stop_unified_verbose_logging "$(get_tmux_pane_ref)" "$id" "$run" || rc=$?
+        clear_window_indicators "$(get_tmux_pane_ref)"
     fi
-
-    # Remove markers
-    rm -f "${LOG_MARKER}-${id}" "${LOG_MARKER}-${id}.success"
-    rm -f "${OPS_RUNTIME_DIR}/ops-hook-${id}.sh"
-    rm -f "${VERBOSE_CMD_MARKER}-${id}"
-
-    log_debug "Enhanced logging removal completed"
+    if (( rc == 0 )); then
+        rm -f "${LOG_MARKER}-${id}" "${LOG_MARKER}-${id}.success"
+    fi
+    return "$rc"
 }
 
 # ================================================================
@@ -1164,7 +1083,7 @@ EOF
 # Keep the ensure_config from local version
 ensure_config() {
     if [[ ! -f "$CONFIG_FILE" ]]; then
-        create_config "true"
+        create_config "true" || return 1
         # If configuration is in progress, abort the current operation
         if [[ -f "$CONFIG_IN_PROGRESS" ]]; then
             return 1
@@ -1177,10 +1096,31 @@ ensure_config() {
 # MAIN USER FUNCTIONS
 # ================================================================
 
+with_logging_lock() {
+    local id=$1 fd rc
+    command -v flock >/dev/null 2>&1 || { printf 'ERROR: flock is required\n' >&2; return 1; }
+    shift
+    exec {fd}> "$OPS_RUNTIME_DIR/ops-transition-$id.lock" || return 1
+    if ! flock -n "$fd"; then
+        printf 'Another logging transition is in progress for this pane\n' >&2
+        exec {fd}>&-
+        return 1
+    fi
+    "$@"
+    rc=$?
+    flock -u "$fd"
+    exec {fd}>&-
+    return "$rc"
+}
+
 start_logging() {
+    with_logging_lock "$(get_pane_id)" start_logging_unlocked
+}
+
+start_logging_unlocked() {
     # Auto-setup config with prompts on first logging start
     ensure_config || return 1
-    load_config
+    load_config || return 1
     
     local id=$(get_pane_id)
     is_logging_active "$id" && {
@@ -1188,14 +1128,26 @@ start_logging() {
         return 0
     }
     
-    local csv_log=$(setup_csv_log "$TARGET_NAME" "$LOG_DIR")
+    local csv_log dep
+    for dep in tmux tail flock; do
+        if is_tmux && ! command -v "$dep" >/dev/null 2>&1; then
+            printf 'ERROR: required command missing: %s\n' "$dep" >&2
+            return 1
+        fi
+    done
+    [[ -f "${LOG_MARKER}-${id}" ]] && remove_logging "$id"
+    csv_log=$(setup_csv_log "$TARGET_NAME" "$LOG_DIR") || return 1
     
     install_logging "$id" "$csv_log" "$TARGET_NAME" "$LOG_DIR"
 }
 
 stop_logging() {
+    with_logging_lock "$(get_pane_id)" stop_logging_unlocked
+}
+
+stop_logging_unlocked() {
     local id=$(get_pane_id)
-    is_logging_active "$id" || {
+    [[ -f "${LOG_MARKER}-${id}" ]] || {
         echo "Not logging"
         return 0
     }
@@ -1205,7 +1157,7 @@ stop_logging() {
 
 toggle_logging() {
     local id=$(get_pane_id)
-    is_logging_active "$id" && stop_logging || start_logging
+    if [[ -f "${LOG_MARKER}-${id}" ]]; then stop_logging; else start_logging; fi
 }
 
 toggle_recording() {
@@ -1458,7 +1410,21 @@ show_status() {
     echo "Target: $TARGET_NAME"
     echo "Log directory: $LOG_DIR"
     echo "Debug mode: $DEBUG"
-    echo "Logging: $(is_logging_active "$id" && echo "ACTIVE" || echo "INACTIVE")"
+    if is_logging_active "$id"; then
+        echo 'Logging: ACTIVE'
+    elif [[ -f "${LOG_MARKER}-${id}" ]]; then
+        echo 'Logging: FAILED or incomplete stop (inspect writer states below)'
+    else
+        echo 'Logging: INACTIVE'
+    fi
+    local run
+    if run=$(logging_run_dir "$id"); then
+        [[ ! -f $run/transcript ]] || printf 'Transcript: %s\n' "$(cat "$run/transcript")"
+        [[ ! -f $run/capture ]] || printf 'Capture writer: %s\n' "$(cat "$run/capture")"
+        [[ ! -f $run/summary ]] || printf 'Summary reader: %s\n' "$(cat "$run/summary")"
+        [[ ! -f $run/csv ]] || printf 'CSV writer: %s\n' "$(cat "$run/csv")"
+        if [[ -f $run/hook-ready ]]; then echo 'Shell hooks: installed'; else echo 'Shell hooks: unavailable (transcript only)'; fi
+    fi
     echo "Recording: $(is_recording_active "$id" && echo "ACTIVE" || echo "INACTIVE")"
     echo "Public IP: $(get_public_ip)"
     echo "Asciinema: $(command -v asciinema >/dev/null 2>&1 && echo "INSTALLED" || echo "NOT INSTALLED")"
@@ -1484,7 +1450,7 @@ show_status() {
         fi
 
         # Check if there's active pipe-pane logging
-        echo "Active logging pipe: $(tmux list-panes -F "#{pane_id} #{pane_pipe}" | grep -q "$(get_tmux_pane_ref).*1" && echo "YES" || echo "NO")"
+        echo "Active logging pipe: $( [[ $(tmux display-message -p -t "$(get_tmux_pane_ref)" '#{pane_pipe}') == 1 ]] && echo "YES" || echo "NO")"
     else
         echo "Environment: direct shell"
     fi
@@ -1494,7 +1460,7 @@ show_status() {
     
     [[ -f "$csv_log" ]] && {
         echo "Current CSV log: $csv_log"
-        echo "Commands logged: $(($(wc -l < "$csv_log") - 1))"
+        echo "Commands logged: $(csv_record_count "$csv_log")"
     }
     
     # Show verbose logs with headers
@@ -1510,7 +1476,7 @@ show_status() {
 }
 
 show_help() {
-    echo "Red Team Terminal Logger - Professional Solution v2.6.0"
+    echo "Red Team Terminal Logger - Professional Solution v2.7.0"
     echo "========================================================"
     echo "USAGE: $0 [OPTIONS]"
     echo ""
@@ -1546,7 +1512,10 @@ show_help() {
     echo "  Compatible with ohmytmux themes and window naming"
     echo "  Auto-prompts for new windows/panes (configurable)"
     echo ""
-    echo "v2.6.0 CHANGELOG:"
+    echo "v2.7.0 CHANGELOG:"
+    echo "  - Complete per-pane transcripts independent of the capped summary"
+    echo "  - Ordered command boundaries, repeated CSV entries, and safe hook cleanup"
+    echo "  - Acknowledged writer state and explicit pane labels"
     echo "  - Runtime/log directories hardened to mode 700 with ownership verification"
     echo "  - TARGET_NAME/LOG_DIR input validation to close shell-injection sinks"
     echo "  - Temp files created via mktemp instead of predictable paths"
@@ -1618,14 +1587,14 @@ if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
         save_config
         
         if [[ "$auto_start" -eq 1 ]]; then
-            "$REDTEAM_LOGGER_PATH" --start
+            start_logging
         else
             "$REDTEAM_LOGGER_PATH" --prompt
         fi
     }
     
     stop_operation_log() {
-        "$REDTEAM_LOGGER_PATH" --stop
+        stop_logging
     }
     
     log_debug "ShellOpsLog compatibility layer loaded"
