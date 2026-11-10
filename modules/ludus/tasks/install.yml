@@ -6,7 +6,8 @@
 # since docs.ludus.cloud/docs/quick-start/install-ludus does not document the
 # unattended flag. /opt/ludus/install/root-api-key and the "Ludus install completed
 # successfully" / .stage-3-complete marker were verified against
-# ludus-install-status.sh.j2 in the same source tree.
+# ludus-install-status.sh.j2 in the same source tree. Both binaries and their
+# sha256 come from ludus_2.3.10_checksums.txt in the package registry.
 - name: Check whether this host already serves the lab
   ansible.builtin.stat:
     path: /root/.ludus-lab.env
@@ -24,6 +25,8 @@
   vars:
     ludus_server_url: https://gitlab.com/api/v4/projects/54052321/packages/generic/ludus/2.3.10/ludus-server-2.3.10
     ludus_server_sha256: 544c3227fbe4c0772821bac68636997a0b18964efe11ab71b3218f6c4b78c7d9
+    ludus_client_url: https://gitlab.com/api/v4/projects/54052321/packages/generic/ludus/2.3.10/ludus-client_linux-amd64-2.3.10
+    ludus_client_sha256: 5bc6021744acd0753a520f2c98e593190d329bdc4ea43e6413aefcd926c1af79
   block:
     - name: Preflight checks and the unattended LUDUS install
       when: not ludus_installed.stat.exists
@@ -144,6 +147,14 @@
 
         - name: Wait for the install to finish across its reboots
           ansible.builtin.include_tasks: wait_install.yml
+
+    # The server install leaves no client on the host (verified live).
+    - name: Fetch the pinned ludus client
+      ansible.builtin.get_url:
+        url: "{{ ludus_client_url }}"
+        dest: /usr/local/bin/ludus
+        checksum: "sha256:{{ ludus_client_sha256 }}"
+        mode: '0755'
 
     - name: Read the root API key
       ansible.builtin.slurp:
