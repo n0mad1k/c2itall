@@ -11,6 +11,7 @@ import ipaddress
 import json
 import os
 import re
+import shutil
 import time
 from pathlib import Path
 
@@ -322,5 +323,6 @@ def teardown(name):
         del lab['networks'][provider]
         save(lab)
     cleanup_ssh_keys_for_deployment('lab-' + name)
+    shutil.rmtree(secret_dir(lab), ignore_errors=True)
     _STORE.retire(lab, LAB_ROOT)
     return True

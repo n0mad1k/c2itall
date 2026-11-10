@@ -24,7 +24,7 @@ for path in (SCRIPT_DIR, ROOT):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-REGIONS = {'aws': 'us-east-1', 'linode': 'us-east', 'azure': 'eastus'}
+REGIONS = {'aws': 'us-east-1', 'linode': 'us-east', 'azure': 'eastus', 'local': 'localhost'}
 AZURE_SUBSCRIPTION = 'cc2a66d1-67c2-47ca-856f-19a4eae52cfe'
 AZURE_SIZE = 'Standard_D2as_v4'
 LINODE_API = 'https://api.linode.com/v4'
@@ -285,7 +285,23 @@ class AzureCloud:
         return sorted(rules)
 
 
+class LocalCloud:
+    """Hosts the operator built themselves: nothing to count, nothing to restore."""
+    provider = 'local'
+
+    def __init__(self, evidence):
+        pass
+
+    def inventory(self, identity):
+        return {}
+
+    def totals(self):
+        return {}
+
+
 def _account_inputs(provider):
+    if provider == 'local':
+        return {'provider_manages_ssh_key': True}
     if provider == 'azure':
         return {
             'azure_subscription_id': AZURE_SUBSCRIPTION, 'azure_location': REGIONS['azure'],
@@ -314,6 +330,7 @@ CLOUDS = {
     'aws': lambda evidence: AwsCloud(REGIONS['aws']),
     'linode': lambda evidence: LinodeCloud(os.environ['LINODE_TOKEN']),
     'azure': AzureCloud,
+    'local': LocalCloud,
 }
 
 
