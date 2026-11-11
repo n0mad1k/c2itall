@@ -11,11 +11,20 @@
     allowed_ips: "{{ lab.cidrs + (lab.range_cidrs | difference(spoke.hub_routes)) + (['0.0.0.0/0'] if spoke.egress_via_hub else []) }}"
     gateway: "{{ groups['gateway'][0] }}"
   tasks:
+    # A re-joined host may have no working route until the tunnel is back
+    # (a LUDUS host's native gateway is the lab hub), so only a missing
+    # package is worth a package-list refresh.
+    - name: See whether the WireGuard tools are already present
+      ansible.builtin.command: dpkg -s wireguard-tools ufw
+      register: wg_tools
+      changed_when: false
+      failed_when: false
+
     - name: Install WireGuard tools
       ansible.builtin.apt:
         name: [wireguard-tools, ufw]
         state: present
-        update_cache: true
+        update_cache: "{{ wg_tools.rc != 0 }}"
       register: apt_result
       until: apt_result is success
       retries: 5
