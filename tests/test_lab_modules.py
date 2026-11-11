@@ -50,6 +50,7 @@ class HavocUnitTests(unittest.TestCase):
         unit = (ROOT / 'modules/c2/files/havoc_installer.sh').read_text()
         self.assertIn('ExecStart=$HAVOC_DIR/havoc server --profile $HAVOC_DIR/data/havoc.yaotl', unit)
         self.assertNotIn('havoc server -d', unit)
+        self.assertIn('WorkingDirectory=$HAVOC_DIR\n', unit)
 
 
 class C2LabRenderTests(unittest.TestCase):

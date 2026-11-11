@@ -116,7 +116,9 @@ class Live:
             patches += [mock.patch.object(red, 'select_provider', return_value=provider),
                         mock.patch.object(red, 'gather_provider_config',
                                           return_value=dict(self.account(provider, host), operator_ip=self.operator)),
-                        mock.patch.object(red, 'confirm_action', return_value=True)]
+                        mock.patch.object(red, 'confirm_action', return_value=True),
+                        # Phantom's chat prompts (admin password and friends) take their defaults.
+                        mock.patch('getpass.getpass', return_value='')]
             run = lambda: getattr(red, workload)(lab)  # noqa: E731
         else:
             directory, stem = {'exfil_receiver': ('exfil', 'exfil'), 'ludus_host': ('ludus', 'ludus')}[workload]

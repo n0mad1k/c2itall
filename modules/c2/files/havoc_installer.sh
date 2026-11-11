@@ -196,8 +196,8 @@ After=network.target
 Type=simple
 User=root
 Group=root
-WorkingDirectory=$HAVOC_DIR/teamserver
-# -d would load <cwd>/data/havoc.yaotl, which does not exist under teamserver/.
+# The teamserver opens data/teamserver.db and data/loot relative to its cwd.
+WorkingDirectory=$HAVOC_DIR
 ExecStart=$HAVOC_DIR/havoc server --profile $HAVOC_DIR/data/havoc.yaotl
 Restart=always
 RestartSec=10
