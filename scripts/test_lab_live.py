@@ -347,8 +347,11 @@ class Live:
         """Copy every play log this run wrote; the live log directories do not outlive the next run."""
         plays = self.evidence / 'plays'
         plays.mkdir(exist_ok=True)
-        for path in [*ROOT.glob('deployments/*/logs/*.log'), *ROOT.glob('logs/deployment_lab-' + self.name + '.log'),
-                     *ROOT.glob('ghost_protocol/phantom/logs/**/deployment_*.log')]:
+        # Phantom (chat) logs under its hard-coded C2_ROOT, which is the main checkout even from a worktree.
+        roots = {ROOT, Path.home() / 'tools' / 'c2itall'}
+        for path in {*ROOT.glob('deployments/*/logs/*.log'),
+                     *(p for root in roots for pattern in ('logs/*deployment_*.log', 'logs/archive/*deployment_*.log')
+                       for p in root.glob(pattern))}:
             if path.stat().st_mtime >= self.started:
                 shutil.copy2(path, plays / path.name)
 
