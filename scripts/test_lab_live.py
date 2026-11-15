@@ -442,10 +442,18 @@ class Live:
 
     def teardown(self, baseline):
         env = {key: value for key, value in os.environ.items() if key not in CREDENTIALS}
-        result = subprocess.run([sys.executable, 'teardown.py', '--lab', self.name, '--force'], cwd=ROOT, env=env,
-                                capture_output=True, text=True, timeout=3600)
-        (self.evidence / 'standalone-teardown.txt').write_text(result.stdout[-30000:] + '\n--- stderr ---\n' + result.stderr[-5000:])
-        self.step('standalone_teardown', result.returncode == 0, 'exit ' + str(result.returncode) + ' ' + result.stdout[-300:])
+        # A teardown stops at its first failure (a transient credential lookup once left a
+        # whole lab running); a second pass continues where it stopped.
+        for attempt in (1, 2):
+            result = subprocess.run([sys.executable, 'teardown.py', '--lab', self.name, '--force'], cwd=ROOT, env=env,
+                                    capture_output=True, text=True, timeout=3600)
+            (self.evidence / 'standalone-teardown.txt').write_text(
+                'attempt {0}\n'.format(attempt) + result.stdout[-30000:] + '\n--- stderr ---\n' + result.stderr[-5000:])
+            if result.returncode == 0:
+                break
+            time.sleep(30)
+        self.step('standalone_teardown', result.returncode == 0,
+                  'exit {0} after {1} attempt(s) '.format(result.returncode, attempt) + result.stdout[-300:])
         gone = not self.record_path.exists() and not (lab_mod.LAB_ROOT / self.name).exists()
         self.step('lab_record_and_secrets_removed', gone, str(lab_mod.LAB_ROOT))
         getattr(self.cloud, 'settle', lambda: None)()

@@ -96,6 +96,7 @@ class LabTests(unittest.TestCase):
         self.assertTrue(spoke['argv'][1].endswith('modules/lab/spoke.yml'))
         self.assertEqual(spoke['variables']['spoke'], {
             'deployment_id': 'm1', 'lab_ip': '198.18.0.10', 'egress_via_hub': False, 'hub_routes': [],
+            'native_cidr': '198.18.16.0/20',
             'tunnel_cidrs': ['198.18.0.0/20', '198.18.32.0/19', '198.18.64.0/18', '198.18.128.0/17']})
         self.assertEqual(set(spoke['inventory']), {'member', 'gateway'})
         self.assertIn('8.8.8.10', spoke['inventory']['gateway']['hosts'])

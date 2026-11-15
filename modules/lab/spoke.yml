@@ -115,6 +115,14 @@
       changed_when: false
       failed_when: false
 
+    # The gateway's SSH hop to a private native member arrives on the provider
+    # network, not the tunnel; a play that enables a host firewall must keep it.
+    - name: Admit the gateway's SSH hop from the lab's native network
+      ansible.builtin.command: ufw allow in from {{ spoke.native_cidr }} to any port 22 proto tcp
+      when: spoke.native_cidr
+      changed_when: false
+      failed_when: false
+
     - name: Wait for the hub handshake
       ansible.builtin.shell: wg show lab0 latest-handshakes | awk '{print $2}' | grep -vqx 0
       register: handshake
