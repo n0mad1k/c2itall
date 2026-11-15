@@ -188,6 +188,16 @@ key, record and secrets. It stops at the first failure and can be run again.
   any gateway. A `local` lab needs a gateway its hosts can reach.
 - Rebuilding a gateway on the same address leaves a stale entry in the
   members' known-hosts files; remove the line.
+- Azure "Total Regional vCPUs" is 4 on this subscription (every VM family is
+  capped at 4 in eastus), so a lab holds the gateway plus one 2-vCPU member;
+  further members fail preflight with QuotaExceeded. Request an increase to
+  at least 12 before a full red-side run on Azure, or run members one at a
+  time. AWS and Linode have no such wall.
+- A member play that enables a host firewall (the logging server, the
+  tracker) must keep the gateway's SSH hop open: the hop reaches a private
+  native member from the gateway's provider address, which the spoke play
+  admits on port 22 from the lab's native block. Restricting SSH to
+  `operator_ip` alone locks the controller out after deploy.
 - Lab core 15-25 min per provider; LUDUS install 20-35 min; template builds
   1-2 h on hardware, 3-6 h under nested VirtualBox; `mini` deploy 30-50 min;
   `corp` 1-2 h; exfil receiver 3-5 min.
