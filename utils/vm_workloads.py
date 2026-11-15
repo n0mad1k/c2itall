@@ -154,7 +154,9 @@ class SingleVmAdapter(WorkloadAdapter):
         variables = {'lab': lab_mod.service_variables(lab, config['deployment_id']),
                      'spoke': {'deployment_id': config['deployment_id'], 'lab_ip': placement['lab_ip'],
                                'egress_via_hub': placement['egress_via_hub'],
-                               'hub_routes': list(member.get('hub_routes') or [])}}
+                               'hub_routes': list(member.get('hub_routes') or []),
+                               'tunnel_cidrs': lab_mod.tunnel_cidrs(
+                                   lab, self.driver.provider, not placement['egress_via_hub'])}}
         return self._run_playbook(config, str(ROOT / 'modules/lab/spoke.yml'), inventory,
                                   variables, 'lab-spoke', 900)
 

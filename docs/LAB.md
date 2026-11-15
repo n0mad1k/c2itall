@@ -26,7 +26,9 @@ operator ──wg0──► gateway (hub 198.18.0.1, logged NAT)
 - **Address plan**: lab space `198.18.0.0/16`. Overlay `198.18.0.0/24`
   (hub `.1`, operator `.2`, members from `.10`). Azure and AWS members also
   sit in a shared private subnet carved from `198.18.16.0/20` upward, one
-  `/20` per provider. LUDUS ranges keep their own `10.<N>.0.0/16`.
+  `/20` per provider; a private member keeps its own `/20` on the provider
+  network and tunnels the rest of the lab space. LUDUS ranges keep their own
+  `10.<N>.0.0/16`.
 - **Native providers (Azure, AWS)**: a shared VNet/VPC per lab, members on
   a private-only NIC with no public address, a managed NAT gateway for
   egress, flow logs to a storage account / S3 bucket.

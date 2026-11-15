@@ -123,6 +123,24 @@ def next_block(lab, provider):
     return str(block)
 
 
+def tunnel_cidrs(lab, provider, native):
+    """The lab space a member routes into the tunnel.
+
+    A native member keeps its provider's block on the provider network: the
+    gateway may sit in another subnet there (AWS), and a tunnel route for the
+    whole lab space would swallow the SSH path the spoke play itself runs over.
+    """
+    block = ipaddress.ip_network(lab['blocks'][provider]) if native else None
+    cidrs = []
+    for cidr in lab['cidrs']:
+        network = ipaddress.ip_network(cidr)
+        if block and block.subnet_of(network):
+            cidrs += [str(part) for part in sorted(network.address_exclude(block))]
+        else:
+            cidrs.append(cidr)
+    return cidrs
+
+
 def ensure_network(lab, driver, config):
     """Create or reuse the provider's shared lab network; None for overlay-only providers."""
     if 'lab_network' not in driver.capabilities:

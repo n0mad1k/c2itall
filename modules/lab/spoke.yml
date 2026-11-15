@@ -7,8 +7,9 @@
   hosts: member
   become: true
   vars:
-    # A host that fronts a range never routes that range into the tunnel.
-    allowed_ips: "{{ lab.cidrs + (lab.range_cidrs | difference(spoke.hub_routes)) + (['0.0.0.0/0'] if spoke.egress_via_hub else []) }}"
+    # A host that fronts a range never routes that range into the tunnel, and a
+    # private member keeps its own provider block on the provider network.
+    allowed_ips: "{{ spoke.tunnel_cidrs + (lab.range_cidrs | difference(spoke.hub_routes)) + (['0.0.0.0/0'] if spoke.egress_via_hub else []) }}"
     gateway: "{{ groups['gateway'][0] }}"
   tasks:
     # A re-joined host may have no working route until the tunnel is back

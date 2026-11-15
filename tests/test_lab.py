@@ -95,7 +95,8 @@ class LabTests(unittest.TestCase):
         spoke, service = self.driver.runs[-2], self.driver.runs[-1]
         self.assertTrue(spoke['argv'][1].endswith('modules/lab/spoke.yml'))
         self.assertEqual(spoke['variables']['spoke'], {
-            'deployment_id': 'm1', 'lab_ip': '198.18.0.10', 'egress_via_hub': False, 'hub_routes': []})
+            'deployment_id': 'm1', 'lab_ip': '198.18.0.10', 'egress_via_hub': False, 'hub_routes': [],
+            'tunnel_cidrs': ['198.18.0.0/20', '198.18.32.0/19', '198.18.64.0/18', '198.18.128.0/17']})
         self.assertEqual(set(spoke['inventory']), {'member', 'gateway'})
         self.assertIn('8.8.8.10', spoke['inventory']['gateway']['hosts'])
         self.assertIn('ProxyCommand', spoke['inventory']['member']['hosts']['8.8.8.11']['ansible_ssh_common_args'])
@@ -160,6 +161,13 @@ class LabTests(unittest.TestCase):
         lab['networks']['elsewhere'] = {'status': 'ready', 'cidr': '198.18.32.0/20'}
         with self.assertRaisesRegex(ValueError, 'needs the lab gateway on elsewhere'):
             lab_mod.placement(lab, native_elsewhere, 'm4', profile, '8.8.4.4')
+
+    def test_native_member_keeps_its_provider_block_out_of_the_tunnel(self):
+        lab = lab_mod.create('unit')
+        lab_mod.next_block(lab, 'fakecloud')
+        self.assertEqual(lab_mod.tunnel_cidrs(lab, 'fakecloud', True),
+                         ['198.18.0.0/20', '198.18.32.0/19', '198.18.64.0/18', '198.18.128.0/17'])
+        self.assertEqual(lab_mod.tunnel_cidrs(lab, 'overlaycloud', False), ['198.18.0.0/16'])
 
     def test_blocks_secrets_and_journal(self):
         lab = lab_mod.create('unit')
