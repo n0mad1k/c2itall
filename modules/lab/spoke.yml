@@ -119,7 +119,7 @@
     # network, not the tunnel; a play that enables a host firewall must keep it.
     - name: Admit the gateway's SSH hop from the lab's native network
       ansible.builtin.command: ufw allow in from {{ spoke.native_cidr }} to any port 22 proto tcp
-      when: spoke.native_cidr
+      when: spoke.native_cidr | length > 0
       changed_when: false
       failed_when: false
 
