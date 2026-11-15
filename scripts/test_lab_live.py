@@ -108,7 +108,8 @@ class Live:
         lab = lab_mod.load(self.name)
         before = set(lab['members'])
         provider = self.args.provider
-        answers = {'operator names': 'red1', 'Lab name': self.name, 'range': self.args.ludus_range}
+        # Phantom confirms its own deployment with a raw input(), not confirm_action.
+        answers = {'operator names': 'red1', 'Lab name': self.name, 'range': self.args.ludus_range, 'deploy?': 'y'}
         patches = [mock.patch('builtins.input', lambda prompt='': next(
             (value for key, value in answers.items() if key.lower() in prompt.lower()), ''))]
         if workload in ('c2', 'payload_server', 'attack_box', 'logging_server', 'chat'):
@@ -287,11 +288,13 @@ class Live:
                                  # The service journal rides along so a failed start explains itself.
                                  "echo ---; sudo -n systemctl status havoc --no-pager -n 0 | head -4; "
                                  "sudo -n journalctl -u havoc -n 40 --no-pager -o cat | cut -c1-200", timeout=300)
+        self.record('c2-check.json', {'stdout': result.stdout, 'stderr': result.stderr})
         lines = result.stdout.split('---')[0].split()
         self.step('c2.teamserver_on_lab_address', lines[:5] == ['active', '3', '1', '0', '1'] and len(lines) > 5
-                  and len(lines[5]) == 64, result.stdout + result.stderr)
+                  and len(lines[5]) == 64, ' '.join(lines[:6]) + ' (journal in c2-check.json)')
         manifest = self.member_ssh(deployment_id, 'sudo -n jq -r .windows_exe /root/Tools/Havoc/payloads/manifest.json').stdout.strip()
-        fetched = self.gateway_ssh('curl -ks -o /dev/null -w "%{http_code}" --max-time 20 https://' + ip + ':8443/content/windows/' + manifest)
+        # serve-havoc-payloads.sh runs python3 -m http.server: plain HTTP on the payload port.
+        fetched = self.gateway_ssh('curl -s -o /dev/null -w "%{http_code}" --max-time 20 http://' + ip + ':8443/content/windows/' + manifest)
         self.step('c2.payload_served_inside_lab', fetched.stdout.strip() == '200', fetched.stdout + manifest)
         killed = self.member_ssh(deployment_id, 'sudo -n /root/Tools/havoc_killall.sh; systemctl is-active havoc || true')
         self.step('c2.killall_stops_teamserver', 'inactive' in killed.stdout, killed.stdout[-300:])
@@ -340,6 +343,15 @@ class Live:
         self.step('ludus_range.baseline_snapshot', 'baseline' in self.member_ssh(
             deployment_id, "sudo -n sh -c '. /root/.ludus-lab.env; ludus snapshots list --url $LUDUS_URL' 2>&1").stdout)
 
+    def keep_play_logs(self):
+        """Copy every play log this run wrote; the live log directories do not outlive the next run."""
+        plays = self.evidence / 'plays'
+        plays.mkdir(exist_ok=True)
+        for path in [*ROOT.glob('deployments/*/logs/*.log'), *ROOT.glob('logs/deployment_lab-' + self.name + '.log'),
+                     *ROOT.glob('ghost_protocol/phantom/logs/**/deployment_*.log')]:
+            if path.stat().st_mtime >= self.started:
+                shutil.copy2(path, plays / path.name)
+
     # --- flow ----------------------------------------------------------------
     def standin(self):
         """An Azure VM with root login for the deployment key, as test_flokinet_live.py builds."""
@@ -374,6 +386,7 @@ class Live:
         if not self.step('source_committed', not dirty, dirty):
             return False
         self.report['commit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+        self.started = time.time()
         self.operator = args.operator_ip or public_ipv4(subprocess.check_output(
             ['curl', '-4', '--fail', '--silent', '--max-time', '15', 'https://api.ipify.org'], text=True).strip())
         cloud_provider = 'azure' if args.provider == 'flokinet' else args.provider
@@ -410,6 +423,10 @@ class Live:
             self.step('harness_crashed', False, traceback.format_exc())
             return False
         finally:
+            try:
+                self.keep_play_logs()
+            except OSError as exc:
+                print('play logs not kept:', exc)
             if args.keep:
                 print('Keeping lab ' + self.name + ' as requested')
             else:
