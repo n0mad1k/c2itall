@@ -2033,54 +2033,28 @@ class RoutingAndTemplateTests(AzureFixture):
                              'failed <redacted> <redacted> visible-context\n')
             self.assertEqual(target.stat().st_mode & 0o777, 0o600)
 
-    def test_mailinabox_installer_has_cloud_safe_noninteractive_inputs(self):
+    def test_mailcow_installer_has_cloud_safe_noninteractive_inputs(self):
         install = (ROOT / 'ghost_protocol/phantom/playbooks/email/tasks/install.yml')
         install_text = install.read_text()
-        self.assertIn('Check whether Mail-in-a-Box completed previously', install_text)
-        self.assertIn('path: /var/lib/c2itall/mailinabox-installed', install_text)
-        self.assertIn('register: miab_completion', install_text)
-        stop_block = install_text.split(
-            '- name: Stop conflicting nginx (MIAB manages its own)', 1)[1].split(
-                '\n- name:', 1)[0]
-        self.assertIn('when: not miab_completion.stat.exists', stop_block)
+        self.assertIn('Template mailcow.conf (skip generate_config.sh', install_text)
+        self.assertIn('src: ../templates/mailcow.conf.j2', install_text)
+        self.assertNotIn('generate_config.sh\n', install_text.replace('skip generate_config.sh', ''))
+        for secret in ('db_password', 'db_root_password', 'api_key', 'redis_password'):
+            self.assertIn('creates: /root/.mailcow_' + secret, install_text)
+        self.assertIn('dest: /opt/mailcow-dockerized/mailcow.conf\n    mode: "0600"', install_text)
+        self.assertIn('command: docker compose pull', install_text)
+        self.assertIn('timeout: 600', install_text)
+        self.assertIn('Compose up (retry after unbound fix)', install_text)
+        self.assertIn('Wait for Mailcow HTTPS (port 443)', install_text)
 
         configure = (ROOT / 'ghost_protocol/phantom/playbooks/email/tasks/configure.yml')
         text = configure.read_text()
-        self.assertIn('Run Mail-in-a-Box installer (non-interactive)', text)
-        self.assertIn('timeout: 1800', text)
-        self.assertIn('. /root/.miab-install.env', text)
-        self.assertIn('bash setup/start.sh', text)
-        self.assertIn('touch /var/lib/c2itall/mailinabox-installed', text)
-        self.assertIn('creates: /var/lib/c2itall/mailinabox-installed', text)
-        self.assertNotIn('creates: /etc/mailinabox.conf', text)
-        self.assertIn('chdir: /opt/mailinabox', text)
-        self.assertIn('dest: /root/.miab-install.env', text)
-        self.assertIn('EMAIL_PW={{', text)
-        self.assertIn('PUBLIC_IP={{ ansible_host | quote }}', text)
-        self.assertIn('PUBLIC_IPV6=auto', text)
-        self.assertIn('STORAGE_USER=user-data', text)
-        self.assertIn('STORAGE_ROOT=/home/user-data', text)
-        self.assertIn('email_skip_network_checks | default(false)', text)
-        self.assertIn('retries: 3', text)
-        self.assertIn('no_log: true', text)
-        self.assertIn('when: not miab_completion.stat.exists', text)
-        self.assertIn('mode: "0600"', text)
-        self.assertIn('state: absent', text)
-        self.assertNotIn('\n  environment:\n', text)
-
-        live_harness = (ROOT / 'scripts/test_azure_phantom_live.py').read_text()
-        self.assertIn('service_slug = service.replace("_", "-")', live_harness)
-        self.assertIn('"email_skip_network_checks": True', live_harness)
-        self.assertIn('"domain": "box.example.com"', live_harness)
-        self.assertIn('"email_first_user": "admin@example.com"', live_harness)
-        self.assertNotIn('"email_first_user": "admin@mail.test"', live_harness)
-        self.assertGreaterEqual(
-            live_harness.count('runner.deadline = time.monotonic() + 600'), 3)
-        self.assertIn('runner.deadline = time.monotonic() + 1800', live_harness)
-        self.assertIn('ports=(443,587,993)', live_harness)
-        self.assertNotIn('ports=(25,443,993)', live_harness)
-        self.assertIn("^25/tcp[[:space:]]+ALLOW", live_harness)
-        self.assertIn('test ! -e /root/.miab-install.env', live_harness)
+        self.assertIn('Wait for Mailcow API ready', text)
+        self.assertIn('X-API-Key', text)
+        self.assertIn('retries: 20', text)
+        self.assertIn('Change admin password', text)
+        self.assertIn('Add first mailbox', text)
+        self.assertNotIn('input(', text)
 
     def test_azure_inbound_rules_reject_unsafe_or_ambiguous_values(self):
         invalid = (
