@@ -122,3 +122,6 @@ artifacts/takserver/
 
 # Payloads pulled from deployed C2 servers
 payloads/
+
+# Claude agent spawn logs
+agent-spawns/
